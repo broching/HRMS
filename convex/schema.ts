@@ -27,6 +27,9 @@ import {
   payrollStatus,
   payslipLine,
   allowanceItem,
+  reviewCycleStatus,
+  goalStatus,
+  reviewStatus,
 } from "./lib/enums";
 
 export default defineSchema({
@@ -443,6 +446,73 @@ export default defineSchema({
     .index("by_run", ["runId"])
     .index("by_employee", ["employeeId"])
     .index("by_employee_period", ["employeeId", "periodMonth"]),
+
+  // ─── Performance appraisal ───────────────────────────────────────────────
+
+  // A review period (e.g. "H1 2026"). Activating it generates a review row per
+  // active employee; closing it locks them.
+  reviewCycles: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    startDate: v.string(), // ISO date
+    endDate: v.string(),
+    status: reviewCycleStatus,
+    ratingScaleMax: v.number(), // e.g. 5
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  // An employee goal / KPI. May belong to a cycle or stand alone.
+  goals: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    cycleId: v.optional(v.id("reviewCycles")),
+    title: v.string(),
+    description: v.optional(v.string()),
+    weight: v.number(), // percentage weighting
+    progress: v.number(), // 0–100
+    status: goalStatus,
+    dueDate: v.optional(v.string()),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_employee", ["employeeId"])
+    .index("by_employee_cycle", ["employeeId", "cycleId"])
+    .index("by_cycle", ["cycleId"]),
+
+  // One appraisal per (cycle, employee), holding both the self and manager
+  // sections plus the final rating.
+  reviews: defineTable({
+    orgId: v.id("organizations"),
+    cycleId: v.id("reviewCycles"),
+    employeeId: v.id("employees"),
+    managerId: v.optional(v.id("employees")), // snapshot at generation
+    status: reviewStatus,
+    selfRating: v.optional(v.number()),
+    selfComments: v.optional(v.string()),
+    selfSubmittedAt: v.optional(v.number()),
+    managerRating: v.optional(v.number()),
+    managerComments: v.optional(v.string()),
+    managerSubmittedAt: v.optional(v.number()),
+    overallRating: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_cycle", ["cycleId"])
+    .index("by_employee", ["employeeId"])
+    .index("by_employee_cycle", ["employeeId", "cycleId"])
+    .index("by_manager_status", ["managerId", "status"]),
+
+  // Peer / 360 feedback about an employee, visible to their manager + HR.
+  feedback: defineTable({
+    orgId: v.id("organizations"),
+    subjectEmployeeId: v.id("employees"),
+    cycleId: v.optional(v.id("reviewCycles")),
+    authorUserId: v.id("users"),
+    body: v.string(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_subject", ["subjectEmployeeId"]),
 
   // ─── Cross-cutting primitives ────────────────────────────────────────────
 

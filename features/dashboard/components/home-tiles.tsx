@@ -59,7 +59,7 @@ export function HomeTiles() {
       title: "My Goals",
       description: "Check your performance management and KPIs",
       icon: IconTargetArrow,
-      soon: true,
+      href: "/performance",
     },
     {
       title: "Payroll Documents",

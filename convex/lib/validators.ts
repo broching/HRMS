@@ -21,6 +21,9 @@ import {
   payrollStatus,
   payslipLine,
   allowanceItem,
+  reviewCycleStatus,
+  goalStatus,
+  reviewStatus,
 } from "./enums";
 
 /**
@@ -391,6 +394,82 @@ export const payslipDetail = v.object({
   cpfStatus: cpfStatus,
   lines: v.array(payslipLine),
   status: payrollStatus,
+})
+
+// ─── Performance ─────────────────────────────────────────────────────────
+
+export const reviewCycleDoc = v.object({
+  _id: v.id("reviewCycles"),
+  _creationTime: v.number(),
+  orgId: v.id("organizations"),
+  name: v.string(),
+  startDate: v.string(),
+  endDate: v.string(),
+  status: reviewCycleStatus,
+  ratingScaleMax: v.number(),
+  createdBy: v.optional(v.id("users")),
+})
+
+export const goalRow = v.object({
+  _id: v.id("goals"),
+  _creationTime: v.number(),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  cycleId: v.union(v.id("reviewCycles"), v.null()),
+  cycleName: v.union(v.string(), v.null()),
+  title: v.string(),
+  description: v.union(v.string(), v.null()),
+  weight: v.number(),
+  progress: v.number(),
+  status: goalStatus,
+  dueDate: v.union(v.string(), v.null()),
+})
+
+// A review row with hydrated names (queues, lists).
+export const reviewRow = v.object({
+  _id: v.id("reviews"),
+  _creationTime: v.number(),
+  cycleId: v.id("reviewCycles"),
+  cycleName: v.string(),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  managerId: v.union(v.id("employees"), v.null()),
+  managerName: v.union(v.string(), v.null()),
+  status: reviewStatus,
+  selfRating: v.union(v.number(), v.null()),
+  managerRating: v.union(v.number(), v.null()),
+  overallRating: v.union(v.number(), v.null()),
+  ratingScaleMax: v.number(),
+})
+
+// Full review detail incl. comments.
+export const reviewDetail = v.object({
+  _id: v.id("reviews"),
+  _creationTime: v.number(),
+  cycleId: v.id("reviewCycles"),
+  cycleName: v.string(),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  managerId: v.union(v.id("employees"), v.null()),
+  managerName: v.union(v.string(), v.null()),
+  status: reviewStatus,
+  selfRating: v.union(v.number(), v.null()),
+  selfComments: v.union(v.string(), v.null()),
+  managerRating: v.union(v.number(), v.null()),
+  managerComments: v.union(v.string(), v.null()),
+  overallRating: v.union(v.number(), v.null()),
+  ratingScaleMax: v.number(),
+  // What the caller is allowed to do, resolved server-side.
+  canSelf: v.boolean(),
+  canManager: v.boolean(),
+})
+
+export const feedbackRow = v.object({
+  _id: v.id("feedback"),
+  _creationTime: v.number(),
+  subjectEmployeeId: v.id("employees"),
+  authorName: v.string(),
+  body: v.string(),
 })
 
 export const customFieldDefDoc = v.object({

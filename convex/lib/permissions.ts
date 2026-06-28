@@ -21,6 +21,7 @@ export const PERMISSIONS = [
   "payroll:manage",
   "attendance:config", // offices, QR, geofence
   "scheduling:manage", // shift templates + org-wide rosters
+  "performance:manage", // review cycles + org-wide appraisals
   "reports:view",
   "audit:view",
 ] as const;
@@ -41,6 +42,7 @@ export const ROLE_PERMISSIONS: Record<HrmsRole, readonly Permission[]> = {
     "payroll:manage",
     "attendance:config",
     "scheduling:manage",
+    "performance:manage",
     "reports:view",
     "audit:view",
   ],

@@ -248,6 +248,35 @@ export const allowanceItem = v.object({
   cpfable: v.boolean(), // counts toward CPF Ordinary Wages
 });
 
+// ─── Performance module ──────────────────────────────────────────────────
+
+export const reviewCycleStatus = v.union(
+  v.literal("draft"),
+  v.literal("active"),
+  v.literal("closed"),
+);
+export type ReviewCycleStatus = "draft" | "active" | "closed";
+
+export const goalStatus = v.union(
+  v.literal("not_started"),
+  v.literal("in_progress"),
+  v.literal("completed"),
+  v.literal("cancelled"),
+);
+export type GoalStatus =
+  | "not_started"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
+
+// Appraisal workflow: employee self-review → manager review → completed.
+export const reviewStatus = v.union(
+  v.literal("self_review"),
+  v.literal("manager_review"),
+  v.literal("completed"),
+);
+export type ReviewStatus = "self_review" | "manager_review" | "completed";
+
 // Org-level settings persisted on the `organizations` table.
 export const orgSettings = v.object({
   timezone: v.string(),

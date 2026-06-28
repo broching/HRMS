@@ -16,6 +16,8 @@ import {
   IconReceipt,
   IconReceipt2,
   IconSitemap,
+  IconTarget,
+  IconTargetArrow,
   IconTimeline,
   IconUsers,
   IconUsersGroup,
@@ -98,6 +100,13 @@ const MODULES: NavItem[] = [
     icon: IconCash,
     permission: "payroll:manage",
   },
+  { title: "Performance", url: "/performance", icon: IconTargetArrow },
+  {
+    title: "Team reviews",
+    url: "/performance/team",
+    icon: IconTarget,
+    roles: ["admin", "hr", "manager"],
+  },
 ]
 
 // Configuration area, gated by permission.
@@ -143,6 +152,12 @@ const SETTINGS: NavItem[] = [
     url: "/settings/shift-templates",
     icon: IconCalendarWeek,
     permission: "scheduling:manage",
+  },
+  {
+    title: "Review cycles",
+    url: "/settings/review-cycles",
+    icon: IconTargetArrow,
+    permission: "performance:manage",
   },
 ]
 

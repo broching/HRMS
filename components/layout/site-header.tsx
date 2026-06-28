@@ -38,6 +38,12 @@ function getPageTitle(pathname: string): string {
       return "Compensation"
     case "/payslips":
       return "My payslips"
+    case "/settings/review-cycles":
+      return "Review cycles"
+    case "/performance":
+      return "Performance"
+    case "/performance/team":
+      return "Team reviews"
     case "/employees/new":
       return "New employee"
     case "/leave":
@@ -58,6 +64,7 @@ function getPageTitle(pathname: string): string {
       if (pathname.startsWith("/scheduling")) return "Schedule"
       if (pathname.startsWith("/payroll")) return "Payroll"
       if (pathname.startsWith("/payslips")) return "Payslips"
+      if (pathname.startsWith("/performance")) return "Performance"
       if (pathname.startsWith("/settings")) return "Settings"
       return "Page"
   }
