@@ -1,16 +1,26 @@
-import { AppSidebar } from "@/app/dashboard/app-sidebar"
-import { SiteHeader } from "@/app/dashboard/site-header"
-import { LoadingBar } from "@/app/dashboard/loading-bar"
+import { redirect } from "next/navigation"
+import { auth } from "@clerk/nextjs/server"
+import { AppSidebar } from "@/components/layout/app-sidebar"
+import { SiteHeader } from "@/components/layout/site-header"
+import { LoadingBar } from "@/components/layout/loading-bar"
+import { EnsureMembership } from "@/components/layout/ensure-membership"
 import {
   SidebarInset,
   SidebarProvider,
 } from "@/components/ui/sidebar"
 
-export default function DashboardLayout({
+// OrgGuard: every authenticated HRMS route requires an active organization.
+// Unauthenticated users are bounced to the landing page (modal sign-in);
+// signed-in users with no active org are sent to the org picker.
+export default async function AppLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const { userId, orgId } = await auth()
+  if (!userId) redirect("/")
+  if (!orgId) redirect("/select-org")
+
   return (
     <SidebarProvider
       style={
@@ -21,6 +31,7 @@ export default function DashboardLayout({
       }
       className="group/layout"
     >
+      <EnsureMembership />
       <AppSidebar variant="inset" />
       <SidebarInset>
         <LoadingBar />
@@ -35,4 +46,4 @@ export default function DashboardLayout({
       </SidebarInset>
     </SidebarProvider>
   )
-} 
+}

@@ -29,6 +29,52 @@ http.route({
         break;
       }
 
+      case "organization.created": // intentional fallthrough
+      case "organization.updated": {
+        const org = (event.data as any);
+        await ctx.runMutation(internal.organizations.upsertFromClerk, {
+          clerkOrgId: org.id,
+          name: org.name,
+          slug: org.slug ?? undefined,
+          imageUrl: org.image_url ?? undefined,
+        });
+        break;
+      }
+
+      case "organization.deleted": {
+        const clerkOrgId = (event.data as any).id!;
+        await ctx.runMutation(internal.organizations.deleteFromClerk, {
+          clerkOrgId,
+        });
+        break;
+      }
+
+      case "organizationMembership.created": // intentional fallthrough
+      case "organizationMembership.updated": {
+        const m = (event.data as any);
+        const pud = m.public_user_data ?? {};
+        const name = `${pud.first_name ?? ""} ${pud.last_name ?? ""}`.trim();
+        await ctx.runMutation(internal.members.upsertFromClerk, {
+          clerkMembershipId: m.id,
+          clerkOrgId: m.organization.id,
+          clerkUserId: pud.user_id,
+          userName: name || pud.identifier || "Unknown",
+          userEmail: pud.identifier ?? undefined,
+          userImageUrl: pud.image_url ?? undefined,
+          clerkRole: m.role ?? undefined,
+          status: "active",
+        });
+        break;
+      }
+
+      case "organizationMembership.deleted": {
+        const clerkMembershipId = (event.data as any).id!;
+        await ctx.runMutation(internal.members.deleteFromClerk, {
+          clerkMembershipId,
+        });
+        break;
+      }
+
       case "paymentAttempt.updated": {
         const paymentAttemptData = transformWebhookData((event as any).data);
         await ctx.runMutation(internal.paymentAttempts.savePaymentAttempt, {
@@ -36,9 +82,7 @@ http.route({
         });
         break;
       }
-      
 
-      
       default:
         console.log("Ignored webhook event", (event as any).type);
     }

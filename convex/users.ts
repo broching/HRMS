@@ -12,9 +12,15 @@ export const current = query({
 export const upsertFromClerk = internalMutation({
   args: { data: v.any() as Validator<UserJSON> }, // no runtime validation, trust Clerk
   async handler(ctx, { data }) {
+    const primaryEmail = data.email_addresses?.find(
+      (e) => e.id === data.primary_email_address_id,
+    )?.email_address;
+
     const userAttributes = {
-      name: `${data.first_name} ${data.last_name}`,
+      name: `${data.first_name ?? ""} ${data.last_name ?? ""}`.trim(),
       externalId: data.id,
+      email: primaryEmail,
+      imageUrl: data.image_url,
     };
 
     const user = await userByExternalId(ctx, data.id);

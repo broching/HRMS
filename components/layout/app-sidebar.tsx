@@ -1,116 +1,209 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 import {
-  IconCamera,
-  IconChartBar,
+  IconBuilding,
+  IconCalendarStats,
+  IconCalendarWeek,
+  IconCash,
+  IconChecklist,
+  IconClockHour4,
   IconDashboard,
-  IconDatabase,
-  IconMessageCircle,
-  IconFileAi,
-  IconFileDescription,
-  IconFileWord,
-  IconFolder,
-  IconHelp,
-  IconInnerShadowTop,
-  IconListDetails,
-  IconReport,
-  IconSearch,
-  IconSettings,
+  IconFileDollar,
+  IconPlane,
+  IconReceipt,
+  IconReceipt2,
+  IconSitemap,
+  IconTimeline,
   IconUsers,
-  IconSparkles,
-  IconBrandOpenai,
+  IconUsersGroup,
+  IconUserCircle,
+  type Icon,
 } from "@tabler/icons-react"
+import { OrganizationSwitcher } from "@clerk/nextjs"
+import { dark } from "@clerk/themes"
+import { useTheme } from "next-themes"
 
-import { NavDocuments } from "@/app/dashboard/nav-documents"
-import { NavMain } from "@/app/dashboard/nav-main"
-import { NavSecondary } from "@/app/dashboard/nav-secondary"
-import { NavUser } from "@/app/dashboard/nav-user"
+import { NavMain } from "@/components/layout/nav-main"
+import { NavUser } from "@/components/layout/nav-user"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { ChatMaxingIconColoured } from "@/components/logo"
-import { Badge } from "@/components/ui/badge"
-import Link from "next/link"
+import { useCurrentMember } from "@/hooks/use-current-member"
+import { hasPermission, type Permission } from "@/convex/lib/permissions"
+import type { HrmsRole } from "@/convex/lib/enums"
 
-const data = {
-  navMain: [
-    {
-      title: "Dashboard",
-      url: "/dashboard",
-      icon: IconDashboard,
-    },
-    {
-      title: "Payment gated",
-      url: "/dashboard/payment-gated",
-      icon: IconSparkles,
-    },
-  ],
-  navSecondary: [
-    {
-      title: "Settings",
-      url: "#",
-      icon: IconSettings,
-    },
-    {
-      title: "Get Help",
-      url: "#",
-      icon: IconHelp,
-    },
-    {
-      title: "Search",
-      url: "#",
-      icon: IconSearch,
-    },
-  ],
-  documents: [
-    {
-      name: "Data Library",
-      url: "#",
-      icon: IconDatabase,
-    },
-    {
-      name: "Reports",
-      url: "#",
-      icon: IconReport,
-    },
-    {
-      name: "Word Assistant",
-      url: "#",
-      icon: IconFileWord,
-    },
-  ],
+type NavItem = {
+  title: string
+  url: string
+  icon: Icon
+  permission?: Permission
+  roles?: HrmsRole[]
 }
 
+// Primary modules. New HRMS modules (Employees, Leave, …) are added here as
+// each milestone lands. Items without a `permission` are visible to everyone.
+const MODULES: NavItem[] = [
+  { title: "Dashboard", url: "/dashboard", icon: IconDashboard },
+  {
+    title: "Employees",
+    url: "/employees",
+    icon: IconUserCircle,
+    permission: "employees:read:all",
+  },
+  { title: "Leave", url: "/leave", icon: IconPlane },
+  {
+    title: "Leave approvals",
+    url: "/leave/requests",
+    icon: IconChecklist,
+    roles: ["admin", "hr", "manager"],
+  },
+  { title: "Team calendar", url: "/leave/calendar", icon: IconCalendarStats },
+  { title: "Claims", url: "/claims", icon: IconReceipt },
+  {
+    title: "Claim approvals",
+    url: "/claims/requests",
+    icon: IconReceipt2,
+    roles: ["admin", "hr", "manager"],
+  },
+  { title: "Attendance", url: "/attendance", icon: IconClockHour4 },
+  {
+    title: "Team attendance",
+    url: "/attendance/team",
+    icon: IconUsersGroup,
+    roles: ["admin", "hr", "manager"],
+  },
+  { title: "My schedule", url: "/scheduling", icon: IconCalendarWeek },
+  {
+    title: "Roster",
+    url: "/scheduling/roster",
+    icon: IconTimeline,
+    roles: ["admin", "hr", "manager"],
+  },
+  { title: "Payslips", url: "/payslips", icon: IconFileDollar },
+  {
+    title: "Payroll",
+    url: "/payroll",
+    icon: IconCash,
+    permission: "payroll:manage",
+  },
+]
+
+// Configuration area, gated by permission.
+const SETTINGS: NavItem[] = [
+  {
+    title: "Organization",
+    url: "/settings/organization",
+    icon: IconBuilding,
+    permission: "org:manage",
+  },
+  {
+    title: "Members",
+    url: "/settings/members",
+    icon: IconUsers,
+    permission: "members:manage",
+  },
+  {
+    title: "Org structure",
+    url: "/settings/org-structure",
+    icon: IconSitemap,
+    permission: "employees:manage",
+  },
+  {
+    title: "Leave types",
+    url: "/settings/leave-types",
+    icon: IconPlane,
+    permission: "leave:config",
+  },
+  {
+    title: "Claim types",
+    url: "/settings/claim-types",
+    icon: IconReceipt,
+    permission: "claims:approve:finance",
+  },
+  {
+    title: "Attendance",
+    url: "/settings/attendance",
+    icon: IconClockHour4,
+    permission: "attendance:config",
+  },
+  {
+    title: "Shift templates",
+    url: "/settings/shift-templates",
+    icon: IconCalendarWeek,
+    permission: "scheduling:manage",
+  },
+]
+
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const pathname = usePathname()
+  const { theme } = useTheme()
+  const member = useCurrentMember()
+  const role = member?.role
+
+  const canSee = (item: NavItem) => {
+    if (item.roles) return role != null && item.roles.includes(role)
+    if (item.permission) return role != null && hasPermission(role, item.permission)
+    return true
+  }
+
+  const visibleModules = MODULES.filter(canSee)
+  const visibleSettings = SETTINGS.filter(canSee)
+
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              asChild
-              className="data-[slot=sidebar-menu-button]:!p-1.5"
-            >
-              <Link href="/">
-                <ChatMaxingIconColoured className="!size-6" />
-                <span className="text-base font-semibold">Starter DIY</span>
-                <Badge variant="outline" className="text-muted-foreground  text-xs">Demo</Badge>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <div className="px-1 py-1.5">
+          <OrganizationSwitcher
+            hidePersonal
+            afterSelectOrganizationUrl="/dashboard"
+            afterCreateOrganizationUrl="/dashboard"
+            appearance={{
+              baseTheme: theme === "dark" ? dark : undefined,
+              elements: {
+                rootBox: "w-full",
+                organizationSwitcherTrigger: "w-full justify-start",
+              },
+            }}
+          />
+        </div>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={data.navMain} />
-        <NavDocuments items={data.documents} />
-        <NavSecondary items={data.navSecondary} className="mt-auto" />
+        <NavMain items={visibleModules} />
+        {visibleSettings.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Settings</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {visibleSettings.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={pathname === item.url}
+                      tooltip={item.title}
+                    >
+                      <Link href={item.url}>
+                        <item.icon />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
       <SidebarFooter>
         <NavUser />

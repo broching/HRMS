@@ -1,0 +1,501 @@
+"use client"
+
+import * as React from "react"
+import { useRouter } from "next/navigation"
+import { useForm, type Control, type FieldPath } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
+import { useQuery, useMutation } from "convex/react"
+import { toast } from "sonner"
+import { api } from "@/convex/_generated/api"
+import type { Id, TableNames } from "@/convex/_generated/dataModel"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  EMPLOYMENT_TYPES,
+  EMPLOYMENT_TYPE_LABELS,
+  EMPLOYEE_STATUSES,
+  STATUS_LABELS,
+} from "@/features/employees/lib/labels"
+
+const schema = z.object({
+  employeeNumber: z.string().min(1, "Required"),
+  firstName: z.string().min(1, "Required"),
+  lastName: z.string().min(1, "Required"),
+  preferredName: z.string().optional(),
+  dob: z.string().optional(),
+  gender: z.string().optional(),
+  nationality: z.string().optional(),
+  idNumber: z.string().optional(),
+  personalEmail: z.string().optional(),
+  workEmail: z.string().optional(),
+  phone: z.string().optional(),
+  addressLine1: z.string().optional(),
+  addressLine2: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  postalCode: z.string().optional(),
+  country: z.string().optional(),
+  emergencyName: z.string().optional(),
+  emergencyRelationship: z.string().optional(),
+  emergencyPhone: z.string().optional(),
+  employmentType: z.enum(["full_time", "part_time", "contract", "intern"]),
+  status: z.enum([
+    "active",
+    "probation",
+    "on_leave",
+    "suspended",
+    "terminated",
+  ]),
+  joinDate: z.string().min(1, "Required"),
+  confirmationDate: z.string().optional(),
+  probationEndDate: z.string().optional(),
+  departmentId: z.string().optional(),
+  teamId: z.string().optional(),
+  positionId: z.string().optional(),
+  managerId: z.string().optional(),
+  officeId: z.string().optional(),
+})
+
+export type EmployeeFormValues = z.infer<typeof schema>
+
+const NONE = "none"
+const opt = (s?: string) => (s && s.trim() ? s.trim() : undefined)
+const stripNone = (s?: string) => (s && s !== NONE ? s : undefined)
+function optId<T extends TableNames>(s?: string) {
+  return s && s !== NONE ? (s as Id<T>) : undefined
+}
+
+// ─── Field helpers ───────────────────────────────────────────────────────
+
+function TextField({
+  control,
+  name,
+  label,
+  type = "text",
+  placeholder,
+}: {
+  control: Control<EmployeeFormValues>
+  name: FieldPath<EmployeeFormValues>
+  label: string
+  type?: string
+  placeholder?: string
+}) {
+  return (
+    <FormField
+      control={control}
+      name={name}
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>{label}</FormLabel>
+          <FormControl>
+            <Input type={type} placeholder={placeholder} {...field} />
+          </FormControl>
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  )
+}
+
+function SelectField({
+  control,
+  name,
+  label,
+  options,
+  includeNone,
+}: {
+  control: Control<EmployeeFormValues>
+  name: FieldPath<EmployeeFormValues>
+  label: string
+  options: { value: string; label: string }[]
+  includeNone?: boolean
+}) {
+  return (
+    <FormField
+      control={control}
+      name={name}
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>{label}</FormLabel>
+          <Select
+            value={field.value || (includeNone ? NONE : undefined)}
+            onValueChange={field.onChange}
+          >
+            <FormControl>
+              <SelectTrigger>
+                <SelectValue placeholder="Select…" />
+              </SelectTrigger>
+            </FormControl>
+            <SelectContent>
+              {includeNone && <SelectItem value={NONE}>None</SelectItem>}
+              {options.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  )
+}
+
+// ─── Form ────────────────────────────────────────────────────────────────
+
+export function EmployeeForm({
+  employeeId,
+  initial,
+}: {
+  employeeId?: Id<"employees">
+  initial?: Partial<EmployeeFormValues>
+}) {
+  const router = useRouter()
+  const create = useMutation(api.employees.create)
+  const update = useMutation(api.employees.update)
+
+  const departments = useQuery(api.departments.list) ?? []
+  const teams = useQuery(api.teams.list) ?? []
+  const positions = useQuery(api.positions.list) ?? []
+  const offices = useQuery(api.offices.list) ?? []
+  const allEmployees = useQuery(api.employees.list, {}) ?? []
+
+  const form = useForm<EmployeeFormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: {
+      employeeNumber: "",
+      firstName: "",
+      lastName: "",
+      employmentType: "full_time",
+      status: "active",
+      joinDate: new Date().toISOString().slice(0, 10),
+      country: "SG",
+      ...initial,
+    },
+  })
+
+  const [saving, setSaving] = React.useState(false)
+
+  async function onSubmit(values: EmployeeFormValues) {
+    setSaving(true)
+    try {
+      const contact = {
+        personalEmail: opt(values.personalEmail),
+        workEmail: opt(values.workEmail),
+        phone: opt(values.phone),
+      }
+      const hasContact = Object.values(contact).some(Boolean)
+      const address = {
+        line1: opt(values.addressLine1),
+        line2: opt(values.addressLine2),
+        city: opt(values.city),
+        state: opt(values.state),
+        postalCode: opt(values.postalCode),
+        country: opt(values.country),
+      }
+      const hasAddress = Object.values(address).some(Boolean)
+      const emergencyContacts = opt(values.emergencyName)
+        ? [
+            {
+              name: values.emergencyName!.trim(),
+              relationship: opt(values.emergencyRelationship),
+              phone: opt(values.emergencyPhone),
+            },
+          ]
+        : undefined
+
+      const common = {
+        firstName: values.firstName,
+        lastName: values.lastName,
+        preferredName: opt(values.preferredName),
+        dob: opt(values.dob),
+        gender: stripNone(values.gender) as
+          | "male"
+          | "female"
+          | "other"
+          | "undisclosed"
+          | undefined,
+        nationality: opt(values.nationality),
+        idNumber: opt(values.idNumber),
+        address: hasAddress ? address : undefined,
+        contact: hasContact ? contact : undefined,
+        emergencyContacts,
+        employmentType: values.employmentType,
+        status: values.status,
+        joinDate: values.joinDate,
+        confirmationDate: opt(values.confirmationDate),
+        probationEndDate: opt(values.probationEndDate),
+        departmentId: optId<"departments">(values.departmentId),
+        teamId: optId<"teams">(values.teamId),
+        positionId: optId<"positions">(values.positionId),
+        managerId: optId<"employees">(values.managerId),
+        officeId: optId<"offices">(values.officeId),
+      }
+
+      if (employeeId) {
+        await update({ employeeId, employeeNumber: values.employeeNumber, ...common })
+        toast.success("Employee updated")
+        router.push(`/employees/${employeeId}`)
+      } else {
+        const id = await create({
+          employeeNumber: values.employeeNumber,
+          ...common,
+        })
+        toast.success("Employee created")
+        router.push(`/employees/${id}`)
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not save employee",
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const managerOptions = allEmployees
+    .filter((e) => e._id !== employeeId)
+    .map((e) => ({
+      value: e._id,
+      label: `${e.preferredName ?? e.firstName} ${e.lastName}`,
+    }))
+
+  return (
+    <Form {...form}>
+      <form
+        onSubmit={form.handleSubmit(onSubmit)}
+        className="flex flex-col gap-6 px-4 lg:px-6"
+      >
+        <Card>
+          <CardHeader>
+            <CardTitle>Personal</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              control={form.control}
+              name="employeeNumber"
+              label="Employee number"
+              placeholder="E-0001"
+            />
+            <SelectField
+              control={form.control}
+              name="gender"
+              label="Gender"
+              includeNone
+              options={[
+                { value: "male", label: "Male" },
+                { value: "female", label: "Female" },
+                { value: "other", label: "Other" },
+                { value: "undisclosed", label: "Undisclosed" },
+              ]}
+            />
+            <TextField control={form.control} name="firstName" label="First name" />
+            <TextField control={form.control} name="lastName" label="Last name" />
+            <TextField
+              control={form.control}
+              name="preferredName"
+              label="Preferred name"
+            />
+            <TextField
+              control={form.control}
+              name="dob"
+              label="Date of birth"
+              type="date"
+            />
+            <TextField
+              control={form.control}
+              name="nationality"
+              label="Nationality"
+            />
+            <TextField
+              control={form.control}
+              name="idNumber"
+              label="Identification number"
+              placeholder="Stored masked"
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Contact & address</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              control={form.control}
+              name="workEmail"
+              label="Work email"
+              type="email"
+            />
+            <TextField
+              control={form.control}
+              name="personalEmail"
+              label="Personal email"
+              type="email"
+            />
+            <TextField control={form.control} name="phone" label="Phone" />
+            <div className="hidden sm:block" />
+            <TextField
+              control={form.control}
+              name="addressLine1"
+              label="Address line 1"
+            />
+            <TextField
+              control={form.control}
+              name="addressLine2"
+              label="Address line 2"
+            />
+            <TextField control={form.control} name="city" label="City" />
+            <TextField control={form.control} name="state" label="State" />
+            <TextField
+              control={form.control}
+              name="postalCode"
+              label="Postal code"
+            />
+            <TextField control={form.control} name="country" label="Country" />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Emergency contact</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-3">
+            <TextField
+              control={form.control}
+              name="emergencyName"
+              label="Name"
+            />
+            <TextField
+              control={form.control}
+              name="emergencyRelationship"
+              label="Relationship"
+            />
+            <TextField
+              control={form.control}
+              name="emergencyPhone"
+              label="Phone"
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Employment</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <SelectField
+              control={form.control}
+              name="employmentType"
+              label="Employment type"
+              options={EMPLOYMENT_TYPES.map((t) => ({
+                value: t,
+                label: EMPLOYMENT_TYPE_LABELS[t],
+              }))}
+            />
+            <SelectField
+              control={form.control}
+              name="status"
+              label="Status"
+              options={EMPLOYEE_STATUSES.map((s) => ({
+                value: s,
+                label: STATUS_LABELS[s],
+              }))}
+            />
+            <TextField
+              control={form.control}
+              name="joinDate"
+              label="Join date"
+              type="date"
+            />
+            <TextField
+              control={form.control}
+              name="confirmationDate"
+              label="Confirmation date"
+              type="date"
+            />
+            <TextField
+              control={form.control}
+              name="probationEndDate"
+              label="Probation end date"
+              type="date"
+            />
+            <div className="hidden sm:block" />
+            <SelectField
+              control={form.control}
+              name="departmentId"
+              label="Department"
+              includeNone
+              options={departments.map((d) => ({ value: d._id, label: d.name }))}
+            />
+            <SelectField
+              control={form.control}
+              name="teamId"
+              label="Team"
+              includeNone
+              options={teams.map((t) => ({ value: t._id, label: t.name }))}
+            />
+            <SelectField
+              control={form.control}
+              name="positionId"
+              label="Position"
+              includeNone
+              options={positions.map((p) => ({ value: p._id, label: p.title }))}
+            />
+            <SelectField
+              control={form.control}
+              name="managerId"
+              label="Manager"
+              includeNone
+              options={managerOptions}
+            />
+            <SelectField
+              control={form.control}
+              name="officeId"
+              label="Office"
+              includeNone
+              options={offices.map((o) => ({ value: o._id, label: o.name }))}
+            />
+          </CardContent>
+        </Card>
+
+        <div className="flex items-center gap-2">
+          <Button type="submit" disabled={saving}>
+            {saving ? "Saving…" : employeeId ? "Save changes" : "Create employee"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => router.back()}
+            disabled={saving}
+          >
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </Form>
+  )
+}

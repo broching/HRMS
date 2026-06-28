@@ -5,13 +5,60 @@ import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 
 function getPageTitle(pathname: string): string {
-  // Handle exact matches first
   switch (pathname) {
     case "/dashboard":
       return "Dashboard"
     case "/dashboard/payment-gated":
       return "Payment gated"
+    case "/settings/organization":
+      return "Organization"
+    case "/settings/members":
+      return "Members"
+    case "/settings/org-structure":
+      return "Org structure"
+    case "/settings/leave-types":
+      return "Leave types & holidays"
+    case "/settings/claim-types":
+      return "Claim types"
+    case "/settings/attendance":
+      return "Attendance settings"
+    case "/settings/shift-templates":
+      return "Shift templates"
+    case "/attendance":
+      return "Attendance"
+    case "/attendance/team":
+      return "Team attendance"
+    case "/scheduling":
+      return "My schedule"
+    case "/scheduling/roster":
+      return "Roster"
+    case "/payroll":
+      return "Payroll"
+    case "/payroll/compensation":
+      return "Compensation"
+    case "/payslips":
+      return "My payslips"
+    case "/employees/new":
+      return "New employee"
+    case "/leave":
+      return "My leave"
+    case "/leave/requests":
+      return "Leave approvals"
+    case "/leave/calendar":
+      return "Team calendar"
+    case "/claims":
+      return "My claims"
+    case "/claims/requests":
+      return "Claim approvals"
     default:
+      if (pathname.startsWith("/employees")) return "Employees"
+      if (pathname.startsWith("/leave")) return "Leave"
+      if (pathname.startsWith("/claims")) return "Claims"
+      if (pathname.startsWith("/attendance")) return "Attendance"
+      if (pathname.startsWith("/scheduling")) return "Schedule"
+      if (pathname.startsWith("/payroll")) return "Payroll"
+      if (pathname.startsWith("/payslips")) return "Payslips"
+      if (pathname.startsWith("/settings")) return "Settings"
       return "Page"
   }
 }
