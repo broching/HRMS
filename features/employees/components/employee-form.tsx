@@ -6,8 +6,10 @@ import { useForm, type Control, type FieldPath } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { useQuery, useMutation } from "convex/react"
+import { useOrganization } from "@clerk/nextjs"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
+import type { HrmsRole } from "@/convex/lib/enums"
 import type { Id, TableNames } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -50,6 +52,7 @@ const schema = z.object({
   idNumber: z.string().optional(),
   personalEmail: z.string().optional(),
   workEmail: z.string().optional(),
+  role: z.enum(["admin", "hr", "manager", "employee"]),
   phone: z.string().optional(),
   addressLine1: z.string().optional(),
   addressLine2: z.string().optional(),
@@ -82,6 +85,21 @@ export type EmployeeFormValues = z.infer<typeof schema>
 
 const NONE = "none"
 const opt = (s?: string) => (s && s.trim() ? s.trim() : undefined)
+
+const HRMS_ROLES: { value: HrmsRole; label: string }[] = [
+  { value: "employee", label: "Employee" },
+  { value: "manager", label: "Manager" },
+  { value: "hr", label: "HR" },
+  { value: "admin", label: "Admin" },
+]
+
+// Clerk org roles available on every plan; the richer HRMS role is stored in
+// Convex and applied to the membership when the invite is accepted.
+function clerkRoleFor(role: HrmsRole): "org:admin" | "org:member" {
+  return role === "admin" ? "org:admin" : "org:member"
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const stripNone = (s?: string) => (s && s !== NONE ? s : undefined)
 function optId<T extends TableNames>(s?: string) {
   return s && s !== NONE ? (s as Id<T>) : undefined
@@ -174,6 +192,7 @@ export function EmployeeForm({
   initial?: Partial<EmployeeFormValues>
 }) {
   const router = useRouter()
+  const { organization } = useOrganization()
   const create = useMutation(api.employees.create)
   const update = useMutation(api.employees.update)
 
@@ -191,6 +210,7 @@ export function EmployeeForm({
       lastName: "",
       employmentType: "full_time",
       status: "active",
+      role: "employee",
       joinDate: new Date().toISOString().slice(0, 10),
       country: "SG",
       ...initial,
@@ -260,11 +280,34 @@ export function EmployeeForm({
         toast.success("Employee updated")
         router.push(`/employees/${employeeId}`)
       } else {
+        const email = opt(values.workEmail)
+        if (!email || !EMAIL_RE.test(email)) {
+          toast.error("Enter a valid work email to invite this person.")
+          return
+        }
+        // Invite them to the Clerk organization (best-effort — if it fails,
+        // e.g. they're already a member, we still create + link the profile).
+        let inviteWarning: string | null = null
+        try {
+          await organization?.inviteMember({
+            emailAddress: email,
+            role: clerkRoleFor(values.role),
+          })
+        } catch (e) {
+          inviteWarning =
+            e instanceof Error ? e.message : "the invitation could not be sent"
+        }
         const id = await create({
           employeeNumber: values.employeeNumber,
+          loginEmail: email,
+          invitedRole: values.role,
           ...common,
         })
-        toast.success("Employee created")
+        if (inviteWarning) {
+          toast.warning(`Employee created, but invite not sent: ${inviteWarning}`)
+        } else {
+          toast.success("Employee created and invited to the organization")
+        }
         router.push(`/employees/${id}`)
       }
     } catch (err) {
@@ -289,6 +332,38 @@ export function EmployeeForm({
         onSubmit={form.handleSubmit(onSubmit)}
         className="flex flex-col gap-6 px-4 lg:px-6"
       >
+        <Card>
+          <CardHeader>
+            <CardTitle>Account & access</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              control={form.control}
+              name="workEmail"
+              label={
+                employeeId ? "Work email" : "Work email (sends org invite)"
+              }
+              type="email"
+              placeholder="name@company.com"
+            />
+            {!employeeId && (
+              <SelectField
+                control={form.control}
+                name="role"
+                label="Role"
+                options={HRMS_ROLES}
+              />
+            )}
+            {!employeeId && (
+              <p className="text-muted-foreground col-span-full text-xs">
+                Adding an employee invites them to the organization with this
+                email. They become a member when they accept, and their profile
+                is linked automatically.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle>Personal</CardTitle>
@@ -346,18 +421,11 @@ export function EmployeeForm({
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <TextField
               control={form.control}
-              name="workEmail"
-              label="Work email"
-              type="email"
-            />
-            <TextField
-              control={form.control}
               name="personalEmail"
               label="Personal email"
               type="email"
             />
             <TextField control={form.control} name="phone" label="Phone" />
-            <div className="hidden sm:block" />
             <TextField
               control={form.control}
               name="addressLine1"

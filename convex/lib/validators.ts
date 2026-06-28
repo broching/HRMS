@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import {
+  hrmsRole,
   employmentType,
   employeeStatus,
   gender,
@@ -74,6 +75,8 @@ const employeeFields = {
   _creationTime: v.number(),
   orgId: v.id("organizations"),
   userId: v.optional(v.id("users")),
+  loginEmail: v.optional(v.string()),
+  invitedRole: v.optional(hrmsRole),
   employeeNumber: v.string(),
   firstName: v.string(),
   lastName: v.string(),

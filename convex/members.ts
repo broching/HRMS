@@ -37,6 +37,28 @@ export function mapClerkRole(clerkRole: string | undefined): HrmsRole {
   }
 }
 
+// When a user joins the org, link them to the employee record HR pre-created
+// for their invite email (matching `employees.loginEmail`). Returns the role
+// the employee was invited with, so the membership can be seeded accordingly.
+async function linkEmployeeOnJoin(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  userEmail: string | undefined,
+): Promise<HrmsRole | undefined> {
+  if (!userEmail) return undefined;
+  const email = userEmail.toLowerCase();
+  const employee = await ctx.db
+    .query("employees")
+    .withIndex("by_org_loginEmail", (q) =>
+      q.eq("orgId", orgId).eq("loginEmail", email),
+    )
+    .first();
+  if (!employee) return undefined;
+  if (!employee.userId) await ctx.db.patch(employee._id, { userId });
+  return employee.invitedRole;
+}
+
 export async function memberByClerkId(ctx: QueryCtx, clerkMembershipId: string) {
   return await ctx.db
     .query("members")
@@ -117,6 +139,14 @@ export const upsertFromClerk = internalMutation({
       await ctx.db.patch(existing._id, { status: args.status });
       return null;
     }
+    // Link any employee record pre-created for this invite email.
+    const invitedRole = await linkEmployeeOnJoin(
+      ctx,
+      org._id,
+      userId,
+      args.userEmail,
+    );
+
     // A membership may have been bootstrapped client-side (ensureSelf) with a
     // synthetic clerkMembershipId before this webhook arrived. Adopt the real
     // id onto that row rather than creating a duplicate.
@@ -132,7 +162,8 @@ export const upsertFromClerk = internalMutation({
       orgId: org._id,
       userId,
       clerkMembershipId: args.clerkMembershipId,
-      role: mapClerkRole(args.clerkRole),
+      // Prefer the role HR assigned on the invite; otherwise map the Clerk role.
+      role: invitedRole ?? mapClerkRole(args.clerkRole),
       status: args.status,
     });
     return null;
@@ -215,13 +246,22 @@ export const ensureSelf = mutation({
       if (existing.status !== "active") {
         await ctx.db.patch(existing._id, { status: "active" });
       }
+      // Make sure a matching employee gets linked even if it was created
+      // after the member row already existed.
+      await linkEmployeeOnJoin(ctx, org._id, user._id, user.email);
       return null;
     }
+    const invitedRole = await linkEmployeeOnJoin(
+      ctx,
+      org._id,
+      user._id,
+      user.email,
+    );
     await ctx.db.insert("members", {
       orgId: org._id,
       userId: user._id,
       clerkMembershipId: `bootstrap:${org._id}:${user._id}`,
-      role: mapClerkRole(identity.org_role),
+      role: invitedRole ?? mapClerkRole(identity.org_role),
       status: "active",
     });
     return null;
@@ -244,6 +284,7 @@ export const list = query({
         v.literal("invited"),
         v.literal("removed"),
       ),
+      employeeId: v.union(v.id("employees"), v.null()),
     }),
   ),
   handler: async (ctx) => {
@@ -255,6 +296,12 @@ export const list = query({
     return await Promise.all(
       members.map(async (m) => {
         const user = await ctx.db.get(m.userId);
+        // Link to this member's employee profile, if one exists in the org.
+        const employees = await ctx.db
+          .query("employees")
+          .withIndex("by_userId", (q) => q.eq("userId", m.userId))
+          .collect();
+        const employee = employees.find((e) => e.orgId === orgId) ?? null;
         return {
           memberId: m._id,
           userId: m.userId,
@@ -263,6 +310,7 @@ export const list = query({
           imageUrl: user?.imageUrl,
           role: m.role,
           status: m.status,
+          employeeId: employee?._id ?? null,
         };
       }),
     );

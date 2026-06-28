@@ -1,7 +1,8 @@
-import { mutation, query, QueryCtx } from "./_generated/server";
+import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import {
+  hrmsRole,
   employmentType,
   employeeStatus,
   gender,
@@ -51,6 +52,31 @@ export async function requireEmployeeAccess(
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   if (own && employee.managerId === own._id) return { orgCtx, employee };
   throw new Error("Not authorized to view this employee.");
+}
+
+// If someone with this email is already a member of the org, link the new
+// employee to their login account and apply the intended HRMS role. Most new
+// hires won't be members yet — the reverse link happens on invite-acceptance
+// in members.ts (linkEmployeeOnJoin).
+async function linkExistingMember(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  employeeId: Id<"employees">,
+  loginEmail: string,
+  invitedRole?: "admin" | "hr" | "manager" | "employee",
+) {
+  const members = await ctx.db
+    .query("members")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  for (const m of members) {
+    const u = await ctx.db.get(m.userId);
+    if (u?.email && u.email.toLowerCase() === loginEmail) {
+      await ctx.db.patch(employeeId, { userId: m.userId });
+      if (invitedRole) await ctx.db.patch(m._id, { role: invitedRole });
+      return;
+    }
+  }
 }
 
 function maskId(idNumber: string): { masked: string; last4: string } {
@@ -323,7 +349,14 @@ const writableFields = {
 };
 
 export const create = mutation({
-  args: { employeeNumber: v.string(), ...writableFields },
+  args: {
+    employeeNumber: v.string(),
+    // The email used to invite this person to the org (= their work email).
+    loginEmail: v.optional(v.string()),
+    // HRMS role to grant once they accept the org invite.
+    invitedRole: v.optional(hrmsRole),
+    ...writableFields,
+  },
   returns: v.id("employees"),
   handler: async (ctx, args) => {
     const { orgId, userId } = await requirePermission(ctx, "employees:manage");
@@ -336,12 +369,20 @@ export const create = mutation({
       .unique();
     if (dup) throw new Error("Employee number already exists.");
 
-    const { idNumber, status, ...rest } = args;
+    const { idNumber, status, loginEmail, invitedRole, ...rest } = args;
     const masked = idNumber ? maskId(idNumber) : undefined;
+    const email = loginEmail?.trim().toLowerCase() || undefined;
+    // The invite email is canonical for work email; keep contact in sync.
+    const contact = email
+      ? { ...(rest.contact ?? {}), workEmail: email }
+      : rest.contact;
 
     const id = await ctx.db.insert("employees", {
       orgId,
       ...rest,
+      contact,
+      loginEmail: email,
+      invitedRole,
       status: status ?? "active",
       idNumberMasked: masked?.masked,
       idNumberLast4: masked?.last4,
@@ -349,13 +390,18 @@ export const create = mutation({
       createdBy: userId,
       updatedAt: Date.now(),
     });
+
+    // If they're already in the org, link immediately; otherwise the link is
+    // made when they accept the invite (members.linkEmployeeOnJoin).
+    if (email) await linkExistingMember(ctx, orgId, id, email, invitedRole);
+
     await writeAuditLog(ctx, {
       orgId,
       actorUserId: userId,
       action: "employee.create",
       entity: "employees",
       entityId: id,
-      after: { employeeNumber: args.employeeNumber },
+      after: { employeeNumber: args.employeeNumber, loginEmail: email },
     });
     return id;
   },

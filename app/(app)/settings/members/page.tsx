@@ -1,7 +1,9 @@
 "use client"
 
+import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
+import { IconUserPlus } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { ROLE_PERMISSIONS } from "@/convex/lib/permissions"
@@ -12,6 +14,7 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Select,
   SelectContent,
@@ -64,11 +67,23 @@ export default function MembersSettingsPage() {
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Members</h1>
-        <p className="text-muted-foreground text-sm">
-          Manage who belongs to this organization and their HRMS role.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Members</h1>
+          <p className="text-muted-foreground text-sm">
+            Manage who belongs to this organization and their HRMS role. Add
+            people from the directory — it invites them and creates their
+            profile in one step.
+          </p>
+        </div>
+        {canManage && (
+          <Button asChild>
+            <Link href="/employees/new">
+              <IconUserPlus className="size-4" />
+              Add person
+            </Link>
+          </Button>
+        )}
       </div>
 
       {me !== undefined && !canManage ? (
@@ -81,6 +96,7 @@ export default function MembersSettingsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Member</TableHead>
+                <TableHead>Profile</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-[180px]">Role</TableHead>
               </TableRow>
@@ -93,6 +109,9 @@ export default function MembersSettingsPage() {
                       <Skeleton className="h-8 w-48" />
                     </TableCell>
                     <TableCell>
+                      <Skeleton className="h-5 w-20" />
+                    </TableCell>
+                    <TableCell>
                       <Skeleton className="h-5 w-16" />
                     </TableCell>
                     <TableCell>
@@ -103,7 +122,7 @@ export default function MembersSettingsPage() {
               ) : members.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={3}
+                    colSpan={4}
                     className="text-muted-foreground text-center"
                   >
                     No members yet.
@@ -127,6 +146,20 @@ export default function MembersSettingsPage() {
                           )}
                         </div>
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      {m.employeeId ? (
+                        <Link
+                          href={`/employees/${m.employeeId}`}
+                          className="text-sm hover:underline"
+                        >
+                          View profile
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground text-sm">
+                          No profile
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge

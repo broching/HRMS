@@ -114,6 +114,11 @@ export default defineSchema({
     orgId: v.id("organizations"),
     // Link to the login account (users row), set once the person is invited.
     userId: v.optional(v.id("users")),
+    // The email this person is invited to the org with — also their work email.
+    // Used to link the employee to their `members`/`users` row when they join.
+    loginEmail: v.optional(v.string()), // lowercased
+    // HRMS role to apply to their membership once they accept the invite.
+    invitedRole: v.optional(hrmsRole),
     employeeNumber: v.string(),
 
     // Personal
@@ -155,6 +160,7 @@ export default defineSchema({
     .index("by_org_department", ["orgId", "departmentId"])
     .index("by_org_manager", ["orgId", "managerId"])
     .index("by_org_employeeNumber", ["orgId", "employeeNumber"])
+    .index("by_org_loginEmail", ["orgId", "loginEmail"])
     .index("by_userId", ["userId"])
     .searchIndex("search_name", {
       searchField: "searchName",
