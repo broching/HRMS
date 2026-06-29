@@ -19,6 +19,7 @@ export function FileUpload({
   onUploaded,
   disabled,
   generateUrl,
+  maxBytes,
 }: {
   accept?: string
   label?: string
@@ -26,6 +27,8 @@ export function FileUpload({
   disabled?: boolean
   /** Override the upload-URL source. Defaults to employees.generateUploadUrl. */
   generateUrl?: () => Promise<string>
+  /** Reject files larger than this (bytes) before uploading. */
+  maxBytes?: number
 }) {
   const generateEmployeeUploadUrl = useMutation(api.employees.generateUploadUrl)
   const generateUploadUrl = generateUrl ?? generateEmployeeUploadUrl
@@ -35,6 +38,13 @@ export function FileUpload({
   async function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
+    if (maxBytes && file.size > maxBytes) {
+      toast.error(
+        `File is too large. Maximum size is ${Math.round(maxBytes / (1024 * 1024))} MB.`,
+      )
+      if (inputRef.current) inputRef.current.value = ""
+      return
+    }
     setUploading(true)
     try {
       const url = await generateUploadUrl()

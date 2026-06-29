@@ -120,7 +120,22 @@ export function ClaimDetail({ claimId }: { claimId: Id<"claims"> }) {
                   label="Amount"
                   value={formatMoney(claim.amountCents, claim.currency)}
                 />
+                {claim.localAmountCents !== null && claim.localCurrency && (
+                  <Field
+                    label="Local currency amount"
+                    value={formatMoney(claim.localAmountCents, claim.localCurrency)}
+                  />
+                )}
+                {claim.taxAmountCents !== null && (
+                  <Field
+                    label="Tax amount"
+                    value={formatMoney(claim.taxAmountCents, claim.currency)}
+                  />
+                )}
                 <Field label="Date incurred" value={claim.incurredDate} />
+                {claim.receiptNo && (
+                  <Field label="Receipt No" value={claim.receiptNo} />
+                )}
                 <Field label="Description" value={claim.description} />
                 {claim.decisionNote && (
                   <Field label="Decision note" value={claim.decisionNote} />

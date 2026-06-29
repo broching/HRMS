@@ -2,6 +2,7 @@ import { mutation, query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, requirePermission } from "./auth";
+import { hasPermission } from "./lib/permissions";
 import { writeAuditLog } from "./lib/audit";
 import { allowanceItem, cpfStatus } from "./lib/enums";
 import { compensationDoc, compensationRow } from "./lib/validators";
@@ -37,6 +38,30 @@ export const listForEmployee = query({
       .withIndex("by_employee_effective", (q) =>
         q.eq("employeeId", employeeId),
       )
+      .collect();
+    rows.sort((a, b) => (a.effectiveDate < b.effectiveDate ? 1 : -1));
+    return rows;
+  },
+});
+
+// Salary history for the profile Compensation section — visible to the
+// employee themselves OR HR/payroll (payroll:manage). Most recent first.
+export const forProfile = query({
+  args: { employeeId: v.id("employees") },
+  returns: v.array(compensationDoc),
+  handler: async (ctx, { employeeId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgCtx.orgId) {
+      throw new Error("Employee not found.");
+    }
+    const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
+    if (!isSelf && !hasPermission(orgCtx.role, "payroll:manage")) {
+      throw new Error("Not authorized to view compensation.");
+    }
+    const rows = await ctx.db
+      .query("compensation")
+      .withIndex("by_employee_effective", (q) => q.eq("employeeId", employeeId))
       .collect();
     rows.sort((a, b) => (a.effectiveDate < b.effectiveDate ? 1 : -1));
     return rows;

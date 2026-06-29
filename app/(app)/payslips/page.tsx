@@ -5,8 +5,8 @@ export default function PayslipsPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title="My payslips"
-        description="Your finalized payslips and net pay."
+        title="Payroll"
+        description="View and download your payslips."
       />
       <MyPayslips />
     </div>

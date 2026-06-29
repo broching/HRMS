@@ -1,4 +1,4 @@
-import { RunDetail } from "@/features/payroll/components/run-detail"
+import { RunWizard } from "@/features/payroll/components/run-wizard"
 import type { Id } from "@/convex/_generated/dataModel"
 
 export default async function RunDetailPage({
@@ -7,5 +7,5 @@ export default async function RunDetailPage({
   params: Promise<{ runId: string }>
 }) {
   const { runId } = await params
-  return <RunDetail runId={runId as Id<"payrollRuns">} />
+  return <RunWizard runId={runId as Id<"payrollRuns">} />
 }

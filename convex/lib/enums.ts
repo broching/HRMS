@@ -57,13 +57,37 @@ export const gender = v.union(
   v.literal("other"),
   v.literal("undisclosed"),
 );
+export type Gender = "male" | "female" | "other" | "undisclosed";
+
+export const maritalStatus = v.union(
+  v.literal("single"),
+  v.literal("married"),
+  v.literal("divorced"),
+  v.literal("widowed"),
+  v.literal("other"),
+  v.literal("undisclosed"),
+);
+export type MaritalStatus =
+  | "single"
+  | "married"
+  | "divorced"
+  | "widowed"
+  | "other"
+  | "undisclosed";
 
 export const documentType = v.union(
   v.literal("contract"),
   v.literal("certification"),
   v.literal("work_pass"),
+  v.literal("identity"),
   v.literal("other"),
 );
+
+export const equipmentStatus = v.union(
+  v.literal("assigned"),
+  v.literal("returned"),
+);
+export type EquipmentStatus = "assigned" | "returned";
 
 export const customFieldType = v.union(
   v.literal("text"),
@@ -92,6 +116,45 @@ export const emergencyContactValidator = v.object({
   name: v.string(),
   relationship: v.optional(v.string()),
   phone: v.optional(v.string()),
+});
+
+// A family member / dependent (self-service, under Family Details).
+export const familyMemberValidator = v.object({
+  id: v.string(),
+  name: v.string(),
+  relationship: v.optional(v.string()),
+  dob: v.optional(v.string()),
+  contact: v.optional(v.string()),
+});
+
+// Self-service custom field on an employee's personal details. The employee
+// names the field and picks its input type; the value is stored as a string
+// (numbers/dates serialized) for a uniform shape.
+export const personalFieldType = v.union(
+  v.literal("text"),
+  v.literal("number"),
+  v.literal("date"),
+);
+export type PersonalFieldType = "text" | "number" | "date";
+
+export const personalFieldValidator = v.object({
+  id: v.string(),
+  label: v.string(),
+  type: personalFieldType,
+  value: v.string(),
+});
+
+// A past job (Professional Experience) or qualification (Education). Both share
+// this shape — for education, `title` = qualification and `organization` =
+// institution. Dates are loose "YYYY-MM" strings; `endDate` empty = present.
+export const resumeEntryValidator = v.object({
+  id: v.string(),
+  title: v.string(),
+  organization: v.optional(v.string()),
+  location: v.optional(v.string()),
+  startDate: v.optional(v.string()),
+  endDate: v.optional(v.string()),
+  description: v.optional(v.string()),
 });
 
 // ─── Leave module ────────────────────────────────────────────────────────
@@ -127,10 +190,99 @@ export const leaveStatus = v.union(
   v.literal("approved"),
   v.literal("rejected"),
   v.literal("cancelled"),
+  v.literal("info_requested"),
 );
-export type LeaveStatus = "pending" | "approved" | "rejected" | "cancelled";
+export type LeaveStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  | "info_requested";
 
 export const halfDay = v.union(v.literal("am"), v.literal("pm"));
+
+// ─── Leave-policy engine ───────────────────────────────────────────────────
+// A leave type can have several policy configurations, each applying to a
+// group of employees. `all` = the type's default policy (everyone); `groups`
+// = applies only to explicitly assigned employees.
+export const policyAvailability = v.union(
+  v.literal("all"),
+  v.literal("groups"),
+);
+export type PolicyAvailability = "all" | "groups";
+
+// How an approver is resolved for a request. `manager` = the employee's direct
+// manager; `department_head` = the head of their department; `specific` = a
+// named member (value = userId); `none` = auto-approved at that step.
+export const approverMode = v.union(
+  v.literal("manager"),
+  v.literal("department_head"),
+  v.literal("specific"),
+  v.literal("none"),
+);
+export type ApproverMode = "manager" | "department_head" | "specific" | "none";
+
+// `fixed` credits a set number of days; `upon_request` tracks no balance (e.g.
+// unpaid leave) and is always available.
+export const entitlementMode = v.union(
+  v.literal("fixed"),
+  v.literal("upon_request"),
+);
+export type EntitlementMode = "fixed" | "upon_request";
+
+// Earned-leave accrual cadence. Entitlement is computed deterministically on
+// read from this, not credited by a scheduled job.
+export const accrualType = v.union(
+  v.literal("daily"),
+  v.literal("monthly"),
+);
+export type AccrualType = "daily" | "monthly";
+
+// How a partial first/last year is prorated. `started` counts the join month
+// fully, `completed` excludes it, `partial` prorates by days worked that month.
+export const prorateMode = v.union(
+  v.literal("started"),
+  v.literal("completed"),
+  v.literal("partial"),
+);
+export type ProrateMode = "started" | "completed" | "partial";
+
+// When seniority increments take effect.
+export const seniorityEffective = v.union(
+  v.literal("period"),
+  v.literal("anniversary"),
+);
+export type SeniorityEffective = "period" | "anniversary";
+
+export const incrementMode = v.union(
+  v.literal("fixed"),
+  v.literal("variable"),
+);
+export type IncrementMode = "fixed" | "variable";
+
+// Rounding applied to the computed entitlement.
+export const roundingMode = v.union(
+  v.literal("none"),
+  v.literal("up"),
+  v.literal("down"),
+  v.literal("nearest_half"),
+);
+export type RoundingMode = "none" | "up" | "down" | "nearest_half";
+
+// One seniority rule: after `afterYears` of service, add `addDays`. For fixed
+// increment the rule is recurring; for variable, rules are tiered thresholds.
+export const seniorityRule = v.object({
+  afterYears: v.number(),
+  addDays: v.number(),
+});
+
+// One timeline event embedded on a leave request (creation, approvals, etc.).
+export const leaveTimelineEvent = v.object({
+  at: v.number(),
+  actorUserId: v.optional(v.id("users")),
+  type: v.string(),
+  note: v.optional(v.string()),
+});
 
 // ─── Claims module ───────────────────────────────────────────────────────
 
@@ -170,6 +322,18 @@ export type ClaimStatus =
   | "rejected"
   | "reimbursed"
   | "cancelled";
+
+// ─── Feed module ───────────────────────────────────────────────────────────
+
+// Who a feed post is shared with. `specific` targets an explicit employee list;
+// `department`/`office` target everyone in that unit; `all` is org-wide.
+export const feedAudience = v.union(
+  v.literal("all"),
+  v.literal("specific"),
+  v.literal("department"),
+  v.literal("office"),
+);
+export type FeedAudience = "all" | "specific" | "department" | "office";
 
 // ─── Attendance module ───────────────────────────────────────────────────
 
@@ -246,6 +410,36 @@ export const allowanceItem = v.object({
   name: v.string(),
   amountCents: v.number(),
   cpfable: v.boolean(), // counts toward CPF Ordinary Wages
+});
+
+// A one-off payroll line entered/pulled while preparing a run. `addition`
+// increases pay; `deduction` reduces it.
+export const payrollAdjustmentKind = v.union(
+  v.literal("addition"),
+  v.literal("deduction"),
+);
+export type PayrollAdjustmentKind = "addition" | "deduction";
+
+// Where an adjustment came from. `manual` = keyed in by HR; `claim` =
+// auto-pulled from an approved expense claim; `overtime` = OT hours entered in
+// the run; `unpaid_leave` = auto-pulled from approved no-pay leave.
+export const payrollAdjustmentSource = v.union(
+  v.literal("manual"),
+  v.literal("claim"),
+  v.literal("overtime"),
+  v.literal("unpaid_leave"),
+);
+export type PayrollAdjustmentSource =
+  | "manual"
+  | "claim"
+  | "overtime"
+  | "unpaid_leave";
+
+// Overtime inputs captured on an OT adjustment, so the amount can be recomputed
+// and shown as "N hour(s)".
+export const overtimeMeta = v.object({
+  hours: v.number(),
+  multiplier: v.number(),
 });
 
 // ─── Performance module ──────────────────────────────────────────────────

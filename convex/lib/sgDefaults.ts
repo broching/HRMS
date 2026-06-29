@@ -124,35 +124,114 @@ export const SG_LEAVE_TYPES: LeaveTypeSeed[] = [
   },
 ];
 
+/**
+ * The base "All Employees" policy for a freshly-seeded leave type. Mirrors the
+ * type's simple defaults (fixed entitlement for paid tracked types, manager
+ * approval, carry-forward from the type). Used by seed.ts and
+ * leavePolicies.seedDefaults. orgId + leaveTypeId are supplied by the caller.
+ */
+export function defaultLeavePolicyFields(lt: {
+  paid: boolean;
+  defaultEntitlementDays: number;
+  allowCarryForward: boolean;
+  maxCarryForwardDays?: number;
+  category: LeaveCategory;
+}) {
+  const tracked = lt.paid && lt.defaultEntitlementDays > 0;
+  const pastOk = lt.category === "sick" || lt.category === "hospitalisation";
+  return {
+    name: "All Employees",
+    availability: "all" as const,
+    isDefault: true,
+    firstApproverMode: "manager" as const,
+    secondApproverMode: "none" as const,
+    entitlementMode: (tracked ? "fixed" : "upon_request") as
+      | "fixed"
+      | "upon_request",
+    entitlementDays: lt.defaultEntitlementDays,
+    earnedEnabled: false,
+    proratedEnabled: false,
+    carryForwardEnabled: lt.allowCarryForward,
+    maxCarryForwardDays: lt.maxCarryForwardDays,
+    seniorityEnabled: false,
+    rounding: "none" as const,
+    useWorkingDays: true,
+    allowApplyInPast: pastOk,
+  };
+}
+
 type ClaimTypeSeed = {
   name: string;
   category: ClaimCategory;
   requiresReceipt: boolean;
   active: boolean;
+  guidelines?: string;
+  maxAmountCents?: number; // per-transaction cap
+  yearlyLimitCents?: number;
+  monthlyLimitCents?: number;
 };
 
 export const CLAIM_TYPE_DEFAULTS: ClaimTypeSeed[] = [
-  { name: "Medical", category: "medical", requiresReceipt: true, active: true },
-  { name: "Travel", category: "travel", requiresReceipt: true, active: true },
-  { name: "Meals", category: "meals", requiresReceipt: true, active: true },
+  {
+    name: "Medical — Outpatient",
+    category: "medical",
+    requiresReceipt: true,
+    active: true,
+    guidelines:
+      "Claim your outpatient expenses as per the company guidelines. Please prioritise panel clinics. Claims at non-panel clinics are reviewed case by case and may be only partially reimbursed.",
+    yearlyLimitCents: 100_000, // S$1,000 / year
+  },
+  {
+    name: "Travel",
+    category: "travel",
+    requiresReceipt: true,
+    active: true,
+    guidelines:
+      "Business travel: flights, accommodation and ground transport. Book economy class and standard rooms unless pre-approved.",
+  },
+  {
+    name: "Meals",
+    category: "meals",
+    requiresReceipt: true,
+    active: true,
+    guidelines:
+      "Meals incurred while working late or travelling for business. Alcohol is not reimbursable.",
+    monthlyLimitCents: 20_000, // S$200 / month
+    maxAmountCents: 5_000, // S$50 / transaction
+  },
   {
     name: "Office Purchases",
     category: "office",
     requiresReceipt: true,
     active: true,
+    guidelines:
+      "Stationery, peripherals and small office supplies. Items above the per-transaction cap require prior approval.",
+    maxAmountCents: 30_000, // S$300 / transaction
   },
-  { name: "Mileage", category: "mileage", requiresReceipt: false, active: true },
+  {
+    name: "Mileage",
+    category: "mileage",
+    requiresReceipt: false,
+    active: true,
+    guidelines:
+      "Personal-vehicle mileage for business trips, reimbursed at the prevailing per-kilometre rate. State the route in the description.",
+  },
   {
     name: "Training",
     category: "training",
     requiresReceipt: true,
     active: true,
+    guidelines:
+      "Courses, certifications and conference fees that support your role. Requires manager approval before enrolment.",
+    yearlyLimitCents: 200_000, // S$2,000 / year
   },
   {
     name: "Entertainment",
     category: "entertainment",
     requiresReceipt: true,
     active: true,
+    guidelines:
+      "Client entertainment and team events. Note the attendees and business purpose in the description.",
   },
 ];
 

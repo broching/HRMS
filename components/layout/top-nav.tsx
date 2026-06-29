@@ -19,7 +19,7 @@ import {
   type NavSection,
 } from "@/components/layout/nav-config"
 import { NavUserMenu } from "@/components/layout/nav-user-menu"
-import { PendingActions } from "@/components/layout/pending-actions"
+import { NotificationCenter } from "@/components/layout/notification-center"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,90 +45,161 @@ export function TopNav() {
   const settingsVisible = SETTINGS_SECTION.items.some((i) => canSee(i, role))
 
   return (
-    <header className="bg-background sticky top-0 z-40 border-b">
-      <div className="mx-auto flex h-16 w-full max-w-[1400px] items-center gap-3 px-4 lg:px-6">
-        {/* Brand + org switcher */}
-        <div className="flex items-center gap-2">
-          <Link href="/dashboard" className="text-lg font-bold tracking-tight">
-            HR<span className="text-primary">MS</span>
-          </Link>
-          <div className="hidden sm:block">
-            <OrganizationSwitcher
-              hidePersonal
-              afterSelectOrganizationUrl="/dashboard"
-              afterCreateOrganizationUrl="/dashboard"
-              appearance={{
-                baseTheme: theme === "dark" ? dark : undefined,
-                elements: {
-                  rootBox: "ml-1",
-                  organizationSwitcherTrigger: "px-2 py-1",
-                },
-              }}
-            />
-          </div>
-        </div>
+<header className="sticky top-0 z-50 h-[65px] border-b border-border bg-background shadow-lg">
+  <div className="flex h-full overflow-hidden">
+    
 
-        {/* Primary nav (desktop) */}
-        <nav className="hidden flex-1 items-center justify-center gap-1 md:flex">
-          {sections.map((s) => {
-            const isActive = active?.key === s.key
-            return (
-              <Link
-                key={s.key}
-                href={s.url}
-                className={cn(
-                  "rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:text-foreground hover:bg-accent",
-                )}
-              >
-                {s.title}
-              </Link>
-            )
-          })}
-        </nav>
+    {/* ---------------------------------------------------------------- */}
+    {/* LEFT PANEL */}
+    {/* ---------------------------------------------------------------- */}
 
-        {/* Right cluster */}
-        <div className="ml-auto flex items-center gap-1 md:ml-0">
-          <PendingActions />
-          {settingsVisible && (
+    <div className="relative flex w-[288px] shrink-0 items-center bg-background px-4">
+      <Link
+        href="/dashboard"
+        className="text-2xl font-extrabold tracking-tight text-foreground"
+      >
+        Wiz<span className="text-sky-600 dark:text-sky-400">HR</span>
+      </Link>
+
+      <div className="mx-3 h-8 w-px bg-border" />
+
+      <OrganizationSwitcher
+        hidePersonal
+        afterSelectOrganizationUrl="/dashboard"
+        afterCreateOrganizationUrl="/dashboard"
+        appearance={{
+          baseTheme: theme === "dark" ? dark : undefined,
+          elements: {
+            rootBox: "ml-0",
+
+            organizationSwitcherTrigger:
+              "rounded-xl px-3 py-2 transition hover:bg-accent",
+
+            organizationPreviewMainIdentifier:
+              "font-semibold text-foreground",
+
+            organizationPreviewTextContainer:
+              "text-foreground",
+
+            organizationSwitcherTriggerIcon:
+              "text-muted-foreground",
+          },
+        }}
+      />
+
+      {/* Diagonal transition */}
+
+      <div
+        className="
+          absolute
+          -right-8
+          top-0
+          h-full
+          w-16
+          bg-background
+          skew-x-[-20deg]
+          border-r
+          border-border
+          z-10
+        "
+      />
+    </div>
+
+    {/* ---------------------------------------------------------------- */}
+    {/* BLUE PANEL */}
+    {/* ---------------------------------------------------------------- */}
+    
+
+    <div
+      className="
+        flex
+        flex-1
+        items-center
+        pl-9
+        pr-5
+
+        bg-gradient-to-r
+        from-sky-500
+        via-blue-500
+        to-indigo-500
+
+        dark:from-slate-900
+        dark:via-blue-950
+        dark:to-slate-900
+      "
+    >
+      {/* Center Nav */}
+
+      <nav className="hidden flex-1 justify-center gap-2 md:flex">
+        {sections.map((section) => {
+          const isActive = active?.key === section.key
+
+          return (
             <Link
-              href={SETTINGS_SECTION.url}
-              aria-label="Settings"
+              key={section.key}
+              href={section.url}
               className={cn(
-                "rounded-md p-1.5 transition-colors",
-                active?.key === "settings"
-                  ? "text-primary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                "rounded-2xl px-5 py-2 text-sm font-semibold transition-all duration-300",
+
+                isActive
+                  ? "bg-white text-blue-700 shadow-xl ring-1 ring-white/40"
+                  : "text-white/90 hover:bg-white/10 hover:text-white hover:scale-105"
               )}
             >
-              <IconSettings className="size-5" />
+              {section.title}
             </Link>
-          )}
-          <NavUserMenu />
+          )
+        })}
+      </nav>
 
-          {/* Mobile menu */}
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              aria-label="Menu"
-              className="text-muted-foreground hover:text-foreground rounded-md p-1.5 md:hidden"
-            >
-              <IconMenu2 className="size-5" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              {sections.map((s) => (
-                <DropdownMenuItem key={s.key} asChild>
-                  <Link href={s.url}>
-                    <s.icon className="size-4" />
-                    {s.title}
-                  </Link>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+      {/* Right */}
+
+      <div className="ml-auto flex items-center gap-2">
+        <div className="rounded-xl border border-white/20 bg-white/10 p-1 backdrop-blur-md">
+          <NotificationCenter />
         </div>
+
+        {settingsVisible && (
+          <Link
+            href={SETTINGS_SECTION.url}
+            className={cn(
+              "rounded-xl p-2 transition-all duration-300",
+
+              active?.key === "settings"
+                ? "bg-white/20 text-white"
+                : "text-white/90 hover:bg-white/10 hover:scale-110"
+            )}
+          >
+            <IconSettings className="size-5" />
+          </Link>
+        )}
+
+        <div className="rounded-xl p-1 transition-all duration-300 hover:bg-white/10 hover:scale-105">
+          <NavUserMenu />
+        </div>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger className="rounded-xl p-2 text-white hover:bg-white/10 md:hidden">
+            <IconMenu2 className="size-5" />
+          </DropdownMenuTrigger>
+
+          <DropdownMenuContent align="end" className="w-52">
+            {sections.map((section) => (
+              <DropdownMenuItem key={section.key} asChild>
+                <Link
+                  href={section.url}
+                  className="flex items-center gap-2"
+                >
+                  <section.icon className="size-4" />
+                  {section.title}
+                </Link>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-    </header>
+    </div>
+  </div>
+</header>
   )
 }

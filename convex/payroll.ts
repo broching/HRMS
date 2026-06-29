@@ -6,7 +6,17 @@ import { hasPermission } from "./lib/permissions";
 import { employeeByUserId } from "./employees";
 import { effectiveCompensation } from "./compensation";
 import { computeCpf, ageOn } from "./model/cpf";
-import { payrollRunRow, payslipRow, payslipDetail } from "./lib/validators";
+import {
+  payrollRunRow,
+  payslipRow,
+  payslipDetail,
+  payrollWorkspace,
+} from "./lib/validators";
+import {
+  payrollAdjustmentKind,
+  payrollAdjustmentSource,
+  overtimeMeta,
+} from "./lib/enums";
 import { writeAuditLog } from "./lib/audit";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -41,24 +51,70 @@ interface ComputedPayslip {
   lines: { label: string; amountCents: number; type: "earning" | "deduction" | "employer" }[];
 }
 
-// Pure-ish: derive a payslip from a compensation record + employee dob.
+// The bits of an adjustment that affect the computation. Accepts either a full
+// doc or a not-yet-inserted draft.
+type AdjustmentInput = Pick<
+  Doc<"payrollAdjustments">,
+  "kind" | "label" | "amountCents" | "cpfable" | "affectsGross"
+>;
+
+/**
+ * Singapore MOM hourly rate of pay = (12 × monthly basic) / (52 × weekly hours).
+ * Defaults to a 44-hour work week. Returned in cents.
+ */
+export function hourlyRateCents(baseMonthlyCents: number, weeklyHours = 44): number {
+  if (weeklyHours <= 0) return 0;
+  return Math.round((12 * baseMonthlyCents) / (52 * weeklyHours));
+}
+
+/** Overtime pay = hourly rate × multiplier × hours, in cents. */
+export function overtimePayCents(
+  baseMonthlyCents: number,
+  hours: number,
+  multiplier: number,
+): number {
+  return Math.round(hourlyRateCents(baseMonthlyCents) * multiplier * hours);
+}
+
+// Pure-ish: derive a payslip from a compensation record + employee dob + the
+// run's one-off adjustments for this employee.
 function computePayslip(
   comp: Doc<"compensation">,
   dob: string | undefined,
   periodEnd: string,
+  adjustments: AdjustmentInput[],
 ): ComputedPayslip {
   const baseCents = comp.baseMonthlyCents;
-  const allowancesCents = comp.allowances.reduce((s, a) => s + a.amountCents, 0);
-  const grossCents = baseCents + allowancesCents;
+  const compAllowancesCents = comp.allowances.reduce((s, a) => s + a.amountCents, 0);
 
+  const additions = adjustments.filter((a) => a.kind === "addition");
+  const deductions = adjustments.filter((a) => a.kind === "deduction");
+  const grossDeductions = deductions.filter((d) => d.affectsGross); // pre-CPF
+  const netDeductions = deductions.filter((d) => !d.affectsGross); // post-CPF
+
+  const additionsCents = additions.reduce((s, a) => s + a.amountCents, 0);
+  const grossDeductCents = grossDeductions.reduce((s, d) => s + d.amountCents, 0);
+  const netDeductCents = netDeductions.reduce((s, d) => s + d.amountCents, 0);
+
+  const allowancesCents = compAllowancesCents + additionsCents;
+  const grossCents = baseCents + allowancesCents - grossDeductCents;
+
+  // CPF Ordinary Wage = base + cpfable comp allowances + cpfable additions,
+  // less any pre-CPF deductions (e.g. no-pay leave).
   const cpfableAllowances = comp.allowances
     .filter((a) => a.cpfable)
     .reduce((s, a) => s + a.amountCents, 0);
-  const ordinaryWage = baseCents + cpfableAllowances;
+  const cpfableAdditions = additions
+    .filter((a) => a.cpfable)
+    .reduce((s, a) => s + a.amountCents, 0);
+  const ordinaryWage = Math.max(
+    0,
+    baseCents + cpfableAllowances + cpfableAdditions - grossDeductCents,
+  );
   const age = dob ? ageOn(dob, periodEnd) : 30; // assume prime-age band if unknown
   const cpf = computeCpf(ordinaryWage, age, comp.cpfStatus);
 
-  const netCents = grossCents - cpf.employeeCpfCents;
+  const netCents = grossCents - cpf.employeeCpfCents - netDeductCents;
 
   const lines: ComputedPayslip["lines"] = [
     { label: "Base pay", amountCents: baseCents, type: "earning" },
@@ -66,6 +122,16 @@ function computePayslip(
       label: a.name,
       amountCents: a.amountCents,
       type: "earning" as const,
+    })),
+    ...additions.map((a) => ({
+      label: a.label,
+      amountCents: a.amountCents,
+      type: "earning" as const,
+    })),
+    ...grossDeductions.map((d) => ({
+      label: d.label,
+      amountCents: d.amountCents,
+      type: "deduction" as const,
     })),
   ];
   if (cpf.employeeCpfCents > 0) {
@@ -81,6 +147,9 @@ function computePayslip(
       amountCents: cpf.employerCpfCents,
       type: "employer",
     });
+  }
+  for (const d of netDeductions) {
+    lines.push({ label: d.label, amountCents: d.amountCents, type: "deduction" });
   }
 
   return {
@@ -128,6 +197,89 @@ async function hydratePayslip(ctx: QueryCtx, p: Doc<"payslips">) {
     netCents: p.netCents,
     status: p.status,
   };
+}
+
+// ─── Recompute ─────────────────────────────────────────────────────────────
+
+// Recompute a single payslip from its employee's compensation + the run's
+// adjustments for that employee, and write the snapshot back.
+async function recomputePayslip(
+  ctx: MutationCtx,
+  slip: Doc<"payslips">,
+): Promise<void> {
+  const emp = await ctx.db.get(slip.employeeId);
+  const periodEnd = periodEndDate(slip.periodMonth);
+  const comp = await effectiveCompensation(ctx, slip.employeeId, periodEnd);
+  if (!comp) return;
+  const adjustments = await ctx.db
+    .query("payrollAdjustments")
+    .withIndex("by_run_employee", (q) =>
+      q.eq("runId", slip.runId).eq("employeeId", slip.employeeId),
+    )
+    .collect();
+  const computed = computePayslip(comp, emp?.dob, periodEnd, adjustments);
+  await ctx.db.patch(slip._id, {
+    baseCents: computed.baseCents,
+    allowancesCents: computed.allowancesCents,
+    grossCents: computed.grossCents,
+    cpfableWageCents: computed.cpfableWageCents,
+    employeeCpfCents: computed.employeeCpfCents,
+    employerCpfCents: computed.employerCpfCents,
+    netCents: computed.netCents,
+    cpfStatus: computed.cpfStatus,
+    lines: computed.lines,
+  });
+}
+
+// Re-sum the run's denormalized totals from its payslips.
+async function recomputeRunTotals(
+  ctx: MutationCtx,
+  runId: Id<"payrollRuns">,
+): Promise<void> {
+  const slips = await ctx.db
+    .query("payslips")
+    .withIndex("by_run", (q) => q.eq("runId", runId))
+    .collect();
+  let grossCents = 0;
+  let employeeCpfCents = 0;
+  let employerCpfCents = 0;
+  let netCents = 0;
+  for (const s of slips) {
+    grossCents += s.grossCents;
+    employeeCpfCents += s.employeeCpfCents;
+    employerCpfCents += s.employerCpfCents;
+    netCents += s.netCents;
+  }
+  await ctx.db.patch(runId, {
+    grossCents,
+    employeeCpfCents,
+    employerCpfCents,
+    netCents,
+    payslipCount: slips.length,
+  });
+}
+
+// Resolve a draft run + the caller's payslip for an employee, enforcing org
+// scope and the run being editable. Shared by the adjustment mutations.
+async function requireEditablePayslip(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  runId: Id<"payrollRuns">,
+  employeeId: Id<"employees">,
+): Promise<{ run: Doc<"payrollRuns">; slip: Doc<"payslips"> }> {
+  const run = await ctx.db.get(runId);
+  if (!run || run.orgId !== orgId) throw new Error("Run not found.");
+  if (run.status !== "draft") {
+    throw new Error("Only draft runs can be edited.");
+  }
+  const slip = await ctx.db
+    .query("payslips")
+    .withIndex("by_run_employee", (q) =>
+      q.eq("runId", runId).eq("employeeId", employeeId),
+    )
+    .first();
+  if (!slip) throw new Error("No payslip for this employee in the run.");
+  return { run, slip };
 }
 
 // ─── Run lifecycle ───────────────────────────────────────────────────────────
@@ -186,7 +338,7 @@ export const createRun = mutation({
     for (const e of employees) {
       const comp = await effectiveCompensation(ctx, e._id, periodEnd);
       if (!comp) continue; // no salary on file yet → skip
-      const slip = computePayslip(comp, e.dob, periodEnd);
+      const slip = computePayslip(comp, e.dob, periodEnd, []);
       await ctx.db.insert("payslips", {
         orgId,
         runId,
@@ -282,6 +434,27 @@ export const markPaid = mutation({
       payDate: payDate ?? run.payDate ?? new Date().toISOString().slice(0, 10),
     });
     await setRunStatus(ctx, runId, "paid", orgId);
+
+    // Notify each employee that their payslip has been released.
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const label = monthLabel(run.periodMonth);
+    for (const slip of slips) {
+      if (slip.orgId !== orgId) continue;
+      const emp = await ctx.db.get(slip.employeeId);
+      if (!emp?.userId) continue;
+      await ctx.db.insert("notifications", {
+        orgId,
+        recipientUserId: emp.userId,
+        type: "payroll.payslip_released",
+        title: "Payslip available",
+        body: `Your payslip for ${label} has been released.`,
+        entityRef: { table: "payslips", id: slip._id },
+        read: false,
+      });
+    }
     await writeAuditLog(ctx, {
       orgId,
       actorUserId: userId,
@@ -306,6 +479,11 @@ export const deleteRun = mutation({
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .collect();
     for (const s of slips) await ctx.db.delete(s._id);
+    const adjustments = await ctx.db
+      .query("payrollAdjustments")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    for (const a of adjustments) await ctx.db.delete(a._id);
     await ctx.db.delete(runId);
     await writeAuditLog(ctx, {
       orgId,
@@ -318,7 +496,427 @@ export const deleteRun = mutation({
   },
 });
 
+// ─── Adjustments (Step 1: Adjust payroll) ────────────────────────────────────
+
+export const addAdjustment = mutation({
+  args: {
+    runId: v.id("payrollRuns"),
+    employeeId: v.id("employees"),
+    kind: payrollAdjustmentKind,
+    source: payrollAdjustmentSource,
+    label: v.string(),
+    amountCents: v.optional(v.number()),
+    cpfable: v.optional(v.boolean()),
+    affectsGross: v.optional(v.boolean()),
+    note: v.optional(v.string()),
+    overtime: v.optional(overtimeMeta),
+  },
+  returns: v.id("payrollAdjustments"),
+  handler: async (ctx, args) => {
+    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
+    const { run, slip } = await requireEditablePayslip(
+      ctx,
+      orgId,
+      args.runId,
+      args.employeeId,
+    );
+
+    let amountCents = args.amountCents ?? 0;
+    if (args.source === "overtime") {
+      if (!args.overtime) throw new Error("Overtime hours are required.");
+      const periodEnd = periodEndDate(run.periodMonth);
+      const comp = await effectiveCompensation(ctx, args.employeeId, periodEnd);
+      if (!comp) throw new Error("No compensation on file for this employee.");
+      amountCents = overtimePayCents(
+        comp.baseMonthlyCents,
+        args.overtime.hours,
+        args.overtime.multiplier,
+      );
+    }
+    if (amountCents <= 0) throw new Error("Amount must be greater than zero.");
+
+    const label = args.label.trim();
+    if (!label) throw new Error("A label is required.");
+
+    const adjustmentId = await ctx.db.insert("payrollAdjustments", {
+      orgId,
+      runId: args.runId,
+      employeeId: args.employeeId,
+      kind: args.kind,
+      source: args.source,
+      label,
+      amountCents,
+      cpfable: args.cpfable ?? args.source === "overtime",
+      affectsGross: args.affectsGross ?? args.source === "unpaid_leave",
+      note: args.note?.trim() || undefined,
+      overtime: args.source === "overtime" ? args.overtime : undefined,
+      createdBy: userId,
+    });
+
+    await recomputePayslip(ctx, slip);
+    await recomputeRunTotals(ctx, args.runId);
+    return adjustmentId;
+  },
+});
+
+export const updateAdjustment = mutation({
+  args: {
+    adjustmentId: v.id("payrollAdjustments"),
+    label: v.optional(v.string()),
+    amountCents: v.optional(v.number()),
+    cpfable: v.optional(v.boolean()),
+    affectsGross: v.optional(v.boolean()),
+    note: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const adj = await ctx.db.get(args.adjustmentId);
+    if (!adj || adj.orgId !== orgId) throw new Error("Adjustment not found.");
+    const { slip } = await requireEditablePayslip(
+      ctx,
+      orgId,
+      adj.runId,
+      adj.employeeId,
+    );
+
+    const patch: Partial<Doc<"payrollAdjustments">> = {};
+    if (args.label !== undefined) {
+      const label = args.label.trim();
+      if (!label) throw new Error("A label is required.");
+      patch.label = label;
+    }
+    if (args.amountCents !== undefined) {
+      if (args.amountCents <= 0) throw new Error("Amount must be greater than zero.");
+      patch.amountCents = args.amountCents;
+    }
+    if (args.cpfable !== undefined) patch.cpfable = args.cpfable;
+    if (args.affectsGross !== undefined) patch.affectsGross = args.affectsGross;
+    if (args.note !== undefined) patch.note = args.note.trim() || undefined;
+
+    await ctx.db.patch(args.adjustmentId, patch);
+    await recomputePayslip(ctx, slip);
+    await recomputeRunTotals(ctx, adj.runId);
+    return null;
+  },
+});
+
+export const removeAdjustment = mutation({
+  args: { adjustmentId: v.id("payrollAdjustments") },
+  returns: v.null(),
+  handler: async (ctx, { adjustmentId }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const adj = await ctx.db.get(adjustmentId);
+    if (!adj || adj.orgId !== orgId) throw new Error("Adjustment not found.");
+    const { slip } = await requireEditablePayslip(
+      ctx,
+      orgId,
+      adj.runId,
+      adj.employeeId,
+    );
+    await ctx.db.delete(adjustmentId);
+    await recomputePayslip(ctx, slip);
+    await recomputeRunTotals(ctx, adj.runId);
+    return null;
+  },
+});
+
+// Bulk-add one item type across many employees ("Add items in bulk").
+export const addAdjustmentsBulk = mutation({
+  args: {
+    runId: v.id("payrollRuns"),
+    kind: payrollAdjustmentKind,
+    source: payrollAdjustmentSource,
+    label: v.string(),
+    cpfable: v.optional(v.boolean()),
+    affectsGross: v.optional(v.boolean()),
+    items: v.array(
+      v.object({
+        employeeId: v.id("employees"),
+        amountCents: v.number(),
+      }),
+    ),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(args.runId);
+    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
+    if (run.status !== "draft") throw new Error("Only draft runs can be edited.");
+    const label = args.label.trim();
+    if (!label) throw new Error("A label is required.");
+
+    let added = 0;
+    const touched = new Set<Id<"payslips">>();
+    for (const item of args.items) {
+      if (item.amountCents <= 0) continue;
+      const slip = await ctx.db
+        .query("payslips")
+        .withIndex("by_run_employee", (q) =>
+          q.eq("runId", args.runId).eq("employeeId", item.employeeId),
+        )
+        .first();
+      if (!slip) continue;
+      await ctx.db.insert("payrollAdjustments", {
+        orgId,
+        runId: args.runId,
+        employeeId: item.employeeId,
+        kind: args.kind,
+        source: args.source,
+        label,
+        amountCents: item.amountCents,
+        cpfable: args.cpfable ?? false,
+        affectsGross: args.affectsGross ?? false,
+        createdBy: userId,
+      });
+      touched.add(slip._id);
+      added += 1;
+    }
+    for (const slipId of touched) {
+      const slip = await ctx.db.get(slipId);
+      if (slip) await recomputePayslip(ctx, slip);
+    }
+    await recomputeRunTotals(ctx, args.runId);
+    return added;
+  },
+});
+
+// Pull approved claims and/or unpaid leave for the period into the run as
+// adjustments. Idempotent — items already pulled (by source ref) are skipped.
+export const syncAutoItems = mutation({
+  args: {
+    runId: v.id("payrollRuns"),
+    sources: v.array(
+      v.union(v.literal("claim"), v.literal("unpaid_leave")),
+    ),
+  },
+  returns: v.object({ claims: v.number(), unpaidLeave: v.number() }),
+  handler: async (ctx, { runId, sources }) => {
+    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
+    if (run.status !== "draft") throw new Error("Only draft runs can be edited.");
+
+    // Employees that actually have a payslip in this run.
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const slipByEmployee = new Map<Id<"employees">, Doc<"payslips">>();
+    for (const s of slips) slipByEmployee.set(s.employeeId, s);
+
+    // Already-pulled source refs, so re-syncing doesn't duplicate.
+    const existing = await ctx.db
+      .query("payrollAdjustments")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const pulled = new Set(
+      existing.filter((a) => a.sourceRefId).map((a) => a.sourceRefId as string),
+    );
+
+    const touched = new Set<Id<"payslips">>();
+    let claimsAdded = 0;
+    let unpaidLeaveAdded = 0;
+
+    if (sources.includes("claim")) {
+      const claims = await ctx.db
+        .query("claims")
+        .withIndex("by_org_status", (q) =>
+          q.eq("orgId", orgId).eq("status", "approved"),
+        )
+        .collect();
+      for (const claim of claims) {
+        if (!claim.incurredDate.startsWith(run.periodMonth)) continue;
+        if (pulled.has(claim._id)) continue;
+        const slip = slipByEmployee.get(claim.employeeId);
+        if (!slip) continue;
+        const claimType = await ctx.db.get(claim.claimTypeId);
+        await ctx.db.insert("payrollAdjustments", {
+          orgId,
+          runId,
+          employeeId: claim.employeeId,
+          kind: "addition",
+          source: "claim",
+          label: `Claim — ${claimType?.name ?? claim.description}`,
+          amountCents: claim.amountCents,
+          cpfable: false, // expense reimbursements are not CPF-able
+          affectsGross: false,
+          sourceRefId: claim._id,
+          createdBy: userId,
+        });
+        touched.add(slip._id);
+        claimsAdded += 1;
+      }
+    }
+
+    if (sources.includes("unpaid_leave")) {
+      const requests = await ctx.db
+        .query("leaveRequests")
+        .withIndex("by_org_status", (q) =>
+          q.eq("orgId", orgId).eq("status", "approved"),
+        )
+        .collect();
+      for (const req of requests) {
+        if (!req.startDate.startsWith(run.periodMonth)) continue;
+        if (pulled.has(req._id)) continue;
+        const slip = slipByEmployee.get(req.employeeId);
+        if (!slip) continue;
+        const leaveType = await ctx.db.get(req.leaveTypeId);
+        if (!leaveType || leaveType.paid) continue; // only no-pay leave
+        const periodEnd = periodEndDate(run.periodMonth);
+        const comp = await effectiveCompensation(ctx, req.employeeId, periodEnd);
+        if (!comp) continue;
+        // MOM convention: daily rate = monthly basic / 26 working days.
+        const dailyRate = Math.round(comp.baseMonthlyCents / 26);
+        const amountCents = Math.round(dailyRate * req.totalDays);
+        if (amountCents <= 0) continue;
+        await ctx.db.insert("payrollAdjustments", {
+          orgId,
+          runId,
+          employeeId: req.employeeId,
+          kind: "deduction",
+          source: "unpaid_leave",
+          label: `No-pay leave — ${req.totalDays} day(s)`,
+          amountCents,
+          cpfable: false,
+          affectsGross: true, // reduces gross + CPF-able wage
+          sourceRefId: req._id,
+          createdBy: userId,
+        });
+        touched.add(slip._id);
+        unpaidLeaveAdded += 1;
+      }
+    }
+
+    for (const slipId of touched) {
+      const slip = await ctx.db.get(slipId);
+      if (slip) await recomputePayslip(ctx, slip);
+    }
+    await recomputeRunTotals(ctx, runId);
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "payroll.sync_items",
+      entity: "payrollRuns",
+      entityId: runId,
+      after: { claimsAdded, unpaidLeaveAdded },
+    });
+    return { claims: claimsAdded, unpaidLeave: unpaidLeaveAdded };
+  },
+});
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
+
+// The Adjust-Payroll / Review workspace: run + each payslip with its raw
+// adjustments + the "validate items" banner counts.
+export const getRunWorkspace = query({
+  args: { runId: v.id("payrollRuns") },
+  returns: v.union(payrollWorkspace, v.null()),
+  handler: async (ctx, { runId }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) return null;
+
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+
+    const payslips = await Promise.all(
+      slips.map(async (s) => {
+        const emp = await ctx.db.get(s.employeeId);
+        const [dept, position, photoUrl, adjustments] = await Promise.all([
+          emp?.departmentId ? ctx.db.get(emp.departmentId) : Promise.resolve(null),
+          emp?.positionId ? ctx.db.get(emp.positionId) : Promise.resolve(null),
+          emp?.photoStorageId
+            ? ctx.storage.getUrl(emp.photoStorageId)
+            : Promise.resolve(null),
+          ctx.db
+            .query("payrollAdjustments")
+            .withIndex("by_run_employee", (q) =>
+              q.eq("runId", runId).eq("employeeId", s.employeeId),
+            )
+            .collect(),
+        ]);
+        const comp = await effectiveCompensation(
+          ctx,
+          s.employeeId,
+          periodEndDate(s.periodMonth),
+        );
+        return {
+          _id: s._id,
+          employeeId: s.employeeId,
+          employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
+          employeePhotoUrl: photoUrl,
+          positionTitle: position?.title ?? null,
+          departmentName: dept?.name ?? null,
+          currency: s.currency,
+          baseCents: s.baseCents,
+          allowances: comp?.allowances ?? [],
+          grossCents: s.grossCents,
+          cpfableWageCents: s.cpfableWageCents,
+          employeeCpfCents: s.employeeCpfCents,
+          employerCpfCents: s.employerCpfCents,
+          netCents: s.netCents,
+          cpfStatus: s.cpfStatus,
+          adjustments: adjustments
+            .map((a) => ({
+              _id: a._id,
+              _creationTime: a._creationTime,
+              employeeId: a.employeeId,
+              kind: a.kind,
+              source: a.source,
+              label: a.label,
+              amountCents: a.amountCents,
+              cpfable: a.cpfable,
+              affectsGross: a.affectsGross,
+              note: a.note ?? null,
+              overtime: a.overtime ?? null,
+            }))
+            .sort((x, y) => x._creationTime - y._creationTime),
+        };
+      }),
+    );
+    payslips.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+
+    // "Validate items" banner counts.
+    const empIds = new Set(slips.map((s) => s.employeeId));
+    const approvedClaims = await ctx.db
+      .query("claims")
+      .withIndex("by_org_status", (q) =>
+        q.eq("orgId", orgId).eq("status", "approved"),
+      )
+      .collect();
+    const claimsCount = approvedClaims.filter(
+      (c) => c.incurredDate.startsWith(run.periodMonth) && empIds.has(c.employeeId),
+    ).length;
+
+    const approvedLeave = await ctx.db
+      .query("leaveRequests")
+      .withIndex("by_org_status", (q) =>
+        q.eq("orgId", orgId).eq("status", "approved"),
+      )
+      .collect();
+    let unpaidLeaveDays = 0;
+    for (const req of approvedLeave) {
+      if (!req.startDate.startsWith(run.periodMonth)) continue;
+      if (!empIds.has(req.employeeId)) continue;
+      const leaveType = await ctx.db.get(req.leaveTypeId);
+      if (leaveType && !leaveType.paid) unpaidLeaveDays += req.totalDays;
+    }
+
+    const overtime = payslips.reduce(
+      (n, p) => n + p.adjustments.filter((a) => a.source === "overtime").length,
+      0,
+    );
+
+    return {
+      run: runRow(run),
+      payslips,
+      available: { claims: claimsCount, unpaidLeaveDays, overtime },
+    };
+  },
+});
 
 export const listRuns = query({
   args: {},
@@ -376,6 +974,31 @@ export const myPayslips = query({
   },
 });
 
+// Payslips for the profile Payroll section — visible to the employee themselves
+// OR HR/payroll (payroll:manage). Non-draft only, most recent first.
+export const forEmployeeProfile = query({
+  args: { employeeId: v.id("employees") },
+  returns: v.array(payslipRow),
+  handler: async (ctx, { employeeId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgCtx.orgId) {
+      throw new Error("Employee not found.");
+    }
+    const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
+    if (!isSelf && !hasPermission(orgCtx.role, "payroll:manage")) {
+      throw new Error("Not authorized to view payslips.");
+    }
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .order("desc")
+      .take(48);
+    const visible = slips.filter((s) => s.status !== "draft");
+    return await Promise.all(visible.map((s) => hydratePayslip(ctx, s)));
+  },
+});
+
 export const getPayslip = query({
   args: { payslipId: v.id("payslips") },
   returns: payslipDetail,
@@ -392,6 +1015,11 @@ export const getPayslip = query({
       }
     }
     const emp = await ctx.db.get(slip.employeeId);
+    const [dept, position, run] = await Promise.all([
+      emp?.departmentId ? ctx.db.get(emp.departmentId) : Promise.resolve(null),
+      emp?.positionId ? ctx.db.get(emp.positionId) : Promise.resolve(null),
+      ctx.db.get(slip.runId),
+    ]);
     return {
       _id: slip._id,
       _creationTime: slip._creationTime,
@@ -409,6 +1037,13 @@ export const getPayslip = query({
       cpfStatus: slip.cpfStatus,
       lines: slip.lines,
       status: slip.status,
+      companyName: orgCtx.org.name,
+      employeeNumber: emp?.employeeNumber ?? "—",
+      departmentName: dept?.name ?? null,
+      positionTitle: position?.title ?? null,
+      payPeriodStart: `${slip.periodMonth}-01`,
+      payPeriodEnd: periodEndDate(slip.periodMonth),
+      payDate: run?.payDate ?? null,
     };
   },
 });

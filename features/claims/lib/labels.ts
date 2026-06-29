@@ -50,3 +50,27 @@ export function formatMoney(cents: number, currency: string): string {
     return `${(cents / 100).toFixed(2)} ${currency}`
   }
 }
+
+// Renders a configured limit, or "No limit" when unset (null).
+export function formatLimit(cents: number | null, currency: string): string {
+  return cents === null ? "No limit" : formatMoney(cents, currency)
+}
+
+// Common currencies for the "amount in local currency" picker. The first entry
+// is the regional default; the list stays short and editable.
+export const CURRENCIES = [
+  "SGD",
+  "MYR",
+  "USD",
+  "EUR",
+  "GBP",
+  "AUD",
+  "JPY",
+  "CNY",
+  "HKD",
+  "INR",
+  "IDR",
+  "THB",
+  "PHP",
+  "VND",
+] as const

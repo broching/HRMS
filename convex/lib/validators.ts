@@ -4,13 +4,29 @@ import {
   employmentType,
   employeeStatus,
   gender,
+  maritalStatus,
+  documentType,
+  equipmentStatus,
   addressValidator,
   contactValidator,
   emergencyContactValidator,
+  familyMemberValidator,
+  personalFieldValidator,
+  resumeEntryValidator,
   leaveCategory,
   accrualMethod,
   leaveStatus,
   halfDay,
+  policyAvailability,
+  approverMode,
+  entitlementMode,
+  accrualType,
+  prorateMode,
+  seniorityEffective,
+  incrementMode,
+  roundingMode,
+  seniorityRule,
+  leaveTimelineEvent,
   claimCategory,
   claimStatus,
   attendanceMethod,
@@ -21,9 +37,13 @@ import {
   payrollStatus,
   payslipLine,
   allowanceItem,
+  payrollAdjustmentKind,
+  payrollAdjustmentSource,
+  overtimeMeta,
   reviewCycleStatus,
   goalStatus,
   reviewStatus,
+  feedAudience,
 } from "./enums";
 
 /**
@@ -81,18 +101,27 @@ const employeeFields = {
   loginEmail: v.optional(v.string()),
   invitedRole: v.optional(hrmsRole),
   employeeNumber: v.string(),
+  isVacant: v.optional(v.boolean()),
   firstName: v.string(),
   lastName: v.string(),
   preferredName: v.optional(v.string()),
   photoStorageId: v.optional(v.id("_storage")),
   dob: v.optional(v.string()),
   gender: v.optional(gender),
+  maritalStatus: v.optional(maritalStatus),
   nationality: v.optional(v.string()),
   idNumberMasked: v.optional(v.string()),
   idNumberLast4: v.optional(v.string()),
   address: v.optional(addressValidator),
   contact: v.optional(contactValidator),
   emergencyContacts: v.optional(v.array(emergencyContactValidator)),
+  bio: v.optional(v.string()),
+  galleryStorageIds: v.optional(v.array(v.id("_storage"))),
+  personalFields: v.optional(v.array(personalFieldValidator)),
+  experience: v.optional(v.array(resumeEntryValidator)),
+  education: v.optional(v.array(resumeEntryValidator)),
+  familyMembers: v.optional(v.array(familyMemberValidator)),
+  trainings: v.optional(v.array(resumeEntryValidator)),
   departmentId: v.optional(v.id("departments")),
   teamId: v.optional(v.id("teams")),
   positionId: v.optional(v.id("positions")),
@@ -113,14 +142,83 @@ const employeeFields = {
 export const employeeDoc = v.object(employeeFields);
 
 // Employee profile with resolved labels + photo URL (return of employees.get).
+// Locked personal fields (dob, gender, maritalStatus, nationality, idNumber*,
+// address, personalFields, contact.personalEmail/phone) are omitted when the
+// caller may not view them — hence the capability flags drive the UI.
 export const employeeProfile = v.object({
   ...employeeFields,
   photoUrl: v.union(v.string(), v.null()),
+  galleryUrls: v.array(
+    v.object({ storageId: v.id("_storage"), url: v.string() }),
+  ),
   departmentName: v.union(v.string(), v.null()),
   teamName: v.union(v.string(), v.null()),
   positionTitle: v.union(v.string(), v.null()),
   managerName: v.union(v.string(), v.null()),
   officeName: v.union(v.string(), v.null()),
+  // Server-resolved capabilities for the calling user.
+  isSelf: v.boolean(),
+  canEdit: v.boolean(),
+  canManage: v.boolean(),
+  canViewPersonal: v.boolean(),
+  canViewCompensation: v.boolean(),
+});
+
+// One document "group" — a logical document with up to 3 files (e.g. IC
+// front/back) + a note (return of employeeDocuments.list).
+export const documentGroupRow = v.object({
+  _id: v.id("employeeDocuments"),
+  _creationTime: v.number(),
+  type: documentType,
+  name: v.string(),
+  note: v.union(v.string(), v.null()),
+  expiryDate: v.union(v.string(), v.null()),
+  files: v.array(
+    v.object({
+      storageId: v.id("_storage"),
+      url: v.union(v.string(), v.null()),
+      name: v.string(),
+      isImage: v.boolean(),
+    }),
+  ),
+});
+
+// One asset lent to an employee (return of equipment.listForEmployee).
+export const equipmentRow = v.object({
+  _id: v.id("equipment"),
+  _creationTime: v.number(),
+  employeeId: v.id("employees"),
+  name: v.string(),
+  category: v.union(v.string(), v.null()),
+  serialNumber: v.union(v.string(), v.null()),
+  assignedDate: v.union(v.string(), v.null()),
+  returnedDate: v.union(v.string(), v.null()),
+  status: equipmentStatus,
+  note: v.union(v.string(), v.null()),
+});
+
+// One in-company job timeline row with hydrated labels (return of
+// jobHistory.listForEmployee). `isCurrent` marks the active position.
+export const jobHistoryRow = v.object({
+  _id: v.id("jobHistory"),
+  _creationTime: v.number(),
+  employeeId: v.id("employees"),
+  effectiveDate: v.string(),
+  title: v.union(v.string(), v.null()),
+  // Raw ids so the edit dialog can prefill its pickers.
+  positionId: v.union(v.id("positions"), v.null()),
+  rawTitle: v.union(v.string(), v.null()),
+  departmentId: v.union(v.id("departments"), v.null()),
+  officeId: v.union(v.id("offices"), v.null()),
+  managerId: v.union(v.id("employees"), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  officeName: v.union(v.string(), v.null()),
+  managerName: v.union(v.string(), v.null()),
+  managerInitials: v.union(v.string(), v.null()),
+  managerPhotoUrl: v.union(v.string(), v.null()),
+  employmentType: v.union(employmentType, v.null()),
+  isCurrent: v.boolean(),
+  note: v.union(v.string(), v.null()),
 });
 
 // Compact directory row (return of employees.list).
@@ -136,9 +234,27 @@ export const employeeRow = v.object({
   workEmail: v.optional(v.string()),
   departmentName: v.optional(v.string()),
   positionTitle: v.optional(v.string()),
+  officeName: v.optional(v.string()),
+  photoUrl: v.union(v.string(), v.null()),
+  isVacant: v.optional(v.boolean()),
 });
 
-export const leaveTypeDoc = v.object({
+// A node in the reporting-structure org chart (return of employees.orgChart).
+export const orgChartNode = v.object({
+  _id: v.id("employees"),
+  name: v.string(),
+  employeeNumber: v.string(),
+  managerId: v.union(v.id("employees"), v.null()),
+  positionTitle: v.union(v.string(), v.null()),
+  departmentId: v.union(v.id("departments"), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  officeName: v.union(v.string(), v.null()),
+  workEmail: v.union(v.string(), v.null()),
+  photoUrl: v.union(v.string(), v.null()),
+  isVacant: v.boolean(),
+});
+
+const leaveTypeDocFields = {
   _id: v.id("leaveTypes"),
   _creationTime: v.number(),
   orgId: v.id("organizations"),
@@ -155,6 +271,62 @@ export const leaveTypeDoc = v.object({
   requiresApproval: v.boolean(),
   color: v.string(),
   active: v.boolean(),
+  isCredit: v.optional(v.boolean()),
+  autoAssign: v.optional(v.boolean()),
+};
+
+export const leaveTypeDoc = v.object(leaveTypeDocFields);
+
+// One policy configuration for a leave type (mirrors the schema doc).
+export const leavePolicyDoc = v.object({
+  _id: v.id("leavePolicies"),
+  _creationTime: v.number(),
+  orgId: v.id("organizations"),
+  leaveTypeId: v.id("leaveTypes"),
+  name: v.string(),
+  description: v.optional(v.string()),
+  availability: policyAvailability,
+  isDefault: v.boolean(),
+  order: v.optional(v.number()),
+  firstApproverMode: approverMode,
+  firstApproverValue: v.optional(v.string()),
+  secondApproverMode: approverMode,
+  secondApproverValue: v.optional(v.string()),
+  entitlementMode: entitlementMode,
+  entitlementDays: v.number(),
+  toleranceDays: v.optional(v.number()),
+  earnedEnabled: v.boolean(),
+  accrualType: v.optional(accrualType),
+  proratedEnabled: v.boolean(),
+  prorateMode: v.optional(prorateMode),
+  carryForwardEnabled: v.boolean(),
+  maxCarryForwardDays: v.optional(v.number()),
+  seniorityEnabled: v.boolean(),
+  seniorityEffective: v.optional(seniorityEffective),
+  seniorityIncrementMode: v.optional(incrementMode),
+  seniorityRules: v.optional(v.array(seniorityRule)),
+  seniorityMaxDays: v.optional(v.number()),
+  rounding: roundingMode,
+  linkedLeaveTypeId: v.optional(v.id("leaveTypes")),
+  useWorkingDays: v.boolean(),
+  allowApplyInPast: v.boolean(),
+  minAdvanceDays: v.optional(v.number()),
+  maxAdvanceDays: v.optional(v.number()),
+  maxConsecutiveDays: v.optional(v.number()),
+});
+
+// A leave type with its policy count + assignment summary (policies list).
+export const leaveTypeWithPolicies = v.object({
+  ...leaveTypeDocFields,
+  policyCount: v.number(),
+});
+
+// Who a non-default policy is assigned to (assign-policy dialog state).
+export const leavePolicyAssignmentRow = v.object({
+  _id: v.id("leavePolicyAssignments"),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  policyId: v.id("leavePolicies"),
 });
 
 export const holidayDoc = v.object({
@@ -168,7 +340,7 @@ export const holidayDoc = v.object({
 });
 
 // Leave request row with hydrated labels (return of leaveRequests list/queue).
-export const leaveRequestRow = v.object({
+const leaveRequestRowFields = {
   _id: v.id("leaveRequests"),
   _creationTime: v.number(),
   employeeId: v.id("employees"),
@@ -185,6 +357,54 @@ export const leaveRequestRow = v.object({
   status: leaveStatus,
   attachmentUrl: v.union(v.string(), v.null()),
   decisionNote: v.optional(v.string()),
+};
+
+export const leaveRequestRow = v.object(leaveRequestRowFields);
+
+// Dashboard calendar row — adds the department/office labels used for chips
+// and filtering in the HR Lounge leave calendar.
+export const leaveDashboardRow = v.object({
+  ...leaveRequestRowFields,
+  employeePhotoUrl: v.union(v.string(), v.null()),
+  departmentId: v.union(v.id("departments"), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  officeId: v.union(v.id("offices"), v.null()),
+  officeName: v.union(v.string(), v.null()),
+});
+
+// Full request detail for the slide-over: hydrated labels + timeline +
+// resolved approver names + the caller's allowed actions.
+export const leaveRequestDetail = v.object({
+  ...leaveRequestRowFields,
+  employeeNumber: v.string(),
+  employeePhotoUrl: v.union(v.string(), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  positionTitle: v.union(v.string(), v.null()),
+  approvalStep: v.union(v.number(), v.null()),
+  firstApproverName: v.union(v.string(), v.null()),
+  secondApproverName: v.union(v.string(), v.null()),
+  currentApproverName: v.union(v.string(), v.null()),
+  timeline: v.array(
+    v.object({
+      at: v.number(),
+      actorName: v.union(v.string(), v.null()),
+      type: v.string(),
+      note: v.union(v.string(), v.null()),
+    }),
+  ),
+  // Resolved server-side for the caller.
+  canApprove: v.boolean(),
+  canManage: v.boolean(),
+});
+
+// An employee in the dashboard's right-rail Employees list.
+export const leaveDashboardEmployeeRow = v.object({
+  _id: v.id("employees"),
+  name: v.string(),
+  positionTitle: v.union(v.string(), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  photoUrl: v.union(v.string(), v.null()),
+  status: employeeStatus,
 });
 
 export const claimTypeDoc = v.object({
@@ -194,9 +414,27 @@ export const claimTypeDoc = v.object({
   name: v.string(),
   category: claimCategory,
   requiresReceipt: v.boolean(),
+  guidelines: v.optional(v.string()),
   maxAmountCents: v.optional(v.number()),
+  yearlyLimitCents: v.optional(v.number()),
+  monthlyLimitCents: v.optional(v.number()),
   glCode: v.optional(v.string()),
   active: v.boolean(),
+});
+
+// Live per-employee spend vs. a claim type's configured limits, for the
+// "Balance available to claim" card in the submit form. Limits are null when
+// unconfigured ("No limit").
+export const claimTypeBalance = v.object({
+  claimTypeId: v.id("claimTypes"),
+  currency: v.string(),
+  guidelines: v.union(v.string(), v.null()),
+  yearlyLimitCents: v.union(v.number(), v.null()),
+  monthlyLimitCents: v.union(v.number(), v.null()),
+  perTransactionLimitCents: v.union(v.number(), v.null()),
+  yearlyUsedCents: v.number(),
+  monthlyUsedCents: v.number(),
+  availableCents: v.union(v.number(), v.null()),
 });
 
 const claimRowFields = {
@@ -219,6 +457,10 @@ export const claimRow = v.object(claimRowFields);
 
 export const claimDetail = v.object({
   ...claimRowFields,
+  taxAmountCents: v.union(v.number(), v.null()),
+  localAmountCents: v.union(v.number(), v.null()),
+  localCurrency: v.union(v.string(), v.null()),
+  receiptNo: v.union(v.string(), v.null()),
   receiptUrls: v.array(v.string()),
   managerApproverUserId: v.union(v.id("users"), v.null()),
   financeApproverUserId: v.union(v.id("users"), v.null()),
@@ -377,6 +619,54 @@ export const payslipRow = v.object({
   status: payrollStatus,
 })
 
+// One editable adjustment line on a draft run (return of run workspace).
+export const payrollAdjustmentRow = v.object({
+  _id: v.id("payrollAdjustments"),
+  _creationTime: v.number(),
+  employeeId: v.id("employees"),
+  kind: payrollAdjustmentKind,
+  source: payrollAdjustmentSource,
+  label: v.string(),
+  amountCents: v.number(),
+  cpfable: v.boolean(),
+  affectsGross: v.boolean(),
+  note: v.union(v.string(), v.null()),
+  overtime: v.union(overtimeMeta, v.null()),
+})
+
+// A payslip enriched for the Adjust-Payroll step: base/CPF breakdown plus the
+// raw adjustments behind it, so each employee row can be expanded and edited.
+export const payslipWorkspaceRow = v.object({
+  _id: v.id("payslips"),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  employeePhotoUrl: v.union(v.string(), v.null()),
+  positionTitle: v.union(v.string(), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  currency: v.string(),
+  baseCents: v.number(),
+  allowances: v.array(allowanceItem),
+  grossCents: v.number(),
+  cpfableWageCents: v.number(),
+  employeeCpfCents: v.number(),
+  employerCpfCents: v.number(),
+  netCents: v.number(),
+  cpfStatus: cpfStatus,
+  adjustments: v.array(payrollAdjustmentRow),
+})
+
+// The Adjust-Payroll / Review workspace for a run.
+export const payrollWorkspace = v.object({
+  run: payrollRunRow,
+  payslips: v.array(payslipWorkspaceRow),
+  // Counts for the "validate items" banner.
+  available: v.object({
+    claims: v.number(),
+    unpaidLeaveDays: v.number(),
+    overtime: v.number(),
+  }),
+})
+
 export const payslipDetail = v.object({
   _id: v.id("payslips"),
   _creationTime: v.number(),
@@ -394,6 +684,14 @@ export const payslipDetail = v.object({
   cpfStatus: cpfStatus,
   lines: v.array(payslipLine),
   status: payrollStatus,
+  // Document-header context for the printable payslip.
+  companyName: v.string(),
+  employeeNumber: v.string(),
+  departmentName: v.union(v.string(), v.null()),
+  positionTitle: v.union(v.string(), v.null()),
+  payPeriodStart: v.string(),
+  payPeriodEnd: v.string(),
+  payDate: v.union(v.string(), v.null()),
 })
 
 // ─── Performance ─────────────────────────────────────────────────────────
@@ -487,4 +785,38 @@ export const customFieldDefDoc = v.object({
   ),
   options: v.optional(v.array(v.string())),
   required: v.boolean(),
+});
+
+// ─── Feed ────────────────────────────────────────────────────────────────
+
+export const feedPostRow = v.object({
+  _id: v.id("feedPosts"),
+  _creationTime: v.number(),
+  authorName: v.string(),
+  authorPhotoUrl: v.union(v.string(), v.null()),
+  title: v.string(),
+  body: v.string(),
+  audience: feedAudience,
+  audienceLabel: v.string(),
+  // Raw targeting ids, for prefilling the edit dialog.
+  audienceDepartmentId: v.union(v.id("departments"), v.null()),
+  audienceOfficeId: v.union(v.id("offices"), v.null()),
+  audienceEmployeeIds: v.array(v.id("employees")),
+  pinned: v.boolean(),
+  isEvent: v.boolean(),
+  eventDate: v.union(v.string(), v.null()),
+  eventEndDate: v.union(v.string(), v.null()),
+  eventLocation: v.union(v.string(), v.null()),
+  youtubeUrl: v.union(v.string(), v.null()),
+  media: v.array(
+    v.object({
+      storageId: v.id("_storage"),
+      url: v.union(v.string(), v.null()),
+      name: v.string(),
+      isImage: v.boolean(),
+    }),
+  ),
+  canDelete: v.boolean(),
+  canEdit: v.boolean(),
+  canPin: v.boolean(),
 });

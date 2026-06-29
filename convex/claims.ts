@@ -4,10 +4,50 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, requirePermission, OrgContext } from "./auth";
 import { hasPermission } from "./lib/permissions";
 import { employeeByUserId } from "./employees";
-import { claimRow, claimDetail, claimCommentRow } from "./lib/validators";
+import {
+  claimRow,
+  claimDetail,
+  claimCommentRow,
+  claimTypeBalance,
+} from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
+import type { ClaimStatus } from "./lib/enums";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
+
+// Claims that count toward a claim type's periodic limits (i.e. not rejected
+// or cancelled).
+const COUNTING_STATUSES: ReadonlySet<ClaimStatus> = new Set([
+  "pending_manager",
+  "pending_finance",
+  "approved",
+  "reimbursed",
+]);
+
+// Sum the employee's claims for one claim type within a calendar year and
+// month, identified by ISO date prefixes (e.g. "2026" and "2026-06"). Only
+// non-rejected/cancelled claims count.
+async function spendForType(
+  ctx: QueryCtx,
+  employeeId: Id<"employees">,
+  claimTypeId: Id<"claimTypes">,
+  yearPrefix: string,
+  monthPrefix: string,
+): Promise<{ yearlyUsedCents: number; monthlyUsedCents: number }> {
+  const claims = await ctx.db
+    .query("claims")
+    .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+    .collect();
+  let yearlyUsedCents = 0;
+  let monthlyUsedCents = 0;
+  for (const c of claims) {
+    if (c.claimTypeId !== claimTypeId) continue;
+    if (!COUNTING_STATUSES.has(c.status)) continue;
+    if (c.incurredDate.startsWith(yearPrefix)) yearlyUsedCents += c.amountCents;
+    if (c.incurredDate.startsWith(monthPrefix)) monthlyUsedCents += c.amountCents;
+  }
+  return { yearlyUsedCents, monthlyUsedCents };
+}
 
 async function hydrateClaim(ctx: QueryCtx, claim: Doc<"claims">) {
   const [emp, ct] = await Promise.all([
@@ -88,6 +128,10 @@ export const submit = mutation({
     claimTypeId: v.id("claimTypes"),
     amountCents: v.number(),
     currency: v.optional(v.string()),
+    taxAmountCents: v.optional(v.number()),
+    localAmountCents: v.optional(v.number()),
+    localCurrency: v.optional(v.string()),
+    receiptNo: v.optional(v.string()),
     incurredDate: v.string(),
     description: v.string(),
     receiptStorageIds: v.array(v.id("_storage")),
@@ -107,7 +151,30 @@ export const submit = mutation({
       throw new Error("This claim type requires a receipt.");
     }
     if (claimType.maxAmountCents && args.amountCents > claimType.maxAmountCents) {
-      throw new Error("Amount exceeds the limit for this claim type.");
+      throw new Error("Amount exceeds the per-transaction limit for this claim type.");
+    }
+
+    // Enforce yearly/monthly caps against the period the claim was incurred in.
+    if (claimType.yearlyLimitCents || claimType.monthlyLimitCents) {
+      const { yearlyUsedCents, monthlyUsedCents } = await spendForType(
+        ctx,
+        own._id,
+        args.claimTypeId,
+        args.incurredDate.slice(0, 4),
+        args.incurredDate.slice(0, 7),
+      );
+      if (
+        claimType.yearlyLimitCents &&
+        yearlyUsedCents + args.amountCents > claimType.yearlyLimitCents
+      ) {
+        throw new Error("This claim would exceed the yearly limit for this claim type.");
+      }
+      if (
+        claimType.monthlyLimitCents &&
+        monthlyUsedCents + args.amountCents > claimType.monthlyLimitCents
+      ) {
+        throw new Error("This claim would exceed the monthly limit for this claim type.");
+      }
     }
 
     const status = own.managerId ? "pending_manager" : "pending_finance";
@@ -117,6 +184,10 @@ export const submit = mutation({
       claimTypeId: args.claimTypeId,
       amountCents: args.amountCents,
       currency: args.currency ?? org.settings.currency,
+      taxAmountCents: args.taxAmountCents,
+      localAmountCents: args.localAmountCents,
+      localCurrency: args.localCurrency,
+      receiptNo: args.receiptNo,
       incurredDate: args.incurredDate,
       description: args.description,
       receiptStorageIds: args.receiptStorageIds,
@@ -385,9 +456,55 @@ export const get = query({
     ).filter((u): u is string => u !== null);
     return {
       ...base,
+      taxAmountCents: claim.taxAmountCents ?? null,
+      localAmountCents: claim.localAmountCents ?? null,
+      localCurrency: claim.localCurrency ?? null,
+      receiptNo: claim.receiptNo ?? null,
       receiptUrls,
       managerApproverUserId: claim.managerApproverUserId ?? null,
       financeApproverUserId: claim.financeApproverUserId ?? null,
+    };
+  },
+});
+
+// Live spend-vs-limit for a claim type, for the current employee, used by the
+// "Balance available to claim" card in the submit form. Periods are the current
+// calendar year / month.
+export const typeBalance = query({
+  args: { claimTypeId: v.id("claimTypes") },
+  returns: claimTypeBalance,
+  handler: async (ctx, { claimTypeId }) => {
+    const { orgId, userId, org } = await requireOrg(ctx);
+    const claimType = await ctx.db.get(claimTypeId);
+    if (!claimType || claimType.orgId !== orgId) {
+      throw new Error("Claim type not found.");
+    }
+    const own = await employeeByUserId(ctx, orgId, userId);
+
+    const now = new Date();
+    const yearPrefix = String(now.getUTCFullYear());
+    const monthPrefix = `${yearPrefix}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+
+    const { yearlyUsedCents, monthlyUsedCents } = own
+      ? await spendForType(ctx, own._id, claimTypeId, yearPrefix, monthPrefix)
+      : { yearlyUsedCents: 0, monthlyUsedCents: 0 };
+
+    const yearly = claimType.yearlyLimitCents ?? null;
+    const monthly = claimType.monthlyLimitCents ?? null;
+    const remainders: number[] = [];
+    if (yearly !== null) remainders.push(Math.max(0, yearly - yearlyUsedCents));
+    if (monthly !== null) remainders.push(Math.max(0, monthly - monthlyUsedCents));
+
+    return {
+      claimTypeId,
+      currency: org.settings.currency,
+      guidelines: claimType.guidelines ?? null,
+      yearlyLimitCents: yearly,
+      monthlyLimitCents: monthly,
+      perTransactionLimitCents: claimType.maxAmountCents ?? null,
+      yearlyUsedCents,
+      monthlyUsedCents,
+      availableCents: remainders.length ? Math.min(...remainders) : null,
     };
   },
 });

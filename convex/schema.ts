@@ -8,15 +8,30 @@ import {
   employmentType,
   employeeStatus,
   gender,
+  maritalStatus,
   documentType,
   customFieldType,
+  equipmentStatus,
   addressValidator,
   contactValidator,
   emergencyContactValidator,
+  familyMemberValidator,
+  personalFieldValidator,
+  resumeEntryValidator,
   leaveCategory,
   accrualMethod,
   leaveStatus,
   halfDay,
+  policyAvailability,
+  approverMode,
+  entitlementMode,
+  accrualType,
+  prorateMode,
+  seniorityEffective,
+  incrementMode,
+  roundingMode,
+  seniorityRule,
+  leaveTimelineEvent,
   claimCategory,
   claimStatus,
   attendanceMethod,
@@ -27,9 +42,13 @@ import {
   payrollStatus,
   payslipLine,
   allowanceItem,
+  payrollAdjustmentKind,
+  payrollAdjustmentSource,
+  overtimeMeta,
   reviewCycleStatus,
   goalStatus,
   reviewStatus,
+  feedAudience,
 } from "./lib/enums";
 
 export default defineSchema({
@@ -123,6 +142,8 @@ export default defineSchema({
     // HRMS role to apply to their membership once they accept the invite.
     invitedRole: v.optional(hrmsRole),
     employeeNumber: v.string(),
+    // A placeholder role with no real person yet (shown in org chart + directory).
+    isVacant: v.optional(v.boolean()),
 
     // Personal
     firstName: v.string(),
@@ -131,12 +152,21 @@ export default defineSchema({
     photoStorageId: v.optional(v.id("_storage")),
     dob: v.optional(v.string()), // ISO date "YYYY-MM-DD"
     gender: v.optional(gender),
+    maritalStatus: v.optional(maritalStatus),
     nationality: v.optional(v.string()),
     idNumberMasked: v.optional(v.string()),
     idNumberLast4: v.optional(v.string()),
     address: v.optional(addressValidator),
     contact: v.optional(contactValidator),
     emergencyContacts: v.optional(v.array(emergencyContactValidator)),
+    // Self-service profile content (Employee Self-Service).
+    bio: v.optional(v.string()), // "About" free text
+    galleryStorageIds: v.optional(v.array(v.id("_storage"))), // ≤10 photos
+    personalFields: v.optional(v.array(personalFieldValidator)), // self-defined
+    experience: v.optional(v.array(resumeEntryValidator)), // past jobs elsewhere
+    education: v.optional(v.array(resumeEntryValidator)),
+    familyMembers: v.optional(v.array(familyMemberValidator)), // dependents
+    trainings: v.optional(v.array(resumeEntryValidator)), // training & certs
 
     // Employment
     departmentId: v.optional(v.id("departments")),
@@ -175,13 +205,54 @@ export default defineSchema({
     employeeId: v.id("employees"),
     type: documentType,
     name: v.string(),
-    storageId: v.id("_storage"),
+    note: v.optional(v.string()),
+    // Legacy single-file field; new docs use storageIds (up to 3 files).
+    storageId: v.optional(v.id("_storage")),
+    storageIds: v.optional(v.array(v.id("_storage"))),
+    fileNames: v.optional(v.array(v.string())),
     expiryDate: v.optional(v.string()),
     uploadedBy: v.optional(v.id("users")),
   })
     .index("by_employee", ["employeeId"])
     .index("by_org_type", ["orgId", "type"])
     .index("by_org_expiry", ["orgId", "expiryDate"]),
+
+  // Assets lent to an employee (laptops, phones, access cards, …). HR-managed.
+  equipment: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    name: v.string(),
+    category: v.optional(v.string()),
+    serialNumber: v.optional(v.string()),
+    assignedDate: v.optional(v.string()),
+    returnedDate: v.optional(v.string()),
+    status: equipmentStatus,
+    note: v.optional(v.string()),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_employee", ["employeeId"]),
+
+  // Versioned in-company job timeline (Job Information). Each row is a position
+  // change effective on `effectiveDate`; the latest row effective on/before
+  // today is the employee's current job. HR-controlled; mirrors the latest
+  // entry onto the employee doc's current job fields.
+  jobHistory: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    effectiveDate: v.string(), // ISO date
+    positionId: v.optional(v.id("positions")),
+    title: v.optional(v.string()), // free-text fallback when no positionId
+    departmentId: v.optional(v.id("departments")),
+    officeId: v.optional(v.id("offices")),
+    managerId: v.optional(v.id("employees")),
+    employmentType: v.optional(employmentType),
+    note: v.optional(v.string()),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_employee", ["employeeId"])
+    .index("by_employee_effective", ["employeeId", "effectiveDate"]),
 
   customFieldDefs: defineTable({
     orgId: v.id("organizations"),
@@ -210,7 +281,71 @@ export default defineSchema({
     requiresApproval: v.boolean(),
     color: v.string(),
     active: v.boolean(),
+    // Shows a "CREDIT" badge (e.g. Replacement leave is earned by working).
+    isCredit: v.optional(v.boolean()),
+    // Auto-assign the default policy to every employee.
+    autoAssign: v.optional(v.boolean()),
   }).index("by_org", ["orgId"]),
+
+  // One policy configuration for a leave type. A type can have several (one
+  // per employee group); the `isDefault`/`availability: "all"` policy applies
+  // to everyone not covered by a group assignment. Entitlement is computed
+  // deterministically on read from these settings (see model/leavePolicy.ts) —
+  // there is no per-day accrual write.
+  leavePolicies: defineTable({
+    orgId: v.id("organizations"),
+    leaveTypeId: v.id("leaveTypes"),
+    name: v.string(),
+    description: v.optional(v.string()),
+    availability: policyAvailability,
+    isDefault: v.boolean(),
+    order: v.optional(v.number()),
+    // Approval chain.
+    firstApproverMode: approverMode,
+    firstApproverValue: v.optional(v.string()), // userId when mode = specific
+    secondApproverMode: approverMode,
+    secondApproverValue: v.optional(v.string()),
+    // Entitlement.
+    entitlementMode: entitlementMode,
+    entitlementDays: v.number(),
+    toleranceDays: v.optional(v.number()),
+    // Earned leave (accrual).
+    earnedEnabled: v.boolean(),
+    accrualType: v.optional(accrualType),
+    // Proration on join/exit.
+    proratedEnabled: v.boolean(),
+    prorateMode: v.optional(prorateMode),
+    // Carry-forward.
+    carryForwardEnabled: v.boolean(),
+    maxCarryForwardDays: v.optional(v.number()),
+    // Seniority increments.
+    seniorityEnabled: v.boolean(),
+    seniorityEffective: v.optional(seniorityEffective),
+    seniorityIncrementMode: v.optional(incrementMode),
+    seniorityRules: v.optional(v.array(seniorityRule)),
+    seniorityMaxDays: v.optional(v.number()),
+    // Rounding + linkage.
+    rounding: roundingMode,
+    linkedLeaveTypeId: v.optional(v.id("leaveTypes")),
+    // Advance-booking settings.
+    useWorkingDays: v.boolean(),
+    allowApplyInPast: v.boolean(),
+    minAdvanceDays: v.optional(v.number()),
+    maxAdvanceDays: v.optional(v.number()),
+    maxConsecutiveDays: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_type", ["orgId", "leaveTypeId"]),
+
+  // Assigns a non-default policy to specific employees (Assign Policy tool).
+  leavePolicyAssignments: defineTable({
+    orgId: v.id("organizations"),
+    leaveTypeId: v.id("leaveTypes"),
+    policyId: v.id("leavePolicies"),
+    employeeId: v.id("employees"),
+  })
+    .index("by_org_type_employee", ["orgId", "leaveTypeId", "employeeId"])
+    .index("by_policy", ["policyId"]),
 
   leaveBalances: defineTable({
     orgId: v.id("organizations"),
@@ -241,6 +376,13 @@ export default defineSchema({
     approverUserId: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
     decisionNote: v.optional(v.string()),
+    // Two-step approval: which step is currently pending (1 or 2), and the
+    // resolved approvers for each step (from the applicable policy).
+    approvalStep: v.optional(v.number()),
+    firstApproverUserId: v.optional(v.id("users")),
+    secondApproverUserId: v.optional(v.id("users")),
+    // Bounded audit trail shown in the detail slide-over.
+    timeline: v.optional(v.array(leaveTimelineEvent)),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
@@ -265,7 +407,10 @@ export default defineSchema({
     name: v.string(),
     category: claimCategory,
     requiresReceipt: v.boolean(),
-    maxAmountCents: v.optional(v.number()),
+    guidelines: v.optional(v.string()), // policy blurb shown in the claim form
+    maxAmountCents: v.optional(v.number()), // per-transaction cap
+    yearlyLimitCents: v.optional(v.number()),
+    monthlyLimitCents: v.optional(v.number()),
     glCode: v.optional(v.string()),
     active: v.boolean(),
   }).index("by_org", ["orgId"]),
@@ -276,6 +421,10 @@ export default defineSchema({
     claimTypeId: v.id("claimTypes"),
     amountCents: v.number(),
     currency: v.string(),
+    taxAmountCents: v.optional(v.number()),
+    localAmountCents: v.optional(v.number()), // amount in original/foreign currency
+    localCurrency: v.optional(v.string()),
+    receiptNo: v.optional(v.string()),
     incurredDate: v.string(), // ISO date
     description: v.string(),
     receiptStorageIds: v.array(v.id("_storage")),
@@ -425,6 +574,33 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_period", ["orgId", "periodMonth"]),
 
+  // One-off line items entered or pulled while a run is in `draft`. The
+  // editable *inputs* behind a payslip — `payslips.lines` is recomputed from
+  // compensation + these. Cleared when a draft run is deleted; frozen by
+  // virtue of the run locking once finalized.
+  payrollAdjustments: defineTable({
+    orgId: v.id("organizations"),
+    runId: v.id("payrollRuns"),
+    employeeId: v.id("employees"),
+    kind: payrollAdjustmentKind,
+    source: payrollAdjustmentSource,
+    label: v.string(),
+    amountCents: v.number(),
+    // additions: counts toward CPF Ordinary Wages.
+    cpfable: v.boolean(),
+    // deductions: true = reduces gross (pre-CPF, e.g. no-pay leave); false =
+    // post-CPF net-only (e.g. loan recovery). Ignored for additions.
+    affectsGross: v.boolean(),
+    note: v.optional(v.string()),
+    // Provenance for auto-pulled items, so re-syncing is idempotent.
+    sourceRefId: v.optional(v.string()), // claimId / leaveRequestId
+    overtime: v.optional(overtimeMeta),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_run", ["runId"])
+    .index("by_run_employee", ["runId", "employeeId"])
+    .index("by_run_source", ["runId", "source"]),
+
   // A computed payslip snapshot. Immutable once its run is finalized.
   payslips: defineTable({
     orgId: v.id("organizations"),
@@ -444,6 +620,7 @@ export default defineSchema({
     status: payrollStatus,
   })
     .index("by_run", ["runId"])
+    .index("by_run_employee", ["runId", "employeeId"])
     .index("by_employee", ["employeeId"])
     .index("by_employee_period", ["employeeId", "periodMonth"]),
 
@@ -540,6 +717,30 @@ export default defineSchema({
   })
     .index("by_recipient_read", ["recipientUserId", "read"])
     .index("by_org", ["orgId"]),
+
+  // ─── Feed (company announcements) ────────────────────────────────────────
+
+  feedPosts: defineTable({
+    orgId: v.id("organizations"),
+    authorUserId: v.id("users"),
+    title: v.string(),
+    body: v.string(), // sanitized rich-text HTML
+    audience: feedAudience,
+    audienceDepartmentId: v.optional(v.id("departments")),
+    audienceOfficeId: v.optional(v.id("offices")),
+    audienceEmployeeIds: v.optional(v.array(v.id("employees"))),
+    pinned: v.boolean(),
+    isEvent: v.boolean(),
+    eventDate: v.optional(v.string()), // ISO date (start)
+    eventEndDate: v.optional(v.string()), // ISO date (end, for multi-day events)
+    eventLocation: v.optional(v.string()),
+    youtubeUrl: v.optional(v.string()),
+    mediaStorageIds: v.optional(v.array(v.id("_storage"))),
+    mediaNames: v.optional(v.array(v.string())),
+    notifyByEmail: v.optional(v.boolean()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_pinned", ["orgId", "pinned"]),
 
   // ─── Billing (existing) ──────────────────────────────────────────────────
 

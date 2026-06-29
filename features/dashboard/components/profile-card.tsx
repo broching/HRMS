@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EMPLOYMENT_TYPE_LABELS } from "@/features/employees/lib/labels"
@@ -27,10 +28,13 @@ export function ProfileCard() {
   }
   if (!card.hasProfile) {
     return (
-      <Card className="flex h-full items-center justify-center p-6 text-center">
+      <Card className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
         <p className="text-muted-foreground text-sm">
-          You don&apos;t have an employee profile yet. Your HR team can add one.
+          You don&apos;t have an employee profile yet.
         </p>
+        <Button asChild size="sm">
+          <Link href="/profile">Set up your profile</Link>
+        </Button>
       </Card>
     )
   }

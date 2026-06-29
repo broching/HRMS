@@ -6,9 +6,13 @@ import {
   employmentType,
   employeeStatus,
   gender,
+  maritalStatus,
   addressValidator,
   contactValidator,
   emergencyContactValidator,
+  familyMemberValidator,
+  personalFieldValidator,
+  resumeEntryValidator,
 } from "./lib/enums";
 import { requireOrg, getOrgContext, requirePermission } from "./auth";
 import { hasPermission } from "./lib/permissions";
@@ -18,6 +22,7 @@ import {
   employeeDoc,
   employeeProfile,
   employeeRow,
+  orgChartNode,
 } from "./lib/validators";
 
 // ─── Access helpers ──────────────────────────────────────────────────────
@@ -94,6 +99,8 @@ export const list = query({
     search: v.optional(v.string()),
     status: v.optional(employeeStatus),
     departmentId: v.optional(v.id("departments")),
+    officeId: v.optional(v.id("offices")),
+    joinedBefore: v.optional(v.string()), // ISO date — joinDate <= this
   },
   returns: v.array(employeeRow),
   handler: async (ctx, args) => {
@@ -108,55 +115,204 @@ export const list = query({
           const base = q.search("searchName", search).eq("orgId", orgId);
           return args.status ? base.eq("status", args.status) : base;
         })
-        .take(50);
+        .take(200);
     } else if (args.status) {
       rows = await ctx.db
         .query("employees")
         .withIndex("by_org_status", (q) =>
           q.eq("orgId", orgId).eq("status", args.status!),
         )
-        .take(200);
+        .take(500);
     } else {
       rows = await ctx.db
         .query("employees")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .take(200);
+        .take(500);
     }
 
     if (args.departmentId) {
       rows = rows.filter((e) => e.departmentId === args.departmentId);
     }
+    if (args.officeId) {
+      rows = rows.filter((e) => e.officeId === args.officeId);
+    }
+    if (args.joinedBefore) {
+      rows = rows.filter((e) => e.joinDate <= args.joinedBefore!);
+    }
+
+    // Stable directory order by employee number.
+    rows.sort((a, b) => a.employeeNumber.localeCompare(b.employeeNumber));
 
     // Resolve small org-structure lookups once for label hydration.
-    const [departments, positions] = await Promise.all([
+    const [departments, positions, offices] = await Promise.all([
       ctx.db.query("departments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
       ctx.db.query("positions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("offices").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
     ]);
     const deptName = new Map(departments.map((d) => [d._id, d.name]));
     const posTitle = new Map(positions.map((p) => [p._id, p.title]));
+    const officeName = new Map(offices.map((o) => [o._id, o.name]));
 
-    return rows.map((e) => ({
-      _id: e._id,
-      employeeNumber: e.employeeNumber,
-      firstName: e.firstName,
-      lastName: e.lastName,
-      preferredName: e.preferredName,
-      status: e.status,
-      employmentType: e.employmentType,
-      joinDate: e.joinDate,
-      workEmail: e.contact?.workEmail,
-      departmentName: e.departmentId ? deptName.get(e.departmentId) : undefined,
-      positionTitle: e.positionId ? posTitle.get(e.positionId) : undefined,
-    }));
+    return await Promise.all(
+      rows.map(async (e) => ({
+        _id: e._id,
+        employeeNumber: e.employeeNumber,
+        firstName: e.firstName,
+        lastName: e.lastName,
+        preferredName: e.preferredName,
+        status: e.status,
+        employmentType: e.employmentType,
+        joinDate: e.joinDate,
+        workEmail: e.contact?.workEmail,
+        departmentName: e.departmentId ? deptName.get(e.departmentId) : undefined,
+        positionTitle: e.positionId ? posTitle.get(e.positionId) : undefined,
+        officeName: e.officeId ? officeName.get(e.officeId) : undefined,
+        photoUrl: e.photoStorageId
+          ? await ctx.storage.getUrl(e.photoStorageId)
+          : null,
+        isVacant: e.isVacant,
+      })),
+    );
   },
 });
 
-// Full profile with resolved labels + photo URL. Scoped access.
+// Minimal name list for pickers (e.g. targeting a feed post to specific
+// people). Available to any member — names only, no sensitive fields.
+export const directoryOptions = query({
+  args: {},
+  returns: v.array(v.object({ _id: v.id("employees"), name: v.string() })),
+  handler: async (ctx) => {
+    const { orgId } = await requireOrg(ctx);
+    const rows = await ctx.db
+      .query("employees")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(500);
+    return rows
+      .filter((e) => !e.isVacant && e.status !== "terminated")
+      .map((e) => ({
+        _id: e._id,
+        name: `${e.preferredName ?? e.firstName} ${e.lastName}`.trim(),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  },
+});
+
+// The caller's direct reports, resolved to directory rows (dept/office names +
+// photo). Manager-scoped, so managers without `employees:read:all` can use it
+// for the Team page.
+export const myTeamRows = query({
+  args: {},
+  returns: v.array(employeeRow),
+  handler: async (ctx) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) return [];
+    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    if (!own) return [];
+
+    const rows = await ctx.db
+      .query("employees")
+      .withIndex("by_org_manager", (q) =>
+        q.eq("orgId", orgCtx.orgId).eq("managerId", own._id),
+      )
+      .collect();
+    rows.sort((a, b) => a.employeeNumber.localeCompare(b.employeeNumber));
+
+    const [departments, positions, offices] = await Promise.all([
+      ctx.db.query("departments").withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId)).collect(),
+      ctx.db.query("positions").withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId)).collect(),
+      ctx.db.query("offices").withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId)).collect(),
+    ]);
+    const deptName = new Map(departments.map((d) => [d._id, d.name]));
+    const posTitle = new Map(positions.map((p) => [p._id, p.title]));
+    const officeName = new Map(offices.map((o) => [o._id, o.name]));
+
+    return await Promise.all(
+      rows.map(async (e) => ({
+        _id: e._id,
+        employeeNumber: e.employeeNumber,
+        firstName: e.firstName,
+        lastName: e.lastName,
+        preferredName: e.preferredName,
+        status: e.status,
+        employmentType: e.employmentType,
+        joinDate: e.joinDate,
+        workEmail: e.contact?.workEmail,
+        departmentName: e.departmentId ? deptName.get(e.departmentId) : undefined,
+        positionTitle: e.positionId ? posTitle.get(e.positionId) : undefined,
+        officeName: e.officeId ? officeName.get(e.officeId) : undefined,
+        photoUrl: e.photoStorageId
+          ? await ctx.storage.getUrl(e.photoStorageId)
+          : null,
+        isVacant: e.isVacant,
+      })),
+    );
+  },
+});
+
+// Reporting-structure graph for the org chart. Returns every active-ish
+// employee as a flat node list (tree is built client-side via managerId).
+export const orgChart = query({
+  args: {},
+  returns: v.array(orgChartNode),
+  handler: async (ctx) => {
+    const { orgId } = await requirePermission(ctx, "employees:read:all");
+    const employees = (
+      await ctx.db
+        .query("employees")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()
+    ).filter((e) => e.status !== "terminated");
+
+    const [departments, positions, offices] = await Promise.all([
+      ctx.db.query("departments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("positions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("offices").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+    ]);
+    const deptName = new Map(departments.map((d) => [d._id, d.name]));
+    const posTitle = new Map(positions.map((p) => [p._id, p.title]));
+    const officeName = new Map(offices.map((o) => [o._id, o.name]));
+
+    return await Promise.all(
+      employees.map(async (e) => ({
+        _id: e._id,
+        name: e.isVacant
+          ? (e.positionId ? (posTitle.get(e.positionId) ?? null) : null) ??
+            (e.firstName.trim() || "Vacant")
+          : `${e.preferredName ?? e.firstName} ${e.lastName}`,
+        employeeNumber: e.employeeNumber,
+        managerId: e.managerId ?? null,
+        positionTitle: e.positionId ? (posTitle.get(e.positionId) ?? null) : null,
+        departmentId: e.departmentId ?? null,
+        departmentName: e.departmentId ? (deptName.get(e.departmentId) ?? null) : null,
+        officeName: e.officeId ? (officeName.get(e.officeId) ?? null) : null,
+        workEmail: e.contact?.workEmail ?? null,
+        photoUrl: e.photoStorageId
+          ? await ctx.storage.getUrl(e.photoStorageId)
+          : null,
+        isVacant: !!e.isVacant,
+      })),
+    );
+  },
+});
+
+// Full profile with resolved labels + photo URL. Scoped access. The locked
+// personal section (dob, gender, marital status, nationality, ID, address,
+// personal contact + custom fields) is redacted unless the caller is the
+// employee themselves or has org-wide read (HR/admin) — managers viewing a
+// report see work info but not private personal details.
 export const get = query({
   args: { employeeId: v.id("employees") },
   returns: employeeProfile,
   handler: async (ctx, { employeeId }) => {
-    const { employee } = await requireEmployeeAccess(ctx, employeeId);
+    const { orgCtx, employee } = await requireEmployeeAccess(ctx, employeeId);
+
+    const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
+    const canManage = hasPermission(orgCtx.role, "employees:manage");
+    const canViewPersonal =
+      isSelf || hasPermission(orgCtx.role, "employees:read:all");
+    const canViewCompensation =
+      isSelf || hasPermission(orgCtx.role, "payroll:manage");
+    const canEdit = isSelf || canManage;
 
     const [department, team, position, manager, office] = await Promise.all([
       employee.departmentId ? ctx.db.get(employee.departmentId) : null,
@@ -168,10 +324,54 @@ export const get = query({
     const photoUrl = employee.photoStorageId
       ? await ctx.storage.getUrl(employee.photoStorageId)
       : null;
+    const galleryUrls = (
+      await Promise.all(
+        (employee.galleryStorageIds ?? []).map(async (storageId) => {
+          const url = await ctx.storage.getUrl(storageId);
+          return url ? { storageId, url } : null;
+        }),
+      )
+    ).filter((g): g is { storageId: Id<"_storage">; url: string } => g !== null);
+
+    // Redact the locked personal section when the caller may not view it.
+    // Family + training are personal too — hidden from managers, shown to
+    // self + HR/admin.
+    const personal = canViewPersonal
+      ? {
+          dob: employee.dob,
+          gender: employee.gender,
+          maritalStatus: employee.maritalStatus,
+          nationality: employee.nationality,
+          idNumberMasked: employee.idNumberMasked,
+          idNumberLast4: employee.idNumberLast4,
+          address: employee.address,
+          contact: employee.contact,
+          personalFields: employee.personalFields,
+          familyMembers: employee.familyMembers,
+          trainings: employee.trainings,
+        }
+      : {
+          dob: undefined,
+          gender: undefined,
+          maritalStatus: undefined,
+          nationality: undefined,
+          idNumberMasked: undefined,
+          idNumberLast4: undefined,
+          address: undefined,
+          // Work email is not private; keep it, drop personal email + phone.
+          contact: employee.contact?.workEmail
+            ? { workEmail: employee.contact.workEmail }
+            : undefined,
+          personalFields: undefined,
+          familyMembers: undefined,
+          trainings: undefined,
+        };
 
     return {
       ...employee,
+      ...personal,
       photoUrl,
+      galleryUrls,
       departmentName: department?.name ?? null,
       teamName: team?.name ?? null,
       positionTitle: position?.title ?? null,
@@ -179,6 +379,11 @@ export const get = query({
         ? `${manager.firstName} ${manager.lastName}`
         : null,
       officeName: office?.name ?? null,
+      isSelf,
+      canEdit,
+      canManage,
+      canViewPersonal,
+      canViewCompensation,
     };
   },
 });
@@ -407,6 +612,59 @@ export const create = mutation({
   },
 });
 
+// Create a vacant position — a placeholder role with no real person. Shows in
+// the org chart + directory until filled. HR-controlled.
+export const createVacant = mutation({
+  args: {
+    title: v.optional(v.string()),
+    positionId: v.optional(v.id("positions")),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+    officeId: v.optional(v.id("offices")),
+    managerId: v.optional(v.id("employees")),
+    employmentType: v.optional(employmentType),
+  },
+  returns: v.id("employees"),
+  handler: async (ctx, args) => {
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    const position = args.positionId ? await ctx.db.get(args.positionId) : null;
+    const label = args.title?.trim() || position?.title || "Vacant";
+    const employeeNumber = await nextEmployeeNumber(ctx, orgId);
+
+    const id = await ctx.db.insert("employees", {
+      orgId,
+      isVacant: true,
+      employeeNumber,
+      firstName: label,
+      lastName: "",
+      positionId: args.positionId,
+      departmentId: args.departmentId,
+      teamId: args.teamId,
+      officeId: args.officeId,
+      managerId: args.managerId,
+      employmentType: args.employmentType ?? "full_time",
+      status: "active",
+      joinDate: new Date().toISOString().slice(0, 10),
+      searchName: buildSearchName({
+        firstName: label,
+        lastName: "",
+        employeeNumber,
+      }),
+      createdBy: userId,
+      updatedAt: Date.now(),
+    });
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "employee.createVacant",
+      entity: "employees",
+      entityId: id,
+      after: { employeeNumber, title: label },
+    });
+    return id;
+  },
+});
+
 export const update = mutation({
   args: {
     employeeId: v.id("employees"),
@@ -450,16 +708,26 @@ export const update = mutation({
 // Employee Self-Service: the caller edits their OWN profile. Limited to
 // personal / contact / emergency fields — job, compensation, manager and
 // status remain HR-controlled (see `update`).
+// All-optional so a single mutation can both create a profile and save any one
+// section inline. On create, first/last name are required (enforced in the
+// handler). Job/compensation/manager/status stay HR-controlled (see `update`).
 const selfEditableFields = {
-  firstName: v.string(),
-  lastName: v.string(),
+  firstName: v.optional(v.string()),
+  lastName: v.optional(v.string()),
   preferredName: v.optional(v.string()),
   dob: v.optional(v.string()),
   gender: v.optional(gender),
+  maritalStatus: v.optional(maritalStatus),
   nationality: v.optional(v.string()),
   address: v.optional(addressValidator),
   contact: v.optional(contactValidator),
   emergencyContacts: v.optional(v.array(emergencyContactValidator)),
+  bio: v.optional(v.string()),
+  personalFields: v.optional(v.array(personalFieldValidator)),
+  experience: v.optional(v.array(resumeEntryValidator)),
+  education: v.optional(v.array(resumeEntryValidator)),
+  familyMembers: v.optional(v.array(familyMemberValidator)),
+  trainings: v.optional(v.array(resumeEntryValidator)),
 };
 
 // Auto-generate the next free employee number for self-provisioned profiles
@@ -495,13 +763,19 @@ export const updateOwnProfile = mutation({
     const userEmail = orgCtx.user.email?.trim().toLowerCase() || undefined;
 
     // Work email stays tied to the org account — never editable via self-edit.
+    // Merge any contact changes onto the existing contact so a section save that
+    // only touches phone/personal email doesn't clobber the rest.
     const lockedWorkEmail = me?.contact?.workEmail ?? userEmail;
     const contact = patch.contact
-      ? { ...patch.contact, workEmail: lockedWorkEmail }
+      ? { ...me?.contact, ...patch.contact, workEmail: lockedWorkEmail }
       : (me?.contact ?? (userEmail ? { workEmail: userEmail } : undefined));
 
     if (!me) {
-      // Self-provision a new employee record linked to the caller.
+      // Self-provision a new employee record linked to the caller. Name is the
+      // one required field to bootstrap a record.
+      if (!patch.firstName || !patch.lastName) {
+        throw new Error("First and last name are required to create a profile.");
+      }
       const employeeNumber = await nextEmployeeNumber(ctx, orgCtx.orgId);
       const id = await ctx.db.insert("employees", {
         orgId: orgCtx.orgId,
@@ -512,10 +786,17 @@ export const updateOwnProfile = mutation({
         preferredName: patch.preferredName,
         dob: patch.dob,
         gender: patch.gender,
+        maritalStatus: patch.maritalStatus,
         nationality: patch.nationality,
         address: patch.address,
         contact,
         emergencyContacts: patch.emergencyContacts,
+        bio: patch.bio,
+        personalFields: patch.personalFields,
+        experience: patch.experience,
+        education: patch.education,
+        familyMembers: patch.familyMembers,
+        trainings: patch.trainings,
         employmentType: "full_time",
         status: "active",
         joinDate: new Date().toISOString().slice(0, 10),
@@ -540,17 +821,26 @@ export const updateOwnProfile = mutation({
       return null;
     }
 
-    await ctx.db.patch(me._id, {
+    // Merge: patch only updates provided keys. Recompute search name only when
+    // a name component is part of this save.
+    const next: Record<string, unknown> = {
       ...patch,
       contact,
-      searchName: buildSearchName({
-        firstName: patch.firstName,
-        lastName: patch.lastName,
-        preferredName: patch.preferredName,
-        employeeNumber: me.employeeNumber,
-      }),
       updatedAt: Date.now(),
-    });
+    };
+    if (
+      patch.firstName !== undefined ||
+      patch.lastName !== undefined ||
+      patch.preferredName !== undefined
+    ) {
+      next.searchName = buildSearchName({
+        firstName: patch.firstName ?? me.firstName,
+        lastName: patch.lastName ?? me.lastName,
+        preferredName: patch.preferredName ?? me.preferredName,
+        employeeNumber: me.employeeNumber,
+      });
+    }
+    await ctx.db.patch(me._id, next);
     await writeAuditLog(ctx, {
       orgId: orgCtx.orgId,
       actorUserId: orgCtx.userId,
@@ -611,6 +901,45 @@ export const setMyPhoto = mutation({
     if (!me) throw new Error("You don't have an employee profile.");
     if (me.photoStorageId) await ctx.storage.delete(me.photoStorageId);
     await ctx.db.patch(me._id, { photoStorageId: storageId });
+    return null;
+  },
+});
+
+const MAX_GALLERY_PHOTOS = 10;
+
+// Self-service: append a photo to the caller's own gallery (max 10).
+export const addGalleryPhoto = mutation({
+  args: { storageId: v.id("_storage") },
+  returns: v.null(),
+  handler: async (ctx, { storageId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    if (!me) throw new Error("You don't have an employee profile.");
+    const gallery = me.galleryStorageIds ?? [];
+    if (gallery.length >= MAX_GALLERY_PHOTOS) {
+      // Don't leak the orphaned upload.
+      await ctx.storage.delete(storageId);
+      throw new Error(`You can upload at most ${MAX_GALLERY_PHOTOS} photos.`);
+    }
+    await ctx.db.patch(me._id, { galleryStorageIds: [...gallery, storageId] });
+    return null;
+  },
+});
+
+// Self-service: remove a photo from the caller's own gallery.
+export const removeGalleryPhoto = mutation({
+  args: { storageId: v.id("_storage") },
+  returns: v.null(),
+  handler: async (ctx, { storageId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    if (!me) throw new Error("You don't have an employee profile.");
+    const gallery = me.galleryStorageIds ?? [];
+    if (!gallery.includes(storageId)) return null;
+    await ctx.storage.delete(storageId);
+    await ctx.db.patch(me._id, {
+      galleryStorageIds: gallery.filter((id) => id !== storageId),
+    });
     return null;
   },
 });

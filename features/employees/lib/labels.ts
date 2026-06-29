@@ -36,6 +36,24 @@ export const GENDER_LABELS: Record<string, string> = {
   undisclosed: "Undisclosed",
 }
 
+export const MARITAL_STATUS_LABELS: Record<string, string> = {
+  single: "Single",
+  married: "Married",
+  divorced: "Divorced",
+  widowed: "Widowed",
+  other: "Other",
+  undisclosed: "Undisclosed",
+}
+
+export const MARITAL_STATUSES = [
+  "single",
+  "married",
+  "divorced",
+  "widowed",
+  "other",
+  "undisclosed",
+] as const
+
 export const EMPLOYEE_STATUSES: EmployeeStatus[] = [
   "active",
   "probation",

@@ -1,4 +1,8 @@
-import type { PayrollStatus, CpfStatus } from "@/convex/lib/enums"
+import type {
+  PayrollStatus,
+  CpfStatus,
+  PayrollAdjustmentSource,
+} from "@/convex/lib/enums"
 
 export const PAYROLL_STATUS_LABELS: Record<PayrollStatus, string> = {
   draft: "Draft",
@@ -20,6 +24,14 @@ export const CPF_STATUS_LABELS: Record<CpfStatus, string> = {
   foreigner: "Foreigner",
   exempt: "Exempt",
 }
+
+export const ADJUSTMENT_SOURCE_LABELS: Record<PayrollAdjustmentSource, string> =
+  {
+    manual: "Manual",
+    claim: "Claim",
+    overtime: "Overtime",
+    unpaid_leave: "No-pay leave",
+  }
 
 /** Cents → localized currency string. */
 export function formatMoney(cents: number, currency: string): string {
@@ -50,4 +62,40 @@ export function centsToInput(cents: number): string {
 export function currentPeriodMonth(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+}
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+]
+
+/** "2026-06" → { year: "2026", monthIndex: 5, monthName: "June" }. */
+export function splitPeriod(periodMonth: string): {
+  year: string
+  monthIndex: number
+  monthName: string
+} {
+  const [year, m] = periodMonth.split("-")
+  const monthIndex = Number(m) - 1
+  return { year, monthIndex, monthName: MONTH_NAMES[monthIndex] ?? m }
+}
+
+/** Pretty date for the payslip header, e.g. "2026-06-30" → "30 Jun 2026". */
+export function formatDocDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })
+}
+
+/**
+ * Print the page. Combined with the `@media print` rules in globals.css that
+ * hide everything except the `.payslip-print` region, this saves the payslip
+ * as a PDF via the browser's print dialog.
+ */
+export function printPayslip(): void {
+  if (typeof window !== "undefined") window.print()
 }

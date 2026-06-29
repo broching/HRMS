@@ -32,6 +32,13 @@ export type NavSection = {
 // (or no `roles`), AND its `permission` is granted (or no `permission`).
 export const SECTIONS: NavSection[] = [
   {
+    key: "feed",
+    title: "Feed",
+    url: "/feed",
+    icon: IconRss,
+    items: [{ title: "Announcements", url: "/feed" }],
+  },
+  {
     key: "home",
     title: "Home",
     url: "/dashboard",
@@ -49,10 +56,11 @@ export const SECTIONS: NavSection[] = [
   {
     key: "team",
     title: "Team",
-    url: "/leave/calendar",
+    url: "/team",
     icon: IconUsersGroup,
     roles: ["admin", "hr", "manager"],
     items: [
+      { title: "Team", url: "/team" },
       { title: "Team Calendar", url: "/leave/calendar" },
       { title: "Leave Approvals", url: "/leave/requests" },
       { title: "Claim Approvals", url: "/claims/requests" },
@@ -78,37 +86,9 @@ export const SECTIONS: NavSection[] = [
     url: "/hr-lounge",
     icon: IconBriefcase,
     roles: ["admin", "hr"],
-    items: [
-      { title: "Overview", url: "/hr-lounge" },
-      { title: "Payroll", url: "/payroll", permission: "payroll:manage" },
-      {
-        title: "Compensation",
-        url: "/payroll/compensation",
-        permission: "payroll:manage",
-      },
-      {
-        title: "Review Cycles",
-        url: "/settings/review-cycles",
-        permission: "performance:manage",
-      },
-      {
-        title: "Org Structure",
-        url: "/settings/org-structure",
-        permission: "employees:manage",
-      },
-      {
-        title: "Members",
-        url: "/settings/members",
-        permission: "members:manage",
-      },
-    ],
-  },
-  {
-    key: "feed",
-    title: "Feed",
-    url: "/feed",
-    icon: IconRss,
-    items: [{ title: "Announcements", url: "/feed" }],
+    // Module navigation lives in the in-page HR Lounge sidebar, so the top
+    // sub-nav is collapsed to a single entry (SubNav hides when <2 items).
+    items: [{ title: "HR Lounge", url: "/hr-lounge" }],
   },
 ]
 

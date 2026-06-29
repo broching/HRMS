@@ -4,6 +4,7 @@ import {
   SG_LEAVE_TYPES,
   SG_HOLIDAYS_2026,
   CLAIM_TYPE_DEFAULTS,
+  defaultLeavePolicyFields,
 } from "./lib/sgDefaults";
 
 /**
@@ -22,7 +23,12 @@ export const seedOrganization = internalMutation({
     if (existing) return null;
 
     for (const lt of SG_LEAVE_TYPES) {
-      await ctx.db.insert("leaveTypes", { orgId, ...lt });
+      const leaveTypeId = await ctx.db.insert("leaveTypes", { orgId, ...lt });
+      await ctx.db.insert("leavePolicies", {
+        orgId,
+        leaveTypeId,
+        ...defaultLeavePolicyFields(lt),
+      });
     }
     for (const h of SG_HOLIDAYS_2026) {
       await ctx.db.insert("holidays", {

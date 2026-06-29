@@ -1,5 +1,5 @@
-import { HrLounge } from "@/features/dashboard/components/hr-lounge"
+import { HrEmployeeList } from "@/features/hr-lounge/components/hr-employee-list"
 
 export default function HrLoungePage() {
-  return <HrLounge />
+  return <HrEmployeeList />
 }
