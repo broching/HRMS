@@ -1,13 +1,9 @@
 import { redirect } from "next/navigation"
 import { auth } from "@clerk/nextjs/server"
-import { AppSidebar } from "@/components/layout/app-sidebar"
-import { SiteHeader } from "@/components/layout/site-header"
+import { TopNav } from "@/components/layout/top-nav"
+import { SubNav } from "@/components/layout/sub-nav"
 import { LoadingBar } from "@/components/layout/loading-bar"
 import { EnsureMembership } from "@/components/layout/ensure-membership"
-import {
-  SidebarInset,
-  SidebarProvider,
-} from "@/components/ui/sidebar"
 
 // OrgGuard: every authenticated HRMS route requires an active organization.
 // Unauthenticated users are bounced to the landing page (modal sign-in);
@@ -22,28 +18,14 @@ export default async function AppLayout({
   if (!orgId) redirect("/select-org")
 
   return (
-    <SidebarProvider
-      style={
-        {
-          "--sidebar-width": "calc(var(--spacing) * 72)",
-          "--header-height": "calc(var(--spacing) * 12)",
-        } as React.CSSProperties
-      }
-      className="group/layout"
-    >
+    <div className="bg-muted/20 group/layout flex min-h-svh flex-col">
       <EnsureMembership />
-      <AppSidebar variant="inset" />
-      <SidebarInset>
-        <LoadingBar />
-        <SiteHeader />
-        <div className="flex flex-1 flex-col">
-          <div className="@container/main flex flex-1 flex-col gap-2">
-            <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
-              {children}
-            </div>
-          </div>
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+      <LoadingBar />
+      <TopNav />
+      <SubNav />
+      <main className="mx-auto w-full max-w-[1400px] flex-1 py-6">
+        <div className="flex flex-col gap-4 md:gap-6">{children}</div>
+      </main>
+    </div>
   )
 }

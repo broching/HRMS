@@ -1,7 +1,6 @@
 "use client"
 
 import Link from "next/link"
-import { useQuery } from "convex/react"
 import {
   IconAddressBook,
   IconCalendarStats,
@@ -13,7 +12,6 @@ import {
   IconFileDollar,
   type Icon,
 } from "@tabler/icons-react"
-import { api } from "@/convex/_generated/api"
 import { useCurrentMember } from "@/hooks/use-current-member"
 import { hasPermission } from "@/convex/lib/permissions"
 import { cn } from "@/lib/utils"
@@ -29,18 +27,15 @@ type Tile = {
 
 export function HomeTiles() {
   const member = useCurrentMember()
-  const card = useQuery(api.employees.homeCard)
   const role = member?.role
   const canReadAll = role ? hasPermission(role, "employees:read:all") : false
-  const myProfileHref =
-    card && card.hasProfile ? `/employees/${card.employeeId}` : undefined
 
   const tiles: Tile[] = [
     {
       title: "My Profile",
       description: "Update and preview your personal profile",
       icon: IconId,
-      href: myProfileHref,
+      href: "/profile",
     },
     {
       title: "Directory",

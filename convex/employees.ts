@@ -447,6 +447,121 @@ export const update = mutation({
   },
 });
 
+// Employee Self-Service: the caller edits their OWN profile. Limited to
+// personal / contact / emergency fields — job, compensation, manager and
+// status remain HR-controlled (see `update`).
+const selfEditableFields = {
+  firstName: v.string(),
+  lastName: v.string(),
+  preferredName: v.optional(v.string()),
+  dob: v.optional(v.string()),
+  gender: v.optional(gender),
+  nationality: v.optional(v.string()),
+  address: v.optional(addressValidator),
+  contact: v.optional(contactValidator),
+  emergencyContacts: v.optional(v.array(emergencyContactValidator)),
+};
+
+// Auto-generate the next free employee number for self-provisioned profiles
+// (HR-created employees still pick their own). Format: E0001, E0002, …
+async function nextEmployeeNumber(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+): Promise<string> {
+  const all = await ctx.db
+    .query("employees")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const taken = new Set(all.map((e) => e.employeeNumber));
+  let n = all.length + 1;
+  let candidate = `E${String(n).padStart(4, "0")}`;
+  while (taken.has(candidate)) {
+    n += 1;
+    candidate = `E${String(n).padStart(4, "0")}`;
+  }
+  return candidate;
+}
+
+// Employee Self-Service upsert: the caller creates OR edits their OWN profile.
+// Anyone in the org can complete their personal details even if HR hasn't
+// created an employee record for them yet. Job/compensation/manager/status
+// remain HR-controlled (see `update`).
+export const updateOwnProfile = mutation({
+  args: selfEditableFields,
+  returns: v.null(),
+  handler: async (ctx, patch) => {
+    const orgCtx = await requireOrg(ctx);
+    const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const userEmail = orgCtx.user.email?.trim().toLowerCase() || undefined;
+
+    // Work email stays tied to the org account — never editable via self-edit.
+    const lockedWorkEmail = me?.contact?.workEmail ?? userEmail;
+    const contact = patch.contact
+      ? { ...patch.contact, workEmail: lockedWorkEmail }
+      : (me?.contact ?? (userEmail ? { workEmail: userEmail } : undefined));
+
+    if (!me) {
+      // Self-provision a new employee record linked to the caller.
+      const employeeNumber = await nextEmployeeNumber(ctx, orgCtx.orgId);
+      const id = await ctx.db.insert("employees", {
+        orgId: orgCtx.orgId,
+        userId: orgCtx.userId,
+        employeeNumber,
+        firstName: patch.firstName,
+        lastName: patch.lastName,
+        preferredName: patch.preferredName,
+        dob: patch.dob,
+        gender: patch.gender,
+        nationality: patch.nationality,
+        address: patch.address,
+        contact,
+        emergencyContacts: patch.emergencyContacts,
+        employmentType: "full_time",
+        status: "active",
+        joinDate: new Date().toISOString().slice(0, 10),
+        loginEmail: userEmail,
+        searchName: buildSearchName({
+          firstName: patch.firstName,
+          lastName: patch.lastName,
+          preferredName: patch.preferredName,
+          employeeNumber,
+        }),
+        createdBy: orgCtx.userId,
+        updatedAt: Date.now(),
+      });
+      await writeAuditLog(ctx, {
+        orgId: orgCtx.orgId,
+        actorUserId: orgCtx.userId,
+        action: "employee.selfCreate",
+        entity: "employees",
+        entityId: id,
+        after: { employeeNumber },
+      });
+      return null;
+    }
+
+    await ctx.db.patch(me._id, {
+      ...patch,
+      contact,
+      searchName: buildSearchName({
+        firstName: patch.firstName,
+        lastName: patch.lastName,
+        preferredName: patch.preferredName,
+        employeeNumber: me.employeeNumber,
+      }),
+      updatedAt: Date.now(),
+    });
+    await writeAuditLog(ctx, {
+      orgId: orgCtx.orgId,
+      actorUserId: orgCtx.userId,
+      action: "employee.updateOwnProfile",
+      entity: "employees",
+      entityId: me._id,
+    });
+    return null;
+  },
+});
+
 // Soft-terminate rather than hard-delete to preserve history.
 export const archive = mutation({
   args: { employeeId: v.id("employees"), exitDate: v.optional(v.string()) },
@@ -479,8 +594,24 @@ export const generateUploadUrl = mutation({
   args: {},
   returns: v.string(),
   handler: async (ctx) => {
-    await requirePermission(ctx, "employees:manage");
+    // Any org member may obtain an upload URL (e.g. self-service photo change).
+    // The actual photo assignment is authorized in setPhoto / setMyPhoto.
+    await requireOrg(ctx);
     return await ctx.storage.generateUploadUrl();
+  },
+});
+
+// Self-service: the caller sets their OWN profile photo.
+export const setMyPhoto = mutation({
+  args: { storageId: v.id("_storage") },
+  returns: v.null(),
+  handler: async (ctx, { storageId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    if (!me) throw new Error("You don't have an employee profile.");
+    if (me.photoStorageId) await ctx.storage.delete(me.photoStorageId);
+    await ctx.db.patch(me._id, { photoStorageId: storageId });
+    return null;
   },
 });
 
