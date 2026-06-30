@@ -19,6 +19,7 @@ export const PERMISSIONS = [
   "leave:approve:all", // approve any leave request in the org
   "claims:approve:finance", // finance/HR claim approval step
   "payroll:manage",
+  "recruitment:manage", // jobs, candidates, job board
   "attendance:config", // offices, QR, geofence
   "scheduling:manage", // shift templates + org-wide rosters
   "performance:manage", // review cycles + org-wide appraisals
@@ -40,6 +41,7 @@ export const ROLE_PERMISSIONS: Record<HrmsRole, readonly Permission[]> = {
     "leave:approve:all",
     "claims:approve:finance",
     "payroll:manage",
+    "recruitment:manage",
     "attendance:config",
     "scheduling:manage",
     "performance:manage",

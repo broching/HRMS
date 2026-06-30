@@ -37,6 +37,11 @@ import {
   claimApproverStep,
   claimPayrollMode,
   claimChainStep,
+  jobStatus,
+  candidateStage,
+  candidateSource,
+  interviewMode,
+  interviewStatus,
   attendanceMethod,
   attendanceStatus,
   correctionStatus,
@@ -648,6 +653,74 @@ export default defineSchema({
     .index("by_run_employee", ["runId", "employeeId"])
     .index("by_employee", ["employeeId"])
     .index("by_employee_period", ["employeeId", "periodMonth"]),
+
+  // ─── Recruitment ───────────────────────────────────────────────────────────
+
+  // Public careers-page configuration for an org (one row). The `slug` is the
+  // public URL segment at /boards/<slug>.
+  jobBoardSettings: defineTable({
+    orgId: v.id("organizations"),
+    slug: v.string(),
+    companyName: v.string(),
+    headline: v.optional(v.string()),
+    description: v.optional(v.string()),
+    logoStorageId: v.optional(v.id("_storage")),
+    bannerStorageId: v.optional(v.id("_storage")),
+    published: v.boolean(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_slug", ["slug"]),
+
+  jobs: defineTable({
+    orgId: v.id("organizations"),
+    title: v.string(),
+    departmentId: v.optional(v.id("departments")),
+    level: v.optional(v.string()), // e.g. "Executive", "Mid Senior level"
+    country: v.optional(v.string()), // work location
+    employmentType: v.optional(employmentType),
+    description: v.optional(v.string()),
+    status: jobStatus,
+    hiringManagerEmployeeId: v.optional(v.id("employees")),
+    recruiterUserId: v.optional(v.id("users")),
+    postedToBoard: v.boolean(),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  candidates: defineTable({
+    orgId: v.id("organizations"),
+    jobId: v.id("jobs"),
+    name: v.string(),
+    email: v.string(),
+    phone: v.optional(v.string()),
+    resumeStorageId: v.optional(v.id("_storage")),
+    coverLetter: v.optional(v.string()),
+    stage: candidateStage,
+    source: candidateSource,
+    rating: v.optional(v.number()),
+    note: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_job", ["jobId"])
+    .index("by_org_stage", ["orgId", "stage"]),
+
+  interviews: defineTable({
+    orgId: v.id("organizations"),
+    candidateId: v.id("candidates"),
+    jobId: v.id("jobs"),
+    scheduledAt: v.number(), // epoch ms
+    durationMins: v.number(),
+    mode: interviewMode,
+    locationOrLink: v.optional(v.string()),
+    interviewerUserId: v.optional(v.id("users")),
+    notes: v.optional(v.string()),
+    status: interviewStatus,
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_candidate", ["candidateId"])
+    .index("by_org_scheduledAt", ["orgId", "scheduledAt"]),
 
   // ─── Performance appraisal ───────────────────────────────────────────────
 

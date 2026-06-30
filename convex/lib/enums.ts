@@ -487,6 +487,56 @@ export const overtimeMeta = v.object({
   multiplier: v.number(),
 });
 
+// ─── Recruitment module ────────────────────────────────────────────────────
+
+export const jobStatus = v.union(
+  v.literal("draft"),
+  v.literal("open"),
+  v.literal("closed"),
+);
+export type JobStatus = "draft" | "open" | "closed";
+
+// Candidate pipeline stage. `kiv` = "keep in view".
+export const candidateStage = v.union(
+  v.literal("applied"),
+  v.literal("screening"),
+  v.literal("interview"),
+  v.literal("offer"),
+  v.literal("hired"),
+  v.literal("kiv"),
+  v.literal("rejected"),
+);
+export type CandidateStage =
+  | "applied"
+  | "screening"
+  | "interview"
+  | "offer"
+  | "hired"
+  | "kiv"
+  | "rejected";
+
+// Where a candidate entered the pipeline.
+export const candidateSource = v.union(
+  v.literal("board"), // applied via the public job board
+  v.literal("manual"), // added by HR
+  v.literal("referral"),
+);
+export type CandidateSource = "board" | "manual" | "referral";
+
+export const interviewMode = v.union(
+  v.literal("onsite"),
+  v.literal("video"),
+  v.literal("phone"),
+);
+export type InterviewMode = "onsite" | "video" | "phone";
+
+export const interviewStatus = v.union(
+  v.literal("scheduled"),
+  v.literal("completed"),
+  v.literal("cancelled"),
+);
+export type InterviewStatus = "scheduled" | "completed" | "cancelled";
+
 // ─── Performance module ──────────────────────────────────────────────────
 
 export const reviewCycleStatus = v.union(

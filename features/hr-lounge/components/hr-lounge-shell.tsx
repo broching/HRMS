@@ -44,12 +44,12 @@ const ITEMS: Item[] = [
     href: "/hr-lounge/payroll/compensation",
   },
   { label: "Expense Claims", icon: IconReceipt2, href: "/hr-lounge/claims" },
+  { label: "Recruitment", icon: IconBriefcase, href: "/hr-lounge/recruitment" },
   { label: "Performance", icon: IconChartBar, href: "/performance/team" },
   { label: "Review Cycles", icon: IconRefresh, href: "/settings/review-cycles" },
   { label: "Org Structure", icon: IconSitemap, href: "/settings/org-structure" },
   { label: "Members", icon: IconUserCog, href: "/settings/members" },
   { label: "Onboarding", icon: IconUserPlus, comingSoon: true },
-  { label: "Recruitment", icon: IconBriefcase, comingSoon: true },
 ]
 
 export function HrLoungeShell({ children }: { children: React.ReactNode }) {

@@ -10,6 +10,7 @@
 
 import type * as attendance from "../attendance.js";
 import type * as auth from "../auth.js";
+import type * as board from "../board.js";
 import type * as claimSettings from "../claimSettings.js";
 import type * as claimTypes from "../claimTypes.js";
 import type * as claims from "../claims.js";
@@ -53,6 +54,7 @@ import type * as paymentAttemptTypes from "../paymentAttemptTypes.js";
 import type * as paymentAttempts from "../paymentAttempts.js";
 import type * as payroll from "../payroll.js";
 import type * as positions from "../positions.js";
+import type * as recruitment from "../recruitment.js";
 import type * as reviewCycles from "../reviewCycles.js";
 import type * as reviews from "../reviews.js";
 import type * as schedules from "../schedules.js";
@@ -70,6 +72,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   attendance: typeof attendance;
   auth: typeof auth;
+  board: typeof board;
   claimSettings: typeof claimSettings;
   claimTypes: typeof claimTypes;
   claims: typeof claims;
@@ -113,6 +116,7 @@ declare const fullApi: ApiFromModules<{
   paymentAttempts: typeof paymentAttempts;
   payroll: typeof payroll;
   positions: typeof positions;
+  recruitment: typeof recruitment;
   reviewCycles: typeof reviewCycles;
   reviews: typeof reviews;
   schedules: typeof schedules;

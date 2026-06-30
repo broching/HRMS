@@ -42,6 +42,11 @@ import {
   payrollAdjustmentKind,
   payrollAdjustmentSource,
   overtimeMeta,
+  jobStatus,
+  candidateStage,
+  candidateSource,
+  interviewMode,
+  interviewStatus,
   reviewCycleStatus,
   goalStatus,
   reviewStatus,
@@ -734,6 +739,122 @@ export const payslipDetail = v.object({
   payPeriodStart: v.string(),
   payPeriodEnd: v.string(),
   payDate: v.union(v.string(), v.null()),
+})
+
+// ─── Recruitment ───────────────────────────────────────────────────────────
+
+// A job row for the recruitment dashboard table (hydrated labels + raw ids for
+// the edit dialog + live applicant count).
+export const jobRow = v.object({
+  _id: v.id("jobs"),
+  _creationTime: v.number(),
+  title: v.string(),
+  status: jobStatus,
+  level: v.union(v.string(), v.null()),
+  country: v.union(v.string(), v.null()),
+  departmentId: v.union(v.id("departments"), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  employmentType: v.union(employmentType, v.null()),
+  description: v.union(v.string(), v.null()),
+  hiringManagerEmployeeId: v.union(v.id("employees"), v.null()),
+  hiringManagerName: v.union(v.string(), v.null()),
+  hiringManagerPhotoUrl: v.union(v.string(), v.null()),
+  recruiterUserId: v.union(v.id("users"), v.null()),
+  recruiterName: v.union(v.string(), v.null()),
+  postedToBoard: v.boolean(),
+  applicantCount: v.number(),
+})
+
+// A candidate row with hydrated job title + resume URL.
+export const candidateRow = v.object({
+  _id: v.id("candidates"),
+  _creationTime: v.number(),
+  jobId: v.id("jobs"),
+  jobTitle: v.string(),
+  name: v.string(),
+  email: v.string(),
+  phone: v.union(v.string(), v.null()),
+  stage: candidateStage,
+  source: candidateSource,
+  resumeUrl: v.union(v.string(), v.null()),
+  coverLetter: v.union(v.string(), v.null()),
+  rating: v.union(v.number(), v.null()),
+  note: v.union(v.string(), v.null()),
+})
+
+// Recruitment dashboard summary (pipeline counts + board card).
+export const recruitmentSummary = v.object({
+  counts: v.object({
+    screening: v.number(),
+    interview: v.number(),
+    offer: v.number(),
+    kiv: v.number(),
+  }),
+  jobCount: v.number(),
+  board: v.object({
+    slug: v.union(v.string(), v.null()),
+    published: v.boolean(),
+    companyName: v.string(),
+    logoUrl: v.union(v.string(), v.null()),
+  }),
+})
+
+// Job board settings (return of recruitment.getBoardSettings).
+export const jobBoardSettingsValue = v.object({
+  slug: v.string(),
+  companyName: v.string(),
+  headline: v.union(v.string(), v.null()),
+  description: v.union(v.string(), v.null()),
+  logoUrl: v.union(v.string(), v.null()),
+  bannerUrl: v.union(v.string(), v.null()),
+  published: v.boolean(),
+})
+
+// An interview with hydrated candidate / job / interviewer labels.
+export const interviewRow = v.object({
+  _id: v.id("interviews"),
+  _creationTime: v.number(),
+  candidateId: v.id("candidates"),
+  jobId: v.id("jobs"),
+  candidateName: v.string(),
+  jobTitle: v.string(),
+  scheduledAt: v.number(),
+  durationMins: v.number(),
+  mode: interviewMode,
+  locationOrLink: v.union(v.string(), v.null()),
+  interviewerName: v.union(v.string(), v.null()),
+  notes: v.union(v.string(), v.null()),
+  status: interviewStatus,
+})
+
+// ─── Public job board (no auth) ──────────────────────────────────────────────
+
+const publicJobListing = v.object({
+  _id: v.id("jobs"),
+  title: v.string(),
+  level: v.union(v.string(), v.null()),
+  country: v.union(v.string(), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+})
+
+export const publicBoard = v.object({
+  companyName: v.string(),
+  headline: v.union(v.string(), v.null()),
+  description: v.union(v.string(), v.null()),
+  logoUrl: v.union(v.string(), v.null()),
+  bannerUrl: v.union(v.string(), v.null()),
+  jobs: v.array(publicJobListing),
+})
+
+export const publicJob = v.object({
+  _id: v.id("jobs"),
+  title: v.string(),
+  level: v.union(v.string(), v.null()),
+  country: v.union(v.string(), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  employmentType: v.union(employmentType, v.null()),
+  description: v.union(v.string(), v.null()),
+  companyName: v.string(),
 })
 
 // ─── Performance ─────────────────────────────────────────────────────────
