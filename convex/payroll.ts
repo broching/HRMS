@@ -727,6 +727,7 @@ export const syncAutoItems = mutation({
         .collect();
       for (const claim of claims) {
         if (!claim.incurredDate.startsWith(run.periodMonth)) continue;
+        if (!claim.sentToPayroll) continue; // only claims queued for payroll
         if (pulled.has(claim._id)) continue;
         const slip = slipByEmployee.get(claim.employeeId);
         if (!slip) continue;
@@ -888,7 +889,10 @@ export const getRunWorkspace = query({
       )
       .collect();
     const claimsCount = approvedClaims.filter(
-      (c) => c.incurredDate.startsWith(run.periodMonth) && empIds.has(c.employeeId),
+      (c) =>
+        c.incurredDate.startsWith(run.periodMonth) &&
+        empIds.has(c.employeeId) &&
+        c.sentToPayroll,
     ).length;
 
     const approvedLeave = await ctx.db
@@ -915,6 +919,63 @@ export const getRunWorkspace = query({
       payslips,
       available: { claims: claimsCount, unpaidLeaveDays, overtime },
     };
+  },
+});
+
+// Per-employee net-pay variance vs. the previous run (latest run before this
+// period). Powers the Step-3 Variance Report download.
+export const varianceReport = query({
+  args: { runId: v.id("payrollRuns") },
+  returns: v.array(
+    v.object({
+      employeeName: v.string(),
+      currentNetCents: v.number(),
+      previousNetCents: v.union(v.number(), v.null()),
+      deltaCents: v.number(),
+    }),
+  ),
+  handler: async (ctx, { runId }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) return [];
+
+    // The most recent earlier run for this org.
+    const earlier = await ctx.db
+      .query("payrollRuns")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .order("desc")
+      .collect();
+    const prev = earlier.find((r) => r.periodMonth < run.periodMonth);
+
+    const prevNet = new Map<Id<"employees">, number>();
+    if (prev) {
+      const prevSlips = await ctx.db
+        .query("payslips")
+        .withIndex("by_run", (q) => q.eq("runId", prev._id))
+        .collect();
+      for (const s of prevSlips) prevNet.set(s.employeeId, s.netCents);
+    }
+
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const rows = await Promise.all(
+      slips.map(async (s) => {
+        const emp = await ctx.db.get(s.employeeId);
+        const previousNetCents = prevNet.has(s.employeeId)
+          ? (prevNet.get(s.employeeId) as number)
+          : null;
+        return {
+          employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
+          currentNetCents: s.netCents,
+          previousNetCents,
+          deltaCents: s.netCents - (previousNetCents ?? 0),
+        };
+      }),
+    );
+    rows.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+    return rows;
   },
 });
 

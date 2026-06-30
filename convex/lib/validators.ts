@@ -29,6 +29,8 @@ import {
   leaveTimelineEvent,
   claimCategory,
   claimStatus,
+  claimApproverStep,
+  claimPayrollMode,
   attendanceMethod,
   attendanceStatus,
   correctionStatus,
@@ -464,7 +466,43 @@ export const claimDetail = v.object({
   receiptUrls: v.array(v.string()),
   managerApproverUserId: v.union(v.id("users"), v.null()),
   financeApproverUserId: v.union(v.id("users"), v.null()),
+  // Resolved approval chain progress for the detail view.
+  approvalChain: v.array(
+    v.object({
+      label: v.string(),
+      done: v.boolean(),
+      current: v.boolean(),
+    }),
+  ),
+  sentToPayroll: v.boolean(),
 });
+
+// Org claim settings (return of claimSettings.get) — resolved with defaults so
+// the form always has a complete shape to bind to.
+export const claimSettingsValue = v.object({
+  cutoffDay: v.number(),
+  transactionValidityMonths: v.union(v.number(), v.null()),
+  hrApproverUserIds: v.array(v.id("users")),
+  financeApproverUserIds: v.array(v.id("users")),
+  approvalWorkflow: v.array(claimApproverStep),
+  payrollMode: claimPayrollMode,
+  payrollItem: v.union(v.string(), v.null()),
+})
+
+// Pickers for the claim settings form (members for assignees/approvers,
+// offices for threshold rules).
+export const claimSettingsOptions = v.object({
+  members: v.array(
+    v.object({
+      userId: v.id("users"),
+      name: v.string(),
+      role: hrmsRole,
+    }),
+  ),
+  offices: v.array(
+    v.object({ _id: v.id("offices"), name: v.string() }),
+  ),
+})
 
 export const claimCommentRow = v.object({
   _id: v.id("claimComments"),
@@ -584,6 +622,10 @@ export const compensationRow = v.object({
   employeeId: v.id("employees"),
   name: v.string(),
   positionTitle: v.union(v.string(), v.null()),
+  departmentId: v.union(v.id("departments"), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  teamId: v.union(v.id("teams"), v.null()),
+  teamName: v.union(v.string(), v.null()),
   currency: v.union(v.string(), v.null()),
   baseMonthlyCents: v.union(v.number(), v.null()),
   cpfStatus: v.union(cpfStatus, v.null()),

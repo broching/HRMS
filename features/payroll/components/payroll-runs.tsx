@@ -5,21 +5,21 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
-import { IconPlus } from "@tabler/icons-react"
+import { IconPlus, IconCalendarEvent, IconFileDollar } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -33,10 +33,19 @@ import {
   PAYROLL_STATUS_BADGE,
   PAYROLL_STATUS_LABELS,
   formatMoney,
+  formatDocDate,
   currentPeriodMonth,
+  splitPeriod,
 } from "@/features/payroll/lib/labels"
 
-function NewRunDialog() {
+// Last calendar day of the current month, as "YYYY-MM-DD".
+function currentPaydayISO(): string {
+  const d = new Date()
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+  return `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, "0")}-${String(last.getDate()).padStart(2, "0")}`
+}
+
+function NewRunDialog({ trigger }: { trigger: React.ReactNode }) {
   const router = useRouter()
   const createRun = useMutation(api.payroll.createRun)
   const [open, setOpen] = React.useState(false)
@@ -53,7 +62,7 @@ function NewRunDialog() {
       })
       toast.success("Payroll run created")
       setOpen(false)
-      router.push(`/payroll/runs/${id}`)
+      router.push(`/hr-lounge/payroll/runs/${id}`)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Couldn't create run")
     } finally {
@@ -63,15 +72,10 @@ function NewRunDialog() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button>
-          <IconPlus className="size-4" />
-          New run
-        </Button>
-      </DialogTrigger>
+      <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New payroll run</DialogTitle>
+          <DialogTitle>Run payroll</DialogTitle>
           <DialogDescription>
             Generates draft payslips for every active employee with compensation
             on file.
@@ -107,80 +111,150 @@ function NewRunDialog() {
   )
 }
 
+function RunCard(props: {
+  href: string
+  label: string
+  status: keyof typeof PAYROLL_STATUS_LABELS
+  payslipCount: number
+  grossCents: number
+  currency: string
+}) {
+  return (
+    <Link
+      href={props.href}
+      className="hover:border-primary/40 hover:bg-muted/40 rounded-lg border p-4 transition-colors"
+    >
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="font-semibold">{props.label}</p>
+          <p className="text-muted-foreground text-xs">
+            {props.payslipCount} employee{props.payslipCount === 1 ? "" : "s"}
+          </p>
+        </div>
+        <Badge variant={PAYROLL_STATUS_BADGE[props.status]}>
+          {PAYROLL_STATUS_LABELS[props.status]}
+        </Badge>
+      </div>
+      <div className="mt-4">
+        <p className="text-muted-foreground text-xs">Total payout</p>
+        <p className="text-lg font-semibold tabular-nums">
+          {formatMoney(props.grossCents, props.currency)}
+        </p>
+      </div>
+    </Link>
+  )
+}
+
 export function PayrollRuns() {
   const runs = useQuery(api.payroll.listRuns)
+  const [year, setYear] = React.useState<string>("all")
+
+  const years = React.useMemo(() => {
+    if (!runs) return []
+    return Array.from(new Set(runs.map((r) => splitPeriod(r.periodMonth).year))).sort(
+      (a, b) => Number(b) - Number(a),
+    )
+  }, [runs])
+
+  const filtered = React.useMemo(() => {
+    if (!runs) return []
+    return year === "all"
+      ? runs
+      : runs.filter((r) => splitPeriod(r.periodMonth).year === year)
+  }, [runs, year])
 
   return (
-    <div className="flex flex-col gap-4 px-4 lg:px-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Button asChild variant="outline">
-          <Link href="/payroll/compensation">Manage compensation</Link>
-        </Button>
-        <NewRunDialog />
+    <div className="flex flex-col gap-6 px-4 lg:px-6">
+      {/* Upcoming payday + quick actions */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardContent className="flex flex-wrap items-center justify-between gap-4 py-5">
+            <div className="flex items-center gap-3">
+              <span className="bg-primary/10 text-primary flex size-11 items-center justify-center rounded-full">
+                <IconCalendarEvent className="size-5" />
+              </span>
+              <div>
+                <p className="text-muted-foreground text-xs">Upcoming payday</p>
+                <p className="text-lg font-semibold">
+                  {formatDocDate(currentPaydayISO())}
+                </p>
+              </div>
+            </div>
+            <NewRunDialog
+              trigger={
+                <Button>
+                  <IconPlus className="size-4" />
+                  Run payroll
+                </Button>
+              }
+            />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center justify-between gap-3 py-5">
+            <div className="flex items-center gap-3">
+              <span className="bg-muted flex size-11 items-center justify-center rounded-full">
+                <IconFileDollar className="size-5" />
+              </span>
+              <div>
+                <p className="font-medium">Compensation</p>
+                <p className="text-muted-foreground text-xs">
+                  Manage salaries & allowances
+                </p>
+              </div>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/hr-lounge/payroll/compensation">Open</Link>
+            </Button>
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Period</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Payslips</TableHead>
-              <TableHead>Gross</TableHead>
-              <TableHead>Net</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {runs === undefined ? (
-              <TableRow>
-                <TableCell colSpan={6}>
-                  <Skeleton className="h-6 w-full" />
-                </TableCell>
-              </TableRow>
-            ) : runs.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={6}
-                  className="text-muted-foreground py-8 text-center"
-                >
-                  No payroll runs yet.
-                </TableCell>
-              </TableRow>
-            ) : (
-              runs.map((r) => (
-                <TableRow key={r._id}>
-                  <TableCell>
-                    <Link
-                      href={`/payroll/runs/${r._id}`}
-                      className="font-medium hover:underline"
-                    >
-                      {r.label}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={PAYROLL_STATUS_BADGE[r.status]}>
-                      {PAYROLL_STATUS_LABELS[r.status]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="tabular-nums">{r.payslipCount}</TableCell>
-                  <TableCell className="tabular-nums">
-                    {formatMoney(r.grossCents, r.currency)}
-                  </TableCell>
-                  <TableCell className="tabular-nums">
-                    {formatMoney(r.netCents, r.currency)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button asChild variant="ghost" size="sm">
-                      <Link href={`/payroll/runs/${r._id}`}>Open</Link>
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+      {/* Payroll history */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Payroll history</h2>
+        {years.length > 0 && (
+          <Select value={year} onValueChange={setYear}>
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All years</SelectItem>
+              {years.map((y) => (
+                <SelectItem key={y} value={y}>
+                  {y}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
+
+      {runs === undefined ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-32 w-full" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-muted-foreground rounded-lg border py-12 text-center text-sm">
+          No payroll runs yet. Run your first payroll above.
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((r) => (
+            <RunCard
+              key={r._id}
+              href={`/hr-lounge/payroll/runs/${r._id}`}
+              label={r.label}
+              status={r.status}
+              payslipCount={r.payslipCount}
+              grossCents={r.grossCents}
+              currency={r.currency}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

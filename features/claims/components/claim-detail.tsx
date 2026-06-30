@@ -70,6 +70,7 @@ export function ClaimDetail({ claimId }: { claimId: Id<"claims"> }) {
   const reject = useMutation(api.claims.reject)
   const markReimbursed = useMutation(api.claims.markReimbursed)
   const cancel = useMutation(api.claims.cancel)
+  const setSentToPayroll = useMutation(api.claims.setSentToPayroll)
   const addComment = useMutation(api.claims.addComment)
 
   const [comment, setComment] = React.useState("")
@@ -114,6 +115,38 @@ export function ClaimDetail({ claimId }: { claimId: Id<"claims"> }) {
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <StatusTimeline status={claim.status} />
+
+              {claim.approvalChain.length > 0 && (
+                <div className="flex flex-col gap-1.5 rounded-lg border p-3">
+                  <span className="text-muted-foreground text-xs">
+                    Approval chain
+                  </span>
+                  {claim.approvalChain.map((s, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm">
+                      <span
+                        className={cn(
+                          "flex size-4 items-center justify-center rounded-full border text-[10px]",
+                          s.done
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : s.current
+                              ? "border-primary text-primary"
+                              : "text-muted-foreground",
+                        )}
+                      >
+                        {s.done ? <IconCheck className="size-3" /> : i + 1}
+                      </span>
+                      <span className={cn(s.current && "font-medium")}>
+                        {s.label}
+                      </span>
+                      {s.current && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          Awaiting
+                        </Badge>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="Category" value={CLAIM_CATEGORY_LABELS[claim.category]} />
                 <Field
@@ -169,7 +202,7 @@ export function ClaimDetail({ claimId }: { claimId: Id<"claims"> }) {
                         run(managerApprove({ claimId }), "Approved")
                       }
                     >
-                      Approve (manager)
+                      Approve
                     </Button>
                     <Button
                       size="sm"
@@ -200,14 +233,40 @@ export function ClaimDetail({ claimId }: { claimId: Id<"claims"> }) {
                   </>
                 )}
                 {claim.status === "approved" && isFinance && (
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      run(markReimbursed({ claimId }), "Marked reimbursed")
-                    }
-                  >
-                    Mark reimbursed
-                  </Button>
+                  <>
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        run(markReimbursed({ claimId }), "Marked reimbursed")
+                      }
+                    >
+                      Mark reimbursed
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        run(
+                          setSentToPayroll({
+                            claimId,
+                            value: !claim.sentToPayroll,
+                          }),
+                          claim.sentToPayroll
+                            ? "Removed from payroll"
+                            : "Queued for payroll",
+                        )
+                      }
+                    >
+                      {claim.sentToPayroll
+                        ? "Remove from payroll"
+                        : "Send to payroll"}
+                    </Button>
+                  </>
+                )}
+                {claim.status === "approved" && claim.sentToPayroll && (
+                  <Badge variant="secondary" className="self-center">
+                    Queued for payroll
+                  </Badge>
                 )}
                 {(claim.status === "pending_manager" ||
                   claim.status === "pending_finance") && (

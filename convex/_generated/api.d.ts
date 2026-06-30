@@ -10,6 +10,7 @@
 
 import type * as attendance from "../attendance.js";
 import type * as auth from "../auth.js";
+import type * as claimSettings from "../claimSettings.js";
 import type * as claimTypes from "../claimTypes.js";
 import type * as claims from "../claims.js";
 import type * as compensation from "../compensation.js";
@@ -69,6 +70,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   attendance: typeof attendance;
   auth: typeof auth;
+  claimSettings: typeof claimSettings;
   claimTypes: typeof claimTypes;
   claims: typeof claims;
   compensation: typeof compensation;

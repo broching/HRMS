@@ -12,6 +12,7 @@ import {
 } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
 import type { ClaimStatus } from "./lib/enums";
+import { resolveClaimSettings } from "./claimSettings";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -87,13 +88,19 @@ async function requireClaimAccess(ctx: QueryCtx, claimId: Id<"claims">) {
   throw new Error("Not authorized to view this claim.");
 }
 
-// Manager step: the employee's manager, or anyone with finance approval rights.
+// Approval step: the claim's current chain approver, or anyone with finance
+// rights. Falls back to the manager relationship for legacy (chain-less) claims.
 async function assertManagerStage(
   ctx: QueryCtx,
   orgCtx: OrgContext,
   claim: Doc<"claims">,
 ) {
   if (hasPermission(orgCtx.role, "claims:approve:finance")) return;
+  if (claim.approvalChain && claim.approvalChain.length > 0) {
+    const step = claim.approvalChain[claim.currentStepIndex ?? 0];
+    if (step?.approverUserId === orgCtx.userId) return;
+    throw new Error("Not authorized to act on this claim.");
+  }
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const employee = await ctx.db.get(claim.employeeId);
   if (own && employee && employee.managerId === own._id) return;
@@ -119,6 +126,113 @@ async function notify(
     entityRef: { table: "claims", id: claimId },
     read: false,
   });
+}
+
+type ChainStep = {
+  approverType: "position" | "specific";
+  value: string;
+  approverUserId?: Id<"users">;
+  label: string;
+};
+
+async function safeGetUser(ctx: QueryCtx, maybeId: string) {
+  try {
+    return await ctx.db.get(maybeId as Id<"users">);
+  } catch {
+    return null;
+  }
+}
+
+// Resolve the approval chain for a claim from the org's configured workflow,
+// applying thresholds (amount + office scope) and resolving each step to a
+// concrete approver. Steps that can't be routed (e.g. no manager) are skipped.
+async function buildApprovalChain(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  employee: Doc<"employees">,
+  amountCents: number,
+): Promise<ChainStep[]> {
+  const settings = await resolveClaimSettings(ctx, orgId);
+  const chain: ChainStep[] = [];
+  for (const step of settings.approvalWorkflow) {
+    if (step.thresholdEnabled) {
+      const matches = step.rules.some(
+        (r) =>
+          amountCents > r.amountMoreThanCents &&
+          (r.officeIds.length === 0 ||
+            (employee.officeId != null &&
+              r.officeIds.includes(employee.officeId))),
+      );
+      if (!matches) continue;
+    }
+
+    let approverUserId: Id<"users"> | undefined;
+    let name = "";
+    if (step.approverType === "position") {
+      if (step.value === "manager" && employee.managerId) {
+        const mgr = await ctx.db.get(employee.managerId);
+        approverUserId = mgr?.userId ?? undefined;
+        name = mgr ? `${mgr.firstName} ${mgr.lastName}` : "";
+      } else if (step.value === "department_head" && employee.departmentId) {
+        const dept = await ctx.db.get(employee.departmentId);
+        if (dept?.headEmployeeId) {
+          const head = await ctx.db.get(dept.headEmployeeId);
+          approverUserId = head?.userId ?? undefined;
+          name = head ? `${head.firstName} ${head.lastName}` : "";
+        }
+      }
+    } else {
+      const user = await safeGetUser(ctx, step.value);
+      approverUserId = user?._id;
+      name = user?.name ?? "";
+    }
+
+    if (!approverUserId) continue; // unroutable → skip
+    if (employee.userId && approverUserId === employee.userId) continue; // no self-approval
+
+    const posLabel =
+      step.approverType === "position"
+        ? step.value === "manager"
+          ? "Manager"
+          : "Department head"
+        : "Approver";
+    chain.push({
+      approverType: step.approverType,
+      value: step.value,
+      approverUserId,
+      label: name ? `${posLabel} — ${name}` : posLabel,
+    });
+  }
+
+  // Collapse consecutive identical approvers.
+  const deduped: ChainStep[] = [];
+  for (const s of chain) {
+    const prev = deduped[deduped.length - 1];
+    if (prev && prev.approverUserId === s.approverUserId) continue;
+    deduped.push(s);
+  }
+  return deduped;
+}
+
+// Notify all configured finance approvers that a claim awaits their decision.
+async function notifyFinance(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  claim: Doc<"claims">,
+  employeeName: string,
+) {
+  const settings = await resolveClaimSettings(ctx, orgId);
+  for (const userId of settings.financeApproverUserIds) {
+    await notify(
+      ctx,
+      orgId,
+      userId,
+      "claim.submitted",
+      "Claim to approve",
+      `${employeeName}'s claim is awaiting finance approval`,
+      claim._id,
+    );
+  }
 }
 
 // ─── Mutations ───────────────────────────────────────────────────────────
@@ -177,7 +291,10 @@ export const submit = mutation({
       }
     }
 
-    const status = own.managerId ? "pending_manager" : "pending_finance";
+    // Resolve the configured approval chain (with thresholds) for this claim.
+    const chain = await buildApprovalChain(ctx, orgId, own, args.amountCents);
+    const status: ClaimStatus =
+      chain.length > 0 ? "pending_manager" : "pending_finance";
     const id = await ctx.db.insert("claims", {
       orgId,
       employeeId: own._id,
@@ -192,19 +309,24 @@ export const submit = mutation({
       description: args.description,
       receiptStorageIds: args.receiptStorageIds,
       status,
+      approvalChain: chain,
+      currentStepIndex: chain.length > 0 ? 0 : undefined,
     });
 
-    if (status === "pending_manager" && own.managerId) {
-      const manager = await ctx.db.get(own.managerId);
+    const claim = (await ctx.db.get(id))!;
+    const empName = `${own.firstName} ${own.lastName}`;
+    if (chain.length > 0) {
       await notify(
         ctx,
         orgId,
-        manager?.userId,
+        chain[0].approverUserId,
         "claim.submitted",
         "Claim to approve",
-        `${own.firstName} ${own.lastName} submitted a claim`,
+        `${empName} submitted a claim`,
         id,
       );
+    } else {
+      await notifyFinance(ctx, orgId, claim, empName);
     }
     await writeAuditLog(ctx, {
       orgId,
@@ -218,6 +340,9 @@ export const submit = mutation({
   },
 });
 
+// Approve the current step of a claim's approval chain. Advances to the next
+// approver, or hands off to finance once the chain is complete. (Named
+// `managerApprove` for backward compatibility with the approval queue UI.)
 export const managerApprove = mutation({
   args: { claimId: v.id("claims"), note: v.optional(v.string()) },
   returns: v.null(),
@@ -226,30 +351,94 @@ export const managerApprove = mutation({
     const claim = await ctx.db.get(claimId);
     if (!claim || claim.orgId !== orgCtx.orgId) throw new Error("Claim not found.");
     if (claim.status !== "pending_manager") {
-      throw new Error("Claim is not awaiting manager approval.");
+      throw new Error("Claim is not awaiting approval.");
     }
-    await assertManagerStage(ctx, orgCtx, claim);
-    await ctx.db.patch(claimId, {
-      status: "pending_finance",
-      managerApproverUserId: orgCtx.userId,
-      decisionNote: note,
-    });
-    const emp = await ctx.db.get(claim.employeeId);
-    await notify(
-      ctx,
-      orgCtx.orgId,
-      emp?.userId,
-      "claim.manager_approved",
-      "Claim progressed",
-      "Your claim was approved by your manager and sent to finance.",
-      claimId,
+
+    const chain = claim.approvalChain;
+    const idx = claim.currentStepIndex ?? 0;
+
+    // Legacy claims (submitted before configurable chains): manager → finance.
+    if (!chain || chain.length === 0) {
+      await assertManagerStage(ctx, orgCtx, claim);
+      await ctx.db.patch(claimId, {
+        status: "pending_finance",
+        managerApproverUserId: orgCtx.userId,
+        decisionNote: note,
+      });
+      const emp = await ctx.db.get(claim.employeeId);
+      await notifyFinance(
+        ctx,
+        orgCtx.orgId,
+        claim,
+        emp ? `${emp.firstName} ${emp.lastName}` : "An employee",
+      );
+      await writeAuditLog(ctx, {
+        orgId: orgCtx.orgId,
+        actorUserId: orgCtx.userId,
+        action: "claim.manager_approve",
+        entity: "claims",
+        entityId: claimId,
+      });
+      return null;
+    }
+
+    const step = chain[idx];
+    const isApprover = step?.approverUserId === orgCtx.userId;
+    if (!isApprover && !hasPermission(orgCtx.role, "claims:approve:finance")) {
+      throw new Error("Not authorized to approve this step.");
+    }
+
+    const updatedChain = chain.map((s, i) =>
+      i === idx
+        ? { ...s, decidedByUserId: orgCtx.userId, decidedAt: Date.now(), note }
+        : s,
     );
+    const nextIdx = idx + 1;
+    const emp = await ctx.db.get(claim.employeeId);
+    const empName = emp ? `${emp.firstName} ${emp.lastName}` : "An employee";
+
+    if (nextIdx < updatedChain.length) {
+      await ctx.db.patch(claimId, {
+        approvalChain: updatedChain,
+        currentStepIndex: nextIdx,
+        decisionNote: note,
+      });
+      await notify(
+        ctx,
+        orgCtx.orgId,
+        updatedChain[nextIdx].approverUserId,
+        "claim.submitted",
+        "Claim to approve",
+        `${empName}'s claim needs your approval`,
+        claimId,
+      );
+    } else {
+      await ctx.db.patch(claimId, {
+        status: "pending_finance",
+        approvalChain: updatedChain,
+        currentStepIndex: nextIdx,
+        managerApproverUserId: orgCtx.userId,
+        decisionNote: note,
+      });
+      await notify(
+        ctx,
+        orgCtx.orgId,
+        emp?.userId,
+        "claim.manager_approved",
+        "Claim progressed",
+        "Your claim cleared approvals and was sent to finance.",
+        claimId,
+      );
+      await notifyFinance(ctx, orgCtx.orgId, claim, empName);
+    }
+
     await writeAuditLog(ctx, {
       orgId: orgCtx.orgId,
       actorUserId: orgCtx.userId,
-      action: "claim.manager_approve",
+      action: "claim.approve_step",
       entity: "claims",
       entityId: claimId,
+      after: { step: idx },
     });
     return null;
   },
@@ -268,11 +457,14 @@ export const financeApprove = mutation({
     if (claim.status !== "pending_finance") {
       throw new Error("Claim is not awaiting finance approval.");
     }
+    // Payroll connection: auto-queue for payroll when the org is on "automatic".
+    const settings = await resolveClaimSettings(ctx, orgId);
     await ctx.db.patch(claimId, {
       status: "approved",
       financeApproverUserId: userId,
       decidedAt: Date.now(),
       decisionNote: note,
+      sentToPayroll: settings.payrollMode === "automatic" ? true : undefined,
     });
     const emp = await ctx.db.get(claim.employeeId);
     await notify(
@@ -399,6 +591,23 @@ export const cancel = mutation({
   },
 });
 
+// Manually queue/unqueue an approved claim for payroll reimbursement (used when
+// the org's payroll connection is "manual").
+export const setSentToPayroll = mutation({
+  args: { claimId: v.id("claims"), value: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, { claimId, value }) => {
+    const { orgId } = await requirePermission(ctx, "claims:approve:finance");
+    const claim = await ctx.db.get(claimId);
+    if (!claim || claim.orgId !== orgId) throw new Error("Claim not found.");
+    if (claim.status !== "approved") {
+      throw new Error("Only approved claims can be sent to payroll.");
+    }
+    await ctx.db.patch(claimId, { sentToPayroll: value || undefined });
+    return null;
+  },
+});
+
 export const generateUploadUrl = mutation({
   args: {},
   returns: v.string(),
@@ -454,6 +663,12 @@ export const get = query({
         claim.receiptStorageIds.map((sid) => ctx.storage.getUrl(sid)),
       )
     ).filter((u): u is string => u !== null);
+    const stepIdx = claim.currentStepIndex ?? 0;
+    const approvalChain = (claim.approvalChain ?? []).map((s, i) => ({
+      label: s.label,
+      done: s.decidedByUserId != null,
+      current: claim.status === "pending_manager" && i === stepIdx,
+    }));
     return {
       ...base,
       taxAmountCents: claim.taxAmountCents ?? null,
@@ -463,6 +678,8 @@ export const get = query({
       receiptUrls,
       managerApproverUserId: claim.managerApproverUserId ?? null,
       financeApproverUserId: claim.financeApproverUserId ?? null,
+      approvalChain,
+      sentToPayroll: claim.sentToPayroll ?? false,
     };
   },
 });
@@ -551,23 +768,23 @@ export const approvalQueue = query({
       out.push(...finance);
     }
 
+    // Chain steps awaiting this caller: claims in `pending_manager` whose
+    // current chain approver is the caller (legacy chain-less claims fall back
+    // to the manager relationship).
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
-    if (own) {
-      const reports = await ctx.db
-        .query("employees")
-        .withIndex("by_org_manager", (q) =>
-          q.eq("orgId", orgCtx.orgId).eq("managerId", own._id),
-        )
-        .collect();
-      const reportIds = new Set(reports.map((e) => e._id));
-      if (reportIds.size > 0) {
-        const pendingManager = await ctx.db
-          .query("claims")
-          .withIndex("by_org_status", (q) =>
-            q.eq("orgId", orgCtx.orgId).eq("status", "pending_manager"),
-          )
-          .collect();
-        out.push(...pendingManager.filter((c) => reportIds.has(c.employeeId)));
+    const pendingManager = await ctx.db
+      .query("claims")
+      .withIndex("by_org_status", (q) =>
+        q.eq("orgId", orgCtx.orgId).eq("status", "pending_manager"),
+      )
+      .collect();
+    for (const c of pendingManager) {
+      if (c.approvalChain && c.approvalChain.length > 0) {
+        const step = c.approvalChain[c.currentStepIndex ?? 0];
+        if (step?.approverUserId === orgCtx.userId) out.push(c);
+      } else if (own) {
+        const emp = await ctx.db.get(c.employeeId);
+        if (emp?.managerId === own._id) out.push(c);
       }
     }
 

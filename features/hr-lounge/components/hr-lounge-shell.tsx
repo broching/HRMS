@@ -31,15 +31,19 @@ type Item = {
   comingSoon?: boolean
 }
 
-// The HR module rail. In-shell destinations live under /hr-lounge; the rest
-// deep-link to the already-built admin pages (which render in their own shell).
+// The HR module rail. The core HR modules live in-shell under /hr-lounge so the
+// rail stays present; a few advanced screens still deep-link to admin pages.
 const ITEMS: Item[] = [
   { label: "Overview", icon: IconLayoutDashboard, href: "/hr-lounge/overview" },
   { label: "Employee List", icon: IconUsers, href: "/hr-lounge", exact: true },
   { label: "Leave", icon: IconCalendarStats, href: "/hr-lounge/leave" },
-  { label: "Payroll", icon: IconCash, href: "/payroll" },
-  { label: "Compensation", icon: IconCoin, href: "/payroll/compensation" },
-  { label: "Expense Claims", icon: IconReceipt2, href: "/claims/requests" },
+  { label: "Payroll", icon: IconCash, href: "/hr-lounge/payroll" },
+  {
+    label: "Compensation",
+    icon: IconCoin,
+    href: "/hr-lounge/payroll/compensation",
+  },
+  { label: "Expense Claims", icon: IconReceipt2, href: "/hr-lounge/claims" },
   { label: "Performance", icon: IconChartBar, href: "/performance/team" },
   { label: "Review Cycles", icon: IconRefresh, href: "/settings/review-cycles" },
   { label: "Org Structure", icon: IconSitemap, href: "/settings/org-structure" },
@@ -72,14 +76,21 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
     )
   }
 
-  function isActive(item: Item): boolean {
-    if (!item.href) return false
-    if (item.href.startsWith("/hr-lounge")) {
-      return item.exact
-        ? pathname === item.href
-        : pathname === item.href || pathname.startsWith(item.href + "/")
+  // Longest-matching href wins, so e.g. /hr-lounge/payroll/compensation
+  // highlights Compensation rather than also lighting up Payroll.
+  let activeHref: string | null = null
+  for (const item of ITEMS) {
+    if (!item.href) continue
+    const match = item.exact
+      ? pathname === item.href
+      : pathname === item.href || pathname.startsWith(item.href + "/")
+    if (match && (!activeHref || item.href.length > activeHref.length)) {
+      activeHref = item.href
     }
-    return false
+  }
+
+  function isActive(item: Item): boolean {
+    return !!item.href && item.href === activeHref
   }
 
   return (

@@ -323,6 +323,51 @@ export type ClaimStatus =
   | "reimbursed"
   | "cancelled";
 
+// ─── Claim settings ────────────────────────────────────────────────────────
+
+// One threshold rule on an approver step: the step applies only when a claim's
+// amount exceeds `amountMoreThanCents`, optionally scoped to specific offices
+// (empty = all offices).
+export const claimApprovalThresholdRule = v.object({
+  amountMoreThanCents: v.number(),
+  officeIds: v.array(v.id("offices")),
+});
+
+// One step in the claim approval workflow. `approverType` "position" resolves a
+// role relative to the claimant (manager / department_head); "specific" names a
+// member (value = userId). When `thresholdEnabled`, the step only applies if a
+// claim matches one of its `rules`.
+export const claimApproverPosition = v.union(
+  v.literal("manager"),
+  v.literal("department_head"),
+);
+export const claimApproverStep = v.object({
+  approverType: v.union(v.literal("position"), v.literal("specific")),
+  value: v.string(), // "manager" | "department_head" | userId
+  thresholdEnabled: v.boolean(),
+  rules: v.array(claimApprovalThresholdRule),
+});
+
+// How approved claims flow to payroll.
+export const claimPayrollMode = v.union(
+  v.literal("manual"),
+  v.literal("automatic"),
+);
+export type ClaimPayrollMode = "manual" | "automatic";
+
+// One resolved step of a claim's approval chain, snapshotted onto the claim at
+// submit time from the org's approval workflow. `approverUserId` is resolved
+// from the step's position/specific target against the claimant.
+export const claimChainStep = v.object({
+  approverType: v.union(v.literal("position"), v.literal("specific")),
+  value: v.string(), // "manager" | "department_head" | userId (config)
+  approverUserId: v.optional(v.id("users")),
+  label: v.string(), // e.g. "Manager — Jane Tan"
+  decidedByUserId: v.optional(v.id("users")),
+  decidedAt: v.optional(v.number()),
+  note: v.optional(v.string()),
+});
+
 // ─── Feed module ───────────────────────────────────────────────────────────
 
 // Who a feed post is shared with. `specific` targets an explicit employee list;

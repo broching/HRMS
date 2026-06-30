@@ -91,6 +91,35 @@ export function formatDocDate(iso: string): string {
   })
 }
 
+/** Build CSV text from a header row + data rows, quoting each cell. */
+export function toCsv(headers: string[], rows: (string | number)[][]): string {
+  const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`
+  return [headers, ...rows].map((r) => r.map(esc).join(",")).join("\r\n")
+}
+
+/** Trigger a browser download of `content` as `filename`. */
+export function downloadFile(
+  filename: string,
+  content: string,
+  mime = "text/csv;charset=utf-8",
+): void {
+  if (typeof window === "undefined") return
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** Cents → plain "1234.50" for CSV cells (no thousands separator). */
+export function centsToCsv(cents: number): string {
+  return (cents / 100).toFixed(2)
+}
+
 /**
  * Print the page. Combined with the `@media print` rules in globals.css that
  * hide everything except the `.payslip-print` region, this saves the payslip

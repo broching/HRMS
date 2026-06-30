@@ -34,6 +34,9 @@ import {
   leaveTimelineEvent,
   claimCategory,
   claimStatus,
+  claimApproverStep,
+  claimPayrollMode,
+  claimChainStep,
   attendanceMethod,
   attendanceStatus,
   correctionStatus,
@@ -415,6 +418,20 @@ export default defineSchema({
     active: v.boolean(),
   }).index("by_org", ["orgId"]),
 
+  // Org-wide expense-claim configuration (one row per org). Drives the claim
+  // cut-off, transaction validity window, approval workflow (with thresholds),
+  // and how approved claims flow to payroll.
+  claimSettings: defineTable({
+    orgId: v.id("organizations"),
+    cutoffDay: v.number(), // 1–31, day of month
+    transactionValidityMonths: v.optional(v.number()), // undefined = no limit
+    hrApproverUserIds: v.array(v.id("users")),
+    financeApproverUserIds: v.array(v.id("users")),
+    approvalWorkflow: v.array(claimApproverStep),
+    payrollMode: claimPayrollMode,
+    payrollItem: v.optional(v.string()),
+  }).index("by_org", ["orgId"]),
+
   claims: defineTable({
     orgId: v.id("organizations"),
     employeeId: v.id("employees"),
@@ -434,6 +451,14 @@ export default defineSchema({
     decidedAt: v.optional(v.number()),
     reimbursedAt: v.optional(v.number()),
     decisionNote: v.optional(v.string()),
+    // Settings-driven approval chain (resolved at submit). While `status` is
+    // `pending_manager` the claim is working through `approvalChain` at
+    // `currentStepIndex`; once the chain completes it moves to `pending_finance`.
+    approvalChain: v.optional(v.array(claimChainStep)),
+    currentStepIndex: v.optional(v.number()),
+    // Queued for payroll reimbursement (auto-set on approval when the org's
+    // payroll connection is "automatic"; toggled manually otherwise).
+    sentToPayroll: v.optional(v.boolean()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])

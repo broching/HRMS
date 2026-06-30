@@ -82,11 +82,14 @@ export const overview = query({
         .collect()
     ).filter((e) => e.status !== "terminated");
 
-    const positions = await ctx.db
-      .query("positions")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .collect();
+    const [positions, departments, teams] = await Promise.all([
+      ctx.db.query("positions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("departments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("teams").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+    ]);
     const posTitle = new Map(positions.map((p) => [p._id, p.title]));
+    const deptName = new Map(departments.map((d) => [d._id, d.name]));
+    const teamName = new Map(teams.map((t) => [t._id, t.name]));
 
     const rows = await Promise.all(
       employees.map(async (e) => {
@@ -97,6 +100,12 @@ export const overview = query({
           positionTitle: e.positionId
             ? (posTitle.get(e.positionId) ?? null)
             : null,
+          departmentId: e.departmentId ?? null,
+          departmentName: e.departmentId
+            ? (deptName.get(e.departmentId) ?? null)
+            : null,
+          teamId: e.teamId ?? null,
+          teamName: e.teamId ? (teamName.get(e.teamId) ?? null) : null,
           currency: comp?.currency ?? null,
           baseMonthlyCents: comp?.baseMonthlyCents ?? null,
           cpfStatus: comp?.cpfStatus ?? null,
