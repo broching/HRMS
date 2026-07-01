@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation"
 import { auth } from "@clerk/nextjs/server"
 import { TopNav } from "@/components/layout/top-nav"
-import { SubNav } from "@/components/layout/sub-nav"
+import { SectionChrome } from "@/components/layout/section-chrome"
 import { LoadingBar } from "@/components/layout/loading-bar"
 import { EnsureMembership } from "@/components/layout/ensure-membership"
 
@@ -22,10 +22,7 @@ export default async function AppLayout({
       <EnsureMembership />
       <LoadingBar />
       <TopNav />
-      <SubNav />
-      <main className="mx-auto w-full max-w-[1400px] flex-1 py-6">
-        <div className="flex flex-col gap-4 md:gap-6">{children}</div>
-      </main>
+      <SectionChrome>{children}</SectionChrome>
     </div>
   )
 }

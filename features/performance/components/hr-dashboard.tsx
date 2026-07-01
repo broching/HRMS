@@ -6,6 +6,7 @@ import Link from "next/link"
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -28,6 +29,51 @@ function formatDate(iso: string): string {
     month: "short",
     year: "numeric",
   })
+}
+
+function initials(name: string): string {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase()
+}
+
+type PendingPerson = { name: string; photoUrl: string | null }
+
+function PendingAvatars({
+  people,
+  overflow,
+}: {
+  people: PendingPerson[]
+  overflow: number
+}) {
+  if (people.length === 0) {
+    return <span className="text-muted-foreground text-xs">—</span>
+  }
+  return (
+    <div className="flex items-center">
+      {people.map((p, i) => (
+        <Avatar
+          key={i}
+          title={p.name}
+          className="ring-background -ml-2 size-7 ring-2 first:ml-0"
+        >
+          <AvatarImage src={p.photoUrl ?? undefined} alt={p.name} />
+          <AvatarFallback className="text-[10px]">
+            {initials(p.name)}
+          </AvatarFallback>
+        </Avatar>
+      ))}
+      {overflow > 0 && (
+        <span className="bg-muted text-muted-foreground ring-background -ml-2 flex size-7 items-center justify-center rounded-full text-[10px] font-medium ring-2">
+          +{overflow}
+        </span>
+      )}
+    </div>
+  )
 }
 
 const STAGE_BADGE: Record<
@@ -149,6 +195,7 @@ export function HrPerformanceDashboard() {
                   <th className="pb-3 font-medium">Status</th>
                   <th className="pb-3 font-medium">Due date</th>
                   <th className="pb-3 font-medium">Completion</th>
+                  <th className="pb-3 font-medium">Pending completion</th>
                 </tr>
               </thead>
               <tbody>
@@ -180,6 +227,12 @@ export function HrPerformanceDashboard() {
                             {s.done}/{s.total}
                           </span>
                         </div>
+                      </td>
+                      <td className="py-3">
+                        <PendingAvatars
+                          people={s.pending}
+                          overflow={s.pendingOverflow}
+                        />
                       </td>
                     </tr>
                   )

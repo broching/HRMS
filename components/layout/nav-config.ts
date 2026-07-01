@@ -5,6 +5,12 @@ import {
   IconBriefcase,
   IconRss,
   IconSettings,
+  IconCalendarStats,
+  IconCalendarCheck,
+  IconReceipt2,
+  IconClockHour4,
+  IconCalendarTime,
+  IconChartBar,
   type Icon,
 } from "@tabler/icons-react"
 import type { Permission } from "@/convex/lib/permissions"
@@ -13,6 +19,7 @@ import type { HrmsRole } from "@/convex/lib/enums"
 export type NavLink = {
   title: string
   url: string
+  icon?: Icon
   permission?: Permission
   roles?: HrmsRole[]
 }
@@ -24,6 +31,9 @@ export type NavSection = {
   icon: Icon
   permission?: Permission
   roles?: HrmsRole[]
+  // "sidebar" renders the section's items in a left rail (like HR Lounge)
+  // instead of the horizontal sub-nav bar.
+  layout?: "subnav" | "sidebar"
   items: NavLink[]
 }
 
@@ -59,14 +69,15 @@ export const SECTIONS: NavSection[] = [
     url: "/team",
     icon: IconUsersGroup,
     roles: ["admin", "hr", "manager"],
+    layout: "sidebar",
     items: [
-      { title: "Team", url: "/team" },
-      { title: "Team Calendar", url: "/leave/calendar" },
-      { title: "Leave Approvals", url: "/leave/requests" },
-      { title: "Claim Approvals", url: "/claims/requests" },
-      { title: "Team Attendance", url: "/attendance/team" },
-      { title: "Roster", url: "/scheduling/roster" },
-      { title: "Team Reviews", url: "/performance/team" },
+      { title: "Team", url: "/team", icon: IconUsersGroup },
+      { title: "Team Calendar", url: "/leave/calendar", icon: IconCalendarStats },
+      { title: "Leave Approvals", url: "/leave/requests", icon: IconCalendarCheck },
+      { title: "Claim Approvals", url: "/claims/requests", icon: IconReceipt2 },
+      { title: "Team Attendance", url: "/attendance/team", icon: IconClockHour4 },
+      { title: "Roster", url: "/scheduling/roster", icon: IconCalendarTime },
+      { title: "Team Reviews", url: "/performance/team", icon: IconChartBar },
     ],
   },
   {

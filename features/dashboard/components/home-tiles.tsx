@@ -83,19 +83,19 @@ export function HomeTiles() {
   ]
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {tiles.map((t) => {
         const inner = (
           <Card
             className={cn(
-              "group h-full p-5 transition-colors",
+              "group h-full gap-0 p-4 transition-colors",
               t.href
                 ? "hover:border-primary/40 hover:bg-accent/40 cursor-pointer"
                 : "opacity-60",
             )}
           >
-            <div className="flex flex-col gap-6">
-              <t.icon className="text-primary size-8" stroke={1.5} />
+            <div className="flex flex-col gap-3">
+              <t.icon className="text-primary size-6" stroke={1.5} />
               <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-1 font-semibold">
                   {t.title}

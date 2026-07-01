@@ -13,6 +13,11 @@ const stageStatus = v.union(
   v.literal("completed"),
 );
 
+const pendingPerson = v.object({
+  name: v.string(),
+  photoUrl: v.union(v.string(), v.null()),
+});
+
 const stageRow = v.object({
   id: v.string(),
   label: v.string(),
@@ -22,6 +27,9 @@ const stageRow = v.object({
   total: v.number(),
   completionPct: v.number(),
   dueDate: v.union(v.string(), v.null()),
+  // Avatars of who still needs to act on this stage (capped for payload size).
+  pending: v.array(pendingPerson),
+  pendingOverflow: v.number(),
 });
 
 const dashboardResult = v.object({
@@ -48,6 +56,9 @@ const dashboardResult = v.object({
   }),
 });
 
+type Person = { name: string; photoUrl: string | null };
+const PENDING_CAP = 8;
+
 function toStage(
   id: string,
   label: string,
@@ -55,11 +66,23 @@ function toStage(
   done: number,
   total: number,
   dueDate: string | undefined,
+  pendingAll: Person[] = [],
 ) {
   const completionPct = total === 0 ? 0 : Math.round((done / total) * 100);
   const status: "pending" | "ongoing" | "completed" =
     total > 0 && done >= total ? "completed" : done > 0 ? "ongoing" : "pending";
-  return { id, label, group, status, done, total, completionPct, dueDate: dueDate ?? null };
+  return {
+    id,
+    label,
+    group,
+    status,
+    done,
+    total,
+    completionPct,
+    dueDate: dueDate ?? null,
+    pending: pendingAll.slice(0, PENDING_CAP),
+    pendingOverflow: Math.max(0, pendingAll.length - PENDING_CAP),
+  };
 }
 
 // The most relevant cycle to open by default: the active one, else the newest.
@@ -240,14 +263,33 @@ export const dashboard = query({
       .collect();
     const totalReviews = reviews.length;
 
+    // Resolve an employee's display name + avatar url, cached per request so we
+    // never call storage.getUrl twice for the same person across stages.
+    const empCache = new Map<Id<"employees">, Person>();
+    async function resolveEmp(id: Id<"employees">): Promise<Person> {
+      const hit = empCache.get(id);
+      if (hit) return hit;
+      const e = await ctx.db.get(id);
+      const info: Person = {
+        name: e ? `${e.firstName} ${e.lastName}` : "Unknown",
+        photoUrl: e?.photoStorageId
+          ? await ctx.storage.getUrl(e.photoStorageId)
+          : null,
+      };
+      empCache.set(id, info);
+      return info;
+    }
+    const resolveMany = (ids: Id<"employees">[]) =>
+      Promise.all(ids.map(resolveEmp));
+
     // Objectives confirmed: reviews with ≥1 objective row.
-    let reviewsWithObjectivesCount = 0;
+    const objectivesConfirmed = new Set<Id<"reviews">>();
     for (const r of reviews) {
       const o = await ctx.db
         .query("reviewObjectives")
         .withIndex("by_review", (q) => q.eq("reviewId", r._id))
         .first();
-      if (o) reviewsWithObjectivesCount += 1;
+      if (o) objectivesConfirmed.add(r._id);
     }
 
     // 360 assignments for the cycle, grouped by relationship.
@@ -261,34 +303,68 @@ export const dashboard = query({
     const upward = assignments.filter((a) => a.relationship === "upward");
     const peer = assignments.filter((a) => a.relationship === "peer");
 
-    const selfDone = reviews.filter((r) => r.selfSubmittedAt != null).length;
-    const appraiserDone = reviews.filter(
-      (r) => r.managerSubmittedAt != null,
-    ).length;
-    const calibratedDone = reviews.filter(
+    // Per-stage sets of who still needs to act (subjects for appraisal stages,
+    // givers for the 360 stages).
+    const pendingObjectives = reviews.filter((r) => !objectivesConfirmed.has(r._id));
+    const pendingSelf = reviews.filter((r) => r.selfSubmittedAt == null);
+    const pendingAppraiser = reviews.filter((r) => r.managerSubmittedAt == null);
+    const pendingCalibration = reviews.filter(
       (r) =>
-        r.calibratedRating != null ||
-        r.status === "released" ||
-        r.status === "completed",
-    ).length;
-    const releasedDone = reviews.filter(
-      (r) => r.releasedAt != null || r.status === "completed",
-    ).length;
-    const acknowledgedDone = reviews.filter(
-      (r) => r.acknowledgedAt != null,
-    ).length;
+        !(
+          r.calibratedRating != null ||
+          r.status === "released" ||
+          r.status === "completed"
+        ),
+    );
+    const pendingRelease = reviews.filter(
+      (r) => !(r.releasedAt != null || r.status === "completed"),
+    );
+    const pendingAcknowledge = reviews.filter((r) => r.acknowledgedAt == null);
+    const pendingAssign = reviews.filter(
+      (r) => !subjectsWithAssignment.has(r.employeeId),
+    );
+    const pendingUpward = upward.filter((a) => a.status !== "submitted");
+    const pendingPeer = peer.filter((a) => a.status !== "submitted");
+
+    const selfDone = totalReviews - pendingSelf.length;
+    const appraiserDone = totalReviews - pendingAppraiser.length;
+    const calibratedDone = totalReviews - pendingCalibration.length;
+    const releasedDone = totalReviews - pendingRelease.length;
+    const acknowledgedDone = totalReviews - pendingAcknowledge.length;
+
+    const [
+      pplObjectives,
+      pplSelf,
+      pplAppraiser,
+      pplCalibration,
+      pplRelease,
+      pplAcknowledge,
+      pplAssign,
+      pplUpward,
+      pplPeer,
+    ] = await Promise.all([
+      resolveMany(pendingObjectives.map((r) => r.employeeId)),
+      resolveMany(pendingSelf.map((r) => r.employeeId)),
+      resolveMany(pendingAppraiser.map((r) => r.employeeId)),
+      resolveMany(pendingCalibration.map((r) => r.employeeId)),
+      resolveMany(pendingRelease.map((r) => r.employeeId)),
+      resolveMany(pendingAcknowledge.map((r) => r.employeeId)),
+      resolveMany(pendingAssign.map((r) => r.employeeId)),
+      resolveMany(pendingUpward.map((a) => a.giverEmployeeId)),
+      resolveMany(pendingPeer.map((a) => a.giverEmployeeId)),
+    ]);
 
     const due = cycle.dueDates ?? {};
     const stages = [
-      toStage("confirm_objectives", "Confirm objectives", "Objectives", reviewsWithObjectivesCount, totalReviews, due.confirm_objectives),
-      toStage("self_appraisal", "Appraisal - Self appraisal", "Appraisal", selfDone, totalReviews, due.self_appraisal),
-      toStage("appraiser_appraisal", "Appraisal - Appraiser appraisal", "Appraisal", appraiserDone, totalReviews, due.appraiser_appraisal),
-      toStage("calibration", "Appraisal - Calibration", "Appraisal", calibratedDone, totalReviews, due.calibration),
-      toStage("release", "Appraisal - Release appraisal", "Appraisal", releasedDone, totalReviews, due.release),
-      toStage("acknowledge", "Appraisal - Acknowledge appraisal", "Appraisal", acknowledgedDone, totalReviews, due.acknowledge),
-      toStage("assign_360", "360 Feedbacks - Assign feedback givers", "360 Feedbacks", subjectsWithAssignment.size, totalReviews, due.assign_360),
-      toStage("upward_360", "360 Feedbacks - Upwards", "360 Feedbacks", upward.filter((a) => a.status === "submitted").length, upward.length, due.upward_360),
-      toStage("peer_360", "360 Feedbacks - Peer", "360 Feedbacks", peer.filter((a) => a.status === "submitted").length, peer.length, due.peer_360),
+      toStage("confirm_objectives", "Confirm objectives", "Objectives", objectivesConfirmed.size, totalReviews, due.confirm_objectives, pplObjectives),
+      toStage("self_appraisal", "Appraisal - Self appraisal", "Appraisal", selfDone, totalReviews, due.self_appraisal, pplSelf),
+      toStage("appraiser_appraisal", "Appraisal - Appraiser appraisal", "Appraisal", appraiserDone, totalReviews, due.appraiser_appraisal, pplAppraiser),
+      toStage("calibration", "Appraisal - Calibration", "Appraisal", calibratedDone, totalReviews, due.calibration, pplCalibration),
+      toStage("release", "Appraisal - Release appraisal", "Appraisal", releasedDone, totalReviews, due.release, pplRelease),
+      toStage("acknowledge", "Appraisal - Acknowledge appraisal", "Appraisal", acknowledgedDone, totalReviews, due.acknowledge, pplAcknowledge),
+      toStage("assign_360", "360 Feedbacks - Assign feedback givers", "360 Feedbacks", subjectsWithAssignment.size, totalReviews, due.assign_360, pplAssign),
+      toStage("upward_360", "360 Feedbacks - Upwards", "360 Feedbacks", upward.filter((a) => a.status === "submitted").length, upward.length, due.upward_360, pplUpward),
+      toStage("peer_360", "360 Feedbacks - Peer", "360 Feedbacks", peer.filter((a) => a.status === "submitted").length, peer.length, due.peer_360, pplPeer),
     ];
 
     const employees = (

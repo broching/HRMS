@@ -16,6 +16,8 @@ import {
   IconUserCog,
   IconUserPlus,
   IconBriefcase,
+  IconLayoutSidebarLeftCollapse,
+  IconLayoutSidebarLeftExpand,
   type Icon,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
@@ -55,6 +57,7 @@ const ITEMS: Item[] = [
 export function HrLoungeShell({ children }: { children: React.ReactNode }) {
   const member = useCurrentMember()
   const pathname = usePathname()
+  const [collapsed, setCollapsed] = React.useState(false)
 
   if (member === undefined) {
     return (
@@ -94,20 +97,46 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex flex-col gap-6 py-4 lg:flex-row">
-      <aside className="px-4 lg:w-60 lg:shrink-0 lg:pl-6">
-        <div className="mb-3 px-1">
-          <Link href="/hr-lounge" className="text-xl font-semibold">
+    <div className="flex flex-col gap-6 py-4 lg:flex-row lg:gap-0">
+      <aside
+        className={cn(
+          "px-4 transition-all duration-200 lg:shrink-0 lg:border-r lg:border-border/70 lg:pr-4 lg:pl-6",
+          collapsed ? "lg:w-20" : "lg:w-60",
+        )}
+      >
+        <div className="mb-3 flex items-center justify-between px-1">
+          <Link
+            href="/hr-lounge"
+            className={cn(
+              "text-xl font-semibold",
+              collapsed && "lg:sr-only",
+            )}
+          >
             HR Lounge
           </Link>
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="text-muted-foreground hover:bg-accent hover:text-foreground hidden size-8 shrink-0 items-center justify-center rounded-lg transition-colors lg:flex"
+          >
+            {collapsed ? (
+              <IconLayoutSidebarLeftExpand className="size-5" />
+            ) : (
+              <IconLayoutSidebarLeftCollapse className="size-5" />
+            )}
+          </button>
         </div>
         <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
           {ITEMS.map((item) => {
             const active = isActive(item)
             const content = (
               <span
+                title={collapsed ? item.label : undefined}
                 className={cn(
                   "flex items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-sm whitespace-nowrap transition-colors",
+                  collapsed && "lg:justify-center lg:px-2",
                   active
                     ? "border-primary/20 bg-primary/10 text-primary font-medium"
                     : "hover:bg-accent/50 border-transparent",
@@ -116,9 +145,11 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
               >
                 <span className="flex items-center gap-2.5">
                   <item.icon className="size-4 shrink-0" />
-                  {item.label}
+                  <span className={cn(collapsed && "lg:hidden")}>
+                    {item.label}
+                  </span>
                 </span>
-                {item.comingSoon && (
+                {item.comingSoon && !collapsed && (
                   <span className="text-muted-foreground hidden text-[10px] lg:inline">
                     Soon
                   </span>
@@ -146,7 +177,7 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
         </nav>
       </aside>
 
-      <div className="min-w-0 flex-1">{children}</div>
+      <div className="min-w-0 flex-1 lg:pl-6">{children}</div>
     </div>
   )
 }

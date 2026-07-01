@@ -20,6 +20,7 @@ import type * as crons from "../crons.js";
 import type * as customFields from "../customFields.js";
 import type * as dashboard from "../dashboard.js";
 import type * as departments from "../departments.js";
+import type * as developmentPlans from "../developmentPlans.js";
 import type * as employeeDocuments from "../employeeDocuments.js";
 import type * as employees from "../employees.js";
 import type * as equipment from "../equipment.js";
@@ -90,6 +91,7 @@ declare const fullApi: ApiFromModules<{
   customFields: typeof customFields;
   dashboard: typeof dashboard;
   departments: typeof departments;
+  developmentPlans: typeof developmentPlans;
   employeeDocuments: typeof employeeDocuments;
   employees: typeof employees;
   equipment: typeof equipment;

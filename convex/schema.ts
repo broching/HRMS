@@ -850,6 +850,25 @@ export default defineSchema({
     .index("by_employee_cycle", ["employeeId", "cycleId"])
     .index("by_cycle", ["cycleId"]),
 
+  // One development plan per employee. Self-service career-growth planning:
+  // short/mid/long-term goals, competencies, development needs, and an action
+  // checklist. Lists are small, user-curated arrays (like the employee resume
+  // fields), so a single doc per employee is fine.
+  developmentPlans: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    shortTerm: v.array(v.string()), // < 2 years
+    midTerm: v.array(v.string()), // 2–4 years
+    longTerm: v.array(v.string()), // > 4 years
+    currentCompetencies: v.array(v.string()),
+    developmentNeeds: v.array(v.string()),
+    actionPlan: v.array(v.object({ label: v.string(), done: v.boolean() })),
+    updatedAt: v.number(),
+    updatedBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_employee", ["employeeId"]),
+
   // One appraisal per (cycle, employee), holding both the self and manager
   // sections plus the final rating.
   reviews: defineTable({
