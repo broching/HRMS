@@ -10,17 +10,138 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
+import type { FunctionReturnType } from "convex/server"
 import {
   CYCLE_STATUS_BADGE,
   CYCLE_STATUS_LABELS,
 } from "@/features/performance/lib/labels"
+
+type Cycle = FunctionReturnType<typeof api.reviewCycles.list>[number]
+
+function CycleConfigDialog({
+  cycle,
+  onClose,
+}: {
+  cycle: Cycle | null
+  onClose: () => void
+}) {
+  const updateConfig = useMutation(api.reviewCycles.updateConfig)
+  const [objW, setObjW] = React.useState("70")
+  const [scale, setScale] = React.useState("5")
+  const [questionnaire, setQuestionnaire] = React.useState("")
+  const [questions360, setQuestions360] = React.useState("")
+  const [busy, setBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!cycle) return
+    setObjW(String(cycle.objectivesWeightPct ?? 70))
+    setScale(String(cycle.ratingScaleMax))
+    setQuestionnaire((cycle.questionnaire ?? []).join("\n"))
+    setQuestions360((cycle.feedback360Questions ?? []).join("\n"))
+  }, [cycle])
+
+  const objNum = Number(objW) || 0
+  const compNum = 100 - objNum
+
+  async function save() {
+    if (!cycle) return
+    if (objNum < 0 || objNum > 100) {
+      toast.error("Objectives weight must be between 0 and 100.")
+      return
+    }
+    setBusy(true)
+    try {
+      await updateConfig({
+        cycleId: cycle._id,
+        ratingScaleMax: Number(scale) || 5,
+        objectivesWeightPct: objNum,
+        competenciesWeightPct: compNum,
+        questionnaire: questionnaire.split("\n"),
+        feedback360Questions: questions360.split("\n"),
+      })
+      toast.success("Cycle configuration saved.")
+      onClose()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't save configuration.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={!!cycle} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Configure {cycle?.name}</DialogTitle>
+          <DialogDescription>
+            Appraisal weighting, questionnaire and 360 questions for this cycle.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>Objectives %</Label>
+              <Input
+                inputMode="numeric"
+                value={objW}
+                onChange={(e) => setObjW(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>Competencies %</Label>
+              <Input value={compNum} readOnly disabled />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>Rating scale</Label>
+              <Input
+                inputMode="numeric"
+                value={scale}
+                onChange={(e) => setScale(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>Questionnaire (one question per line)</Label>
+            <Textarea
+              rows={4}
+              value={questionnaire}
+              onChange={(e) => setQuestionnaire(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>360 feedback questions (one per line)</Label>
+            <Textarea
+              rows={4}
+              value={questions360}
+              onChange={(e) => setQuestions360(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button onClick={save} disabled={busy}>
+            {busy ? "Saving…" : "Save configuration"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function CreateCycle() {
   const create = useMutation(api.reviewCycles.create)
@@ -113,6 +234,7 @@ export function ReviewCyclesSettings() {
   const activate = useMutation(api.reviewCycles.activate)
   const close = useMutation(api.reviewCycles.close)
   const remove = useMutation(api.reviewCycles.remove)
+  const [configCycle, setConfigCycle] = React.useState<Cycle | null>(null)
 
   async function run(p: Promise<unknown>, ok: string) {
     try {
@@ -154,6 +276,15 @@ export function ReviewCyclesSettings() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {c.status !== "closed" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setConfigCycle(c)}
+                    >
+                      Configure
+                    </Button>
+                  )}
                   {c.status === "draft" && (
                     <Button
                       size="sm"
@@ -219,6 +350,11 @@ export function ReviewCyclesSettings() {
           )}
         </CardContent>
       </Card>
+
+      <CycleConfigDialog
+        cycle={configCycle}
+        onClose={() => setConfigCycle(null)}
+      />
     </div>
   )
 }

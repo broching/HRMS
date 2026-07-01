@@ -2,11 +2,30 @@ import type {
   ReviewStatus,
   GoalStatus,
   ReviewCycleStatus,
+  Feedback360Relationship,
 } from "@/convex/lib/enums"
 
+export const FEEDBACK360_RELATIONSHIPS: Feedback360Relationship[] = [
+  "peer",
+  "upward",
+  "downward",
+]
+
+export const FEEDBACK360_RELATIONSHIP_LABELS: Record<
+  Feedback360Relationship,
+  string
+> = {
+  peer: "Peer",
+  upward: "Upward",
+  downward: "Downward",
+  self: "Self",
+}
+
 export const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
-  self_review: "Self-review",
-  manager_review: "Manager review",
+  self_review: "Self-appraisal",
+  manager_review: "Appraiser review",
+  calibration: "Calibration",
+  released: "Released",
   completed: "Completed",
 }
 
@@ -16,6 +35,8 @@ export const REVIEW_STATUS_BADGE: Record<
 > = {
   self_review: "secondary",
   manager_review: "secondary",
+  calibration: "outline",
+  released: "outline",
   completed: "default",
 }
 

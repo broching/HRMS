@@ -6,6 +6,7 @@ import {
   CLAIM_TYPE_DEFAULTS,
   defaultLeavePolicyFields,
 } from "./lib/sgDefaults";
+import { ensureDefaultCompetencies } from "./competencies";
 
 /**
  * Per-organization seeding, run once when an organization is first synced
@@ -41,6 +42,7 @@ export const seedOrganization = internalMutation({
     for (const ct of CLAIM_TYPE_DEFAULTS) {
       await ctx.db.insert("claimTypes", { orgId, ...ct });
     }
+    await ensureDefaultCompetencies(ctx, orgId);
     return null;
   },
 });

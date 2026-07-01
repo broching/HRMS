@@ -51,6 +51,11 @@ import {
   goalStatus,
   reviewStatus,
   feedAudience,
+  ratingBand,
+  competencyLevelDescriptor,
+  feedback360Relationship,
+  feedback360Status,
+  feedback360Answer,
 } from "./enums";
 
 /**
@@ -868,7 +873,81 @@ export const reviewCycleDoc = v.object({
   endDate: v.string(),
   status: reviewCycleStatus,
   ratingScaleMax: v.number(),
+  objectivesWeightPct: v.optional(v.number()),
+  competenciesWeightPct: v.optional(v.number()),
+  ratingBands: v.optional(v.array(ratingBand)),
+  questionnaire: v.optional(v.array(v.string())),
+  feedback360Questions: v.optional(v.array(v.string())),
+  dueDates: v.optional(v.record(v.string(), v.string())),
   createdBy: v.optional(v.id("users")),
+})
+
+export const competencyDoc = v.object({
+  _id: v.id("competencies"),
+  _creationTime: v.number(),
+  orgId: v.id("organizations"),
+  category: v.string(),
+  name: v.string(),
+  description: v.optional(v.string()),
+  levelDescriptors: v.optional(v.array(competencyLevelDescriptor)),
+  weightPct: v.optional(v.number()),
+  order: v.number(),
+  active: v.boolean(),
+})
+
+// A review objective line with the two-sided ratings (self + appraiser).
+export const reviewObjectiveRow = v.object({
+  _id: v.id("reviewObjectives"),
+  _creationTime: v.number(),
+  reviewId: v.id("reviews"),
+  cycleId: v.id("reviewCycles"),
+  employeeId: v.id("employees"),
+  category: v.union(v.string(), v.null()),
+  title: v.string(),
+  weight: v.number(),
+  progress: v.number(),
+  selfRating: v.union(v.number(), v.null()),
+  selfComment: v.union(v.string(), v.null()),
+  appraiserRating: v.union(v.number(), v.null()),
+  appraiserComment: v.union(v.string(), v.null()),
+  order: v.number(),
+})
+
+export const reviewCompetencyRow = v.object({
+  _id: v.id("reviewCompetencies"),
+  _creationTime: v.number(),
+  reviewId: v.id("reviews"),
+  cycleId: v.id("reviewCycles"),
+  employeeId: v.id("employees"),
+  competencyId: v.union(v.id("competencies"), v.null()),
+  category: v.string(),
+  name: v.string(),
+  description: v.union(v.string(), v.null()),
+  level: v.union(v.number(), v.null()),
+  weightPct: v.number(),
+  selfRating: v.union(v.number(), v.null()),
+  selfComment: v.union(v.string(), v.null()),
+  appraiserRating: v.union(v.number(), v.null()),
+  appraiserComment: v.union(v.string(), v.null()),
+  order: v.number(),
+})
+
+// A 360-feedback assignment. `giverName`/`answers` are only populated for callers
+// allowed to see results (HR + subject's manager); the giver's own queue sees a
+// redacted row without the subject-only fields.
+export const feedback360AssignmentRow = v.object({
+  _id: v.id("feedback360Assignments"),
+  _creationTime: v.number(),
+  cycleId: v.id("reviewCycles"),
+  cycleName: v.string(),
+  subjectEmployeeId: v.id("employees"),
+  subjectName: v.string(),
+  giverEmployeeId: v.id("employees"),
+  giverName: v.union(v.string(), v.null()),
+  relationship: feedback360Relationship,
+  status: feedback360Status,
+  submittedAt: v.union(v.number(), v.null()),
+  answers: v.union(v.array(feedback360Answer), v.null()),
 })
 
 export const goalRow = v.object({
@@ -931,6 +1010,62 @@ export const feedbackRow = v.object({
   subjectEmployeeId: v.id("employees"),
   authorName: v.string(),
   body: v.string(),
+})
+
+// Aggregated appraisal detail for the HR Lounge appraisal page (header + form
+// scaffolding). Objective/competency lines are fetched via their own queries.
+export const appraisalDetail = v.object({
+  _id: v.id("reviews"),
+  cycleId: v.id("reviewCycles"),
+  cycleName: v.string(),
+  cycleStartDate: v.string(),
+  cycleEndDate: v.string(),
+  ratingScaleMax: v.number(),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  employeeTitle: v.union(v.string(), v.null()),
+  departmentName: v.union(v.string(), v.null()),
+  appraiserId: v.union(v.id("employees"), v.null()),
+  appraiserName: v.union(v.string(), v.null()),
+  status: reviewStatus,
+  competencyLevel: v.union(v.number(), v.null()),
+  objectivesWeightPct: v.number(),
+  competenciesWeightPct: v.number(),
+  objectivesScore: v.union(v.number(), v.null()),
+  competenciesScore: v.union(v.number(), v.null()),
+  overallRating: v.union(v.number(), v.null()),
+  ratingBand: v.union(v.string(), v.null()),
+  selfSubmittedAt: v.union(v.number(), v.null()),
+  managerSubmittedAt: v.union(v.number(), v.null()),
+  acknowledgedAt: v.union(v.number(), v.null()),
+  // Questionnaire: cycle questions paired with self + appraiser answers.
+  questionnaire: v.array(
+    v.object({
+      question: v.string(),
+      selfAnswer: v.union(v.string(), v.null()),
+      appraiserAnswer: v.union(v.string(), v.null()),
+    }),
+  ),
+  // Caller capabilities, resolved server-side.
+  canSelf: v.boolean(),
+  canAppraiser: v.boolean(),
+  canAcknowledge: v.boolean(),
+  canViewFeedback: v.boolean(),
+})
+
+// A 360-feedback assignment as seen by the giver (their own queue). Shows who
+// they're reviewing + the questions + their in-progress answers.
+export const feedback360QueueRow = v.object({
+  _id: v.id("feedback360Assignments"),
+  _creationTime: v.number(),
+  cycleId: v.id("reviewCycles"),
+  cycleName: v.string(),
+  subjectEmployeeId: v.id("employees"),
+  subjectName: v.string(),
+  relationship: feedback360Relationship,
+  status: feedback360Status,
+  questions: v.array(v.string()),
+  answers: v.array(feedback360Answer),
 })
 
 export const customFieldDefDoc = v.object({

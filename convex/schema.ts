@@ -57,6 +57,11 @@ import {
   goalStatus,
   reviewStatus,
   feedAudience,
+  ratingBand,
+  competencyLevelDescriptor,
+  feedback360Relationship,
+  feedback360Status,
+  feedback360Answer,
 } from "./lib/enums";
 
 export default defineSchema({
@@ -733,10 +738,99 @@ export default defineSchema({
     endDate: v.string(),
     status: reviewCycleStatus,
     ratingScaleMax: v.number(), // e.g. 5
+    // Appraisal weighting: objectives vs competencies (should sum to 100).
+    objectivesWeightPct: v.optional(v.number()), // default 70
+    competenciesWeightPct: v.optional(v.number()), // default 30
+    // Qualitative bands applied to the numeric overall rating.
+    ratingBands: v.optional(v.array(ratingBand)),
+    // Configurable appraisal questionnaire (parallel self + appraiser answers).
+    questionnaire: v.optional(v.array(v.string())),
+    // Configurable 360-feedback questions.
+    feedback360Questions: v.optional(v.array(v.string())),
+    // Optional per-stage due dates keyed by stage id (dashboard progress).
+    dueDates: v.optional(v.record(v.string(), v.string())),
     createdBy: v.optional(v.id("users")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
+
+  // Org competency library. Competencies are grouped by `category` (e.g.
+  // "Functional Knowledge") and carry per-level behaviour descriptors. Referenced
+  // by the appraisal's competency section.
+  competencies: defineTable({
+    orgId: v.id("organizations"),
+    category: v.string(), // grouping header, e.g. "Functional Knowledge"
+    name: v.string(), // e.g. "Own your expertise"
+    description: v.optional(v.string()),
+    levelDescriptors: v.optional(v.array(competencyLevelDescriptor)),
+    weightPct: v.optional(v.number()), // relative weight within the competency section
+    order: v.number(),
+    active: v.boolean(),
+  }).index("by_org", ["orgId"]),
+
+  // Per-review snapshot of an employee's weighted objectives (the "Objectives
+  // Feedback" tab). Seeded from the employee's goals when objectives are
+  // confirmed, then rated 1–N by both the employee (self) and the appraiser.
+  reviewObjectives: defineTable({
+    orgId: v.id("organizations"),
+    reviewId: v.id("reviews"),
+    cycleId: v.id("reviewCycles"),
+    employeeId: v.id("employees"),
+    category: v.optional(v.string()), // grouping header, e.g. "Professionalism"
+    title: v.string(),
+    weight: v.number(), // percentage weighting within objectives
+    progress: v.number(), // 0–100
+    selfRating: v.optional(v.number()),
+    selfComment: v.optional(v.string()),
+    appraiserRating: v.optional(v.number()),
+    appraiserComment: v.optional(v.string()),
+    order: v.number(),
+    sourceGoalId: v.optional(v.id("goals")),
+  })
+    .index("by_review", ["reviewId"])
+    .index("by_employee_cycle", ["employeeId", "cycleId"]),
+
+  // Per-review snapshot of competency ratings (the "Competencies feedback" tab).
+  // Denormalizes the competency name/description/level at generation time so the
+  // appraisal stays stable if the library later changes.
+  reviewCompetencies: defineTable({
+    orgId: v.id("organizations"),
+    reviewId: v.id("reviews"),
+    cycleId: v.id("reviewCycles"),
+    employeeId: v.id("employees"),
+    competencyId: v.optional(v.id("competencies")),
+    category: v.string(),
+    name: v.string(),
+    description: v.optional(v.string()),
+    level: v.optional(v.number()), // expected competency level
+    weightPct: v.number(),
+    selfRating: v.optional(v.number()),
+    selfComment: v.optional(v.string()),
+    appraiserRating: v.optional(v.number()),
+    appraiserComment: v.optional(v.string()),
+    order: v.number(),
+  })
+    .index("by_review", ["reviewId"])
+    .index("by_employee_cycle", ["employeeId", "cycleId"]),
+
+  // A 360-feedback assignment: `giverEmployeeId` is asked to give feedback about
+  // `subjectEmployeeId` for a cycle. Answers are embedded once submitted.
+  // Results are visible only to HR + the subject's manager (never the subject).
+  feedback360Assignments: defineTable({
+    orgId: v.id("organizations"),
+    cycleId: v.id("reviewCycles"),
+    subjectEmployeeId: v.id("employees"),
+    giverEmployeeId: v.id("employees"),
+    relationship: feedback360Relationship,
+    status: feedback360Status,
+    assignedByUserId: v.optional(v.id("users")),
+    submittedAt: v.optional(v.number()),
+    answers: v.optional(v.array(feedback360Answer)),
+  })
+    .index("by_cycle", ["cycleId"])
+    .index("by_cycle_subject", ["cycleId", "subjectEmployeeId"])
+    .index("by_subject", ["subjectEmployeeId"])
+    .index("by_giver_status", ["giverEmployeeId", "status"]),
 
   // An employee goal / KPI. May belong to a cycle or stand alone.
   goals: defineTable({
@@ -762,7 +856,7 @@ export default defineSchema({
     orgId: v.id("organizations"),
     cycleId: v.id("reviewCycles"),
     employeeId: v.id("employees"),
-    managerId: v.optional(v.id("employees")), // snapshot at generation
+    managerId: v.optional(v.id("employees")), // snapshot at generation (= appraiser)
     status: reviewStatus,
     selfRating: v.optional(v.number()),
     selfComments: v.optional(v.string()),
@@ -771,6 +865,16 @@ export default defineSchema({
     managerComments: v.optional(v.string()),
     managerSubmittedAt: v.optional(v.number()),
     overallRating: v.optional(v.number()),
+    // Rich appraisal fields (weighted dual-rating model).
+    competencyLevel: v.optional(v.number()), // employee's level this cycle
+    selfAnswers: v.optional(v.array(v.string())), // questionnaire answers (self)
+    appraiserAnswers: v.optional(v.array(v.string())), // questionnaire (appraiser)
+    objectivesScore: v.optional(v.number()), // weighted avg of objective ratings
+    competenciesScore: v.optional(v.number()), // weighted avg of competency ratings
+    ratingBand: v.optional(v.string()), // qualitative label for overallRating
+    calibratedRating: v.optional(v.number()), // HR-adjusted final, if any
+    releasedAt: v.optional(v.number()),
+    acknowledgedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_cycle", ["cycleId"])

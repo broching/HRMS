@@ -3,6 +3,14 @@ import { v } from "convex/values";
 import { requireOrg, requirePermission } from "./auth";
 import { writeAuditLog } from "./lib/audit";
 import { reviewCycleDoc } from "./lib/validators";
+import { ensureDefaultCompetencies } from "./competencies";
+import {
+  DEFAULT_OBJECTIVES_WEIGHT_PCT,
+  DEFAULT_COMPETENCIES_WEIGHT_PCT,
+  DEFAULT_RATING_BANDS,
+  DEFAULT_QUESTIONNAIRE,
+  DEFAULT_360_QUESTIONS,
+} from "./lib/performanceDefaults";
 
 // Any org member can see cycles (to find their active review); management is
 // gated by performance:manage.
@@ -31,6 +39,8 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { orgId, userId } = await requirePermission(ctx, "performance:manage");
     if (!args.name.trim()) throw new Error("Cycle needs a name.");
+    // Ensure the org has a competency library to draw appraisals from.
+    await ensureDefaultCompetencies(ctx, orgId);
     const id = await ctx.db.insert("reviewCycles", {
       orgId,
       name: args.name.trim(),
@@ -38,6 +48,11 @@ export const create = mutation({
       endDate: args.endDate,
       status: "draft",
       ratingScaleMax: args.ratingScaleMax ?? 5,
+      objectivesWeightPct: DEFAULT_OBJECTIVES_WEIGHT_PCT,
+      competenciesWeightPct: DEFAULT_COMPETENCIES_WEIGHT_PCT,
+      ratingBands: DEFAULT_RATING_BANDS.map((b) => ({ ...b })),
+      questionnaire: [...DEFAULT_QUESTIONNAIRE],
+      feedback360Questions: [...DEFAULT_360_QUESTIONS],
       createdBy: userId,
     });
     await writeAuditLog(ctx, {
@@ -112,6 +127,59 @@ export const activate = mutation({
       after: { created },
     });
     return { created };
+  },
+});
+
+// Edit a cycle's appraisal configuration (weights, questionnaire, 360 questions,
+// rating scale). Weights, if both supplied, must sum to 100.
+export const updateConfig = mutation({
+  args: {
+    cycleId: v.id("reviewCycles"),
+    ratingScaleMax: v.optional(v.number()),
+    objectivesWeightPct: v.optional(v.number()),
+    competenciesWeightPct: v.optional(v.number()),
+    questionnaire: v.optional(v.array(v.string())),
+    feedback360Questions: v.optional(v.array(v.string())),
+  },
+  returns: v.null(),
+  handler: async (ctx, { cycleId, ...patch }) => {
+    const { orgId, userId } = await requirePermission(ctx, "performance:manage");
+    const cycle = await ctx.db.get(cycleId);
+    if (!cycle || cycle.orgId !== orgId) throw new Error("Cycle not found.");
+    if (
+      patch.objectivesWeightPct !== undefined &&
+      patch.competenciesWeightPct !== undefined &&
+      patch.objectivesWeightPct + patch.competenciesWeightPct !== 100
+    ) {
+      throw new Error("Objectives and competencies weights must sum to 100%.");
+    }
+    await ctx.db.patch(cycleId, {
+      ...(patch.ratingScaleMax !== undefined && {
+        ratingScaleMax: patch.ratingScaleMax,
+      }),
+      ...(patch.objectivesWeightPct !== undefined && {
+        objectivesWeightPct: patch.objectivesWeightPct,
+      }),
+      ...(patch.competenciesWeightPct !== undefined && {
+        competenciesWeightPct: patch.competenciesWeightPct,
+      }),
+      ...(patch.questionnaire !== undefined && {
+        questionnaire: patch.questionnaire.map((q) => q.trim()).filter(Boolean),
+      }),
+      ...(patch.feedback360Questions !== undefined && {
+        feedback360Questions: patch.feedback360Questions
+          .map((q) => q.trim())
+          .filter(Boolean),
+      }),
+    });
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "reviewCycle.update_config",
+      entity: "reviewCycles",
+      entityId: cycleId,
+    });
+    return null;
   },
 });
 

@@ -558,13 +558,63 @@ export type GoalStatus =
   | "completed"
   | "cancelled";
 
-// Appraisal workflow: employee self-review → manager review → completed.
+// Appraisal workflow: employee self-review → appraiser review → calibration →
+// released → completed (acknowledged). The intermediate stages are optional
+// stops HR steps through; the legacy flow (self → manager → completed) still
+// applies for reviews created before the richer pipeline.
 export const reviewStatus = v.union(
   v.literal("self_review"),
   v.literal("manager_review"),
+  v.literal("calibration"),
+  v.literal("released"),
   v.literal("completed"),
 );
-export type ReviewStatus = "self_review" | "manager_review" | "completed";
+export type ReviewStatus =
+  | "self_review"
+  | "manager_review"
+  | "calibration"
+  | "released"
+  | "completed";
+
+// Who a 360-feedback giver is relative to the subject.
+export const feedback360Relationship = v.union(
+  v.literal("peer"),
+  v.literal("upward"), // giver reports to the subject (rates their manager up)
+  v.literal("downward"), // giver manages the subject
+  v.literal("self"),
+);
+export type Feedback360Relationship =
+  | "peer"
+  | "upward"
+  | "downward"
+  | "self";
+
+export const feedback360Status = v.union(
+  v.literal("pending"),
+  v.literal("submitted"),
+);
+export type Feedback360Status = "pending" | "submitted";
+
+// One answer within a 360-feedback submission (a rating + optional comment for a
+// configured question).
+export const feedback360Answer = v.object({
+  question: v.string(),
+  rating: v.optional(v.number()),
+  comment: v.optional(v.string()),
+});
+
+// A rating band label keyed off an overall-rating threshold (e.g. ">4 = Above
+// expectations"). Used to translate a numeric overall into a qualitative label.
+export const ratingBand = v.object({
+  min: v.number(),
+  label: v.string(),
+});
+
+// A per-level descriptor for a competency (Level 1–5 behaviour statements).
+export const competencyLevelDescriptor = v.object({
+  level: v.number(),
+  description: v.string(),
+});
 
 // Org-level settings persisted on the `organizations` table.
 export const orgSettings = v.object({

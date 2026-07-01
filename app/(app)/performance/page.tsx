@@ -1,6 +1,7 @@
 import { PageHeader } from "@/components/shared/page-header"
 import { MyReviews } from "@/features/performance/components/my-reviews"
 import { GoalsList } from "@/features/performance/components/goals-list"
+import { My360Requests } from "@/features/performance/components/my-360-requests"
 
 export default function PerformancePage() {
   return (
@@ -11,6 +12,7 @@ export default function PerformancePage() {
       />
       <GoalsList title="My goals" />
       <MyReviews />
+      <My360Requests />
     </div>
   )
 }
