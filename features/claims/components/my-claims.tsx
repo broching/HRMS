@@ -1,13 +1,14 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
 import { IconSearch } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { ClaimStatus } from "@/convex/lib/enums"
+import { getErrorMessage } from "@/lib/errors"
+import { ClaimDetailDialog } from "@/features/claims/components/claim-detail"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -52,13 +53,14 @@ export function MyClaims() {
   const [status, setStatus] = React.useState(ALL)
   const [search, setSearch] = React.useState("")
   const [fromDate, setFromDate] = React.useState("")
+  const [openId, setOpenId] = React.useState<Id<"claims"> | null>(null)
 
   async function handleCancel(claimId: Id<"claims">) {
     try {
       await cancel({ claimId })
       toast.success("Claim cancelled")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not cancel")
+      toast.error(getErrorMessage(e, "Couldn't cancel this claim"))
     }
   }
 
@@ -160,14 +162,13 @@ export function MyClaims() {
               </TableRow>
             ) : (
               filtered.map((c) => (
-                <TableRow key={c._id}>
+                <TableRow
+                  key={c._id}
+                  className="hover:bg-muted/50 cursor-pointer"
+                  onClick={() => setOpenId(c._id)}
+                >
                   <TableCell>
-                    <Link
-                      href={`/claims/${c._id}`}
-                      className="font-medium hover:underline"
-                    >
-                      {c.claimTypeName}
-                    </Link>
+                    <span className="font-medium">{c.claimTypeName}</span>
                     <div className="text-muted-foreground max-w-[280px] truncate text-xs">
                       {c.description}
                     </div>
@@ -182,15 +183,25 @@ export function MyClaims() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button asChild variant="ghost" size="sm">
-                      <Link href={`/claims/${c._id}`}>View</Link>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setOpenId(c._id)
+                      }}
+                    >
+                      View
                     </Button>
                     {(c.status === "pending_manager" ||
                       c.status === "pending_finance") && (
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleCancel(c._id)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleCancel(c._id)
+                        }}
                       >
                         Cancel
                       </Button>
@@ -202,6 +213,12 @@ export function MyClaims() {
           </TableBody>
         </Table>
       </div>
+
+      <ClaimDetailDialog
+        claimId={openId}
+        open={openId !== null}
+        onOpenChange={(o) => !o && setOpenId(null)}
+      />
     </div>
   )
 }

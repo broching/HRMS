@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
-import { IconBell } from "@tabler/icons-react"
+import { IconBell, IconCheck } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import { useCurrentMember } from "@/hooks/use-current-member"
 import { Badge } from "@/components/ui/badge"
@@ -48,6 +48,8 @@ function relativeTime(ms: number): string {
   return new Date(ms).toLocaleDateString()
 }
 
+const PAGE_SIZE = 8
+
 export function NotificationCenter() {
   const member = useCurrentMember()
   const enabled = member != null
@@ -55,11 +57,20 @@ export function NotificationCenter() {
   const unread = useQuery(api.notifications.unreadCount, enabled ? {} : "skip")
   const markRead = useMutation(api.notifications.markRead)
   const markAllRead = useMutation(api.notifications.markAllRead)
+  const [visible, setVisible] = React.useState(PAGE_SIZE)
 
   if (!enabled) return null
 
   const count = unread ?? 0
   const items = notifications ?? []
+
+  // Unread float to the top; read ones sink to the bottom. Newest-first within
+  // each group.
+  const sorted = [...items].sort(
+    (a, b) => Number(a.read) - Number(b.read) || b._creationTime - a._creationTime,
+  )
+  const shown = sorted.slice(0, visible)
+  const hasMore = sorted.length > visible
 
   return (
     <DropdownMenu>
@@ -96,32 +107,66 @@ export function NotificationCenter() {
               You&apos;re all caught up.
             </p>
           ) : (
-            items.map((n) => (
-              <Link
-                key={n._id}
-                href={hrefFor(n.type)}
-                onClick={() => {
-                  if (!n.read) markRead({ notificationId: n._id })
-                }}
-                className={cn(
-                  "hover:bg-accent/60 flex flex-col gap-0.5 border-b px-3 py-2.5 text-sm last:border-b-0",
-                  !n.read && "bg-primary/5",
-                )}
-              >
-                <span className="flex items-center gap-2 font-medium">
-                  {!n.read && (
-                    <span className="bg-primary size-1.5 shrink-0 rounded-full" />
+            <>
+              {shown.map((n) => (
+                <div
+                  key={n._id}
+                  className={cn(
+                    "hover:bg-accent/60 group flex items-start border-b last:border-b-0",
+                    !n.read && "bg-primary/5",
                   )}
-                  {n.title}
-                </span>
-                {n.body && (
-                  <span className="text-muted-foreground text-xs">{n.body}</span>
-                )}
-                <span className="text-muted-foreground text-[10px]">
-                  {relativeTime(n._creationTime)}
-                </span>
-              </Link>
-            ))
+                >
+                  <Link
+                    href={hrefFor(n.type)}
+                    onClick={() => {
+                      if (!n.read) markRead({ notificationId: n._id })
+                    }}
+                    className="flex flex-1 flex-col gap-0.5 px-3 py-2.5 text-sm"
+                  >
+                    <span className="flex items-center gap-2 font-medium">
+                      {!n.read && (
+                        <span className="bg-primary size-1.5 shrink-0 rounded-full" />
+                      )}
+                      {n.title}
+                    </span>
+                    {n.body && (
+                      <span className="text-muted-foreground text-xs">{n.body}</span>
+                    )}
+                    <span className="text-muted-foreground text-[10px]">
+                      {relativeTime(n._creationTime)}
+                    </span>
+                  </Link>
+                  {!n.read && (
+                    <button
+                      type="button"
+                      title="Mark as read"
+                      aria-label="Mark as read"
+                      className="text-muted-foreground hover:text-foreground hover:bg-accent mt-2 mr-1.5 shrink-0 rounded-md p-1"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        markRead({ notificationId: n._id })
+                      }}
+                    >
+                      <IconCheck className="size-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {hasMore && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground w-full rounded-none text-xs"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    setVisible((v) => v + PAGE_SIZE)
+                  }}
+                >
+                  View older
+                </Button>
+              )}
+            </>
           )}
         </div>
       </DropdownMenuContent>

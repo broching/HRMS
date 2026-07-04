@@ -32,14 +32,6 @@ export const CLAIM_CATEGORY_LABELS: Record<ClaimCategory, string> = {
   custom: "Custom",
 }
 
-// The ordered workflow stages for the status timeline.
-export const CLAIM_FLOW: ClaimStatus[] = [
-  "pending_manager",
-  "pending_finance",
-  "approved",
-  "reimbursed",
-]
-
 export function formatMoney(cents: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, {

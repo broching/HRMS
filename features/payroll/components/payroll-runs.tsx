@@ -5,10 +5,18 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
-import { IconPlus, IconCalendarEvent, IconFileDollar } from "@tabler/icons-react"
+import {
+  IconPlus,
+  IconCalendarEvent,
+  IconFileDollar,
+  IconTrash,
+} from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { ConfirmDialog } from "@/components/shared/confirm-dialog"
+import { getErrorMessage } from "@/lib/errors"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
@@ -112,6 +120,7 @@ function NewRunDialog({ trigger }: { trigger: React.ReactNode }) {
 }
 
 function RunCard(props: {
+  runId: Id<"payrollRuns">
   href: string
   label: string
   status: keyof typeof PAYROLL_STATUS_LABELS
@@ -119,29 +128,72 @@ function RunCard(props: {
   grossCents: number
   currency: string
 }) {
+  const deleteRun = useMutation(api.payroll.deleteRun)
+  const [confirmOpen, setConfirmOpen] = React.useState(false)
+  const isDraft = props.status === "draft"
+
+  async function remove() {
+    try {
+      await deleteRun({ runId: props.runId })
+      toast.success("Draft deleted")
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't delete draft"))
+      throw e
+    }
+  }
+
   return (
-    <Link
-      href={props.href}
-      className="hover:border-primary/40 hover:bg-muted/40 rounded-lg border p-4 transition-colors"
-    >
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="font-semibold">{props.label}</p>
-          <p className="text-muted-foreground text-xs">
-            {props.payslipCount} employee{props.payslipCount === 1 ? "" : "s"}
+    <div className="relative">
+      <Link
+        href={props.href}
+        className="hover:border-primary/40 hover:bg-muted/40 block rounded-lg border p-4 transition-colors"
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="font-semibold">{props.label}</p>
+            <p className="text-muted-foreground text-xs">
+              {props.payslipCount} employee{props.payslipCount === 1 ? "" : "s"}
+            </p>
+          </div>
+          <Badge variant={PAYROLL_STATUS_BADGE[props.status]}>
+            {PAYROLL_STATUS_LABELS[props.status]}
+          </Badge>
+        </div>
+        <div className="mt-4">
+          <p className="text-muted-foreground text-xs">Total payout</p>
+          <p className="text-lg font-semibold tabular-nums">
+            {formatMoney(props.grossCents, props.currency)}
           </p>
         </div>
-        <Badge variant={PAYROLL_STATUS_BADGE[props.status]}>
-          {PAYROLL_STATUS_LABELS[props.status]}
-        </Badge>
-      </div>
-      <div className="mt-4">
-        <p className="text-muted-foreground text-xs">Total payout</p>
-        <p className="text-lg font-semibold tabular-nums">
-          {formatMoney(props.grossCents, props.currency)}
-        </p>
-      </div>
-    </Link>
+      </Link>
+
+      {isDraft && (
+        <>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground hover:text-destructive absolute right-2 bottom-2 size-8"
+            aria-label="Delete draft"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setConfirmOpen(true)
+            }}
+          >
+            <IconTrash className="size-4" />
+          </Button>
+          <ConfirmDialog
+            open={confirmOpen}
+            onOpenChange={setConfirmOpen}
+            title={`Delete ${props.label}?`}
+            description="This permanently removes the draft run and its payslips. This can't be undone."
+            confirmLabel="Delete draft"
+            destructive
+            onConfirm={remove}
+          />
+        </>
+      )}
+    </div>
   )
 }
 
@@ -245,6 +297,7 @@ export function PayrollRuns() {
           {filtered.map((r) => (
             <RunCard
               key={r._id}
+              runId={r._id}
               href={`/hr-lounge/payroll/runs/${r._id}`}
               label={r.label}
               status={r.status}

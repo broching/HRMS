@@ -12,8 +12,6 @@ import {
   IconFileDollar,
   type Icon,
 } from "@tabler/icons-react"
-import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission } from "@/convex/lib/permissions"
 import { cn } from "@/lib/utils"
 import { Card } from "@/components/ui/card"
 
@@ -26,10 +24,6 @@ type Tile = {
 }
 
 export function HomeTiles() {
-  const member = useCurrentMember()
-  const role = member?.role
-  const canReadAll = role ? hasPermission(role, "employees:read:all") : false
-
   const tiles: Tile[] = [
     {
       title: "My Profile",
@@ -41,8 +35,7 @@ export function HomeTiles() {
       title: "Directory",
       description: "List of employees in the company",
       icon: IconAddressBook,
-      href: canReadAll ? "/employees" : undefined,
-      soon: !canReadAll,
+      href: "/employees",
     },
     {
       title: "My Leave",

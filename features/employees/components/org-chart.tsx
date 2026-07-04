@@ -126,12 +126,13 @@ export function OrgChart() {
     drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }
   }
   function onPointerMove(e: React.PointerEvent) {
-    if (!drag.current) return
-    setView((v) => ({
-      ...v,
-      x: drag.current!.vx + (e.clientX - drag.current!.x),
-      y: drag.current!.vy + (e.clientY - drag.current!.y),
-    }))
+    const d = drag.current
+    if (!d) return
+    // Capture the pan origin now — the setView updater runs lazily at render
+    // time, by which point a fast pointerup/leave may have nulled drag.current.
+    const nx = d.vx + (e.clientX - d.x)
+    const ny = d.vy + (e.clientY - d.y)
+    setView((v) => ({ ...v, x: nx, y: ny }))
   }
   function endDrag() {
     drag.current = null

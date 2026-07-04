@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import { getErrorMessage } from "@/lib/errors"
 import { dollarsToCents, centsToInput } from "@/features/payroll/lib/labels"
 
 type Options = FunctionReturnType<typeof api.claimSettings.options>
@@ -250,7 +251,7 @@ export function ClaimSettingsGeneral() {
       })
       toast.success("Claim settings saved")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save settings")
+      toast.error(getErrorMessage(e, "Couldn't save settings"))
     } finally {
       setBusy(false)
     }

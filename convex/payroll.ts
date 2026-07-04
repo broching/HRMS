@@ -16,6 +16,7 @@ import {
   payrollAdjustmentKind,
   payrollAdjustmentSource,
   overtimeMeta,
+  claimStatus,
 } from "./lib/enums";
 import { writeAuditLog } from "./lib/audit";
 
@@ -435,6 +436,23 @@ export const markPaid = mutation({
     });
     await setRunStatus(ctx, runId, "paid", orgId);
 
+    // Any claims that were pulled into this run are now reimbursed via payroll —
+    // close them out so they can't be re-pulled into a future run.
+    const claimAdjustments = await ctx.db
+      .query("payrollAdjustments")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    for (const adj of claimAdjustments) {
+      if (adj.source !== "claim" || !adj.sourceRefId) continue;
+      const claim = await ctx.db.get(adj.sourceRefId as Id<"claims">);
+      if (!claim || claim.orgId !== orgId) continue;
+      if (claim.status === "reimbursed") continue;
+      await ctx.db.patch(claim._id, {
+        status: "reimbursed",
+        reimbursedAt: Date.now(),
+      });
+    }
+
     // Notify each employee that their payslip has been released.
     const slips = await ctx.db
       .query("payslips")
@@ -806,6 +824,182 @@ export const syncAutoItems = mutation({
   },
 });
 
+// ─── Roster editing (add / remove employees) ─────────────────────────────────
+
+// Add an employee to a draft run. Requires compensation on file for the period;
+// creates their draft payslip and re-sums totals. No-op-safe against duplicates.
+export const addEmployeeToRun = mutation({
+  args: { runId: v.id("payrollRuns"), employeeId: v.id("employees") },
+  returns: v.null(),
+  handler: async (ctx, { runId, employeeId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
+    if (run.status !== "draft") throw new Error("Only draft runs can be edited.");
+    const emp = await ctx.db.get(employeeId);
+    if (!emp || emp.orgId !== orgId) throw new Error("Employee not found.");
+
+    const existing = await ctx.db
+      .query("payslips")
+      .withIndex("by_run_employee", (q) =>
+        q.eq("runId", runId).eq("employeeId", employeeId),
+      )
+      .first();
+    if (existing) throw new Error("This employee is already in the run.");
+
+    const periodEnd = periodEndDate(run.periodMonth);
+    const comp = await effectiveCompensation(ctx, employeeId, periodEnd);
+    if (!comp) {
+      throw new Error("This employee has no compensation on file for this period.");
+    }
+    const slip = computePayslip(comp, emp.dob, periodEnd, []);
+    await ctx.db.insert("payslips", {
+      orgId,
+      runId,
+      employeeId,
+      periodMonth: run.periodMonth,
+      currency: comp.currency,
+      baseCents: slip.baseCents,
+      allowancesCents: slip.allowancesCents,
+      grossCents: slip.grossCents,
+      cpfableWageCents: slip.cpfableWageCents,
+      employeeCpfCents: slip.employeeCpfCents,
+      employerCpfCents: slip.employerCpfCents,
+      netCents: slip.netCents,
+      cpfStatus: slip.cpfStatus,
+      lines: slip.lines,
+      status: "draft",
+    });
+    await recomputeRunTotals(ctx, runId);
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "payroll.add_employee",
+      entity: "payrollRuns",
+      entityId: runId,
+      after: { employeeId },
+    });
+    return null;
+  },
+});
+
+// Exclude an employee from a draft run — deletes their payslip and any
+// adjustments (including pulled claims/leave), then re-sums totals.
+export const removeEmployeeFromRun = mutation({
+  args: { runId: v.id("payrollRuns"), employeeId: v.id("employees") },
+  returns: v.null(),
+  handler: async (ctx, { runId, employeeId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
+    if (run.status !== "draft") throw new Error("Only draft runs can be edited.");
+    const slip = await ctx.db
+      .query("payslips")
+      .withIndex("by_run_employee", (q) =>
+        q.eq("runId", runId).eq("employeeId", employeeId),
+      )
+      .first();
+    if (!slip) throw new Error("No payslip for this employee in the run.");
+
+    const adjustments = await ctx.db
+      .query("payrollAdjustments")
+      .withIndex("by_run_employee", (q) =>
+        q.eq("runId", runId).eq("employeeId", employeeId),
+      )
+      .collect();
+    for (const a of adjustments) await ctx.db.delete(a._id);
+    await ctx.db.delete(slip._id);
+    await recomputeRunTotals(ctx, runId);
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "payroll.remove_employee",
+      entity: "payrollRuns",
+      entityId: runId,
+      after: { employeeId },
+    });
+    return null;
+  },
+});
+
+// ─── Per-claim pull ──────────────────────────────────────────────────────────
+
+// Pull specific approved claims into the run as reimbursement additions. Unlike
+// `syncAutoItems`, selection is explicit — the caller has reviewed each claim's
+// status. Skips claims that aren't approved, are already reimbursed, are already
+// pulled, or whose employee isn't in the run. Marks pulled claims as queued for
+// payroll so they aren't double-handled elsewhere.
+export const pullClaims = mutation({
+  args: { runId: v.id("payrollRuns"), claimIds: v.array(v.id("claims")) },
+  returns: v.number(),
+  handler: async (ctx, { runId, claimIds }) => {
+    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
+    if (run.status !== "draft") throw new Error("Only draft runs can be edited.");
+
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const slipByEmployee = new Map<Id<"employees">, Doc<"payslips">>();
+    for (const s of slips) slipByEmployee.set(s.employeeId, s);
+
+    const existing = await ctx.db
+      .query("payrollAdjustments")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const pulled = new Set(
+      existing.filter((a) => a.sourceRefId).map((a) => a.sourceRefId as string),
+    );
+
+    const touched = new Set<Id<"payslips">>();
+    let added = 0;
+    for (const claimId of claimIds) {
+      const claim = await ctx.db.get(claimId);
+      if (!claim || claim.orgId !== orgId) continue;
+      if (claim.status !== "approved") continue; // approved, not yet reimbursed
+      if (claim.reimbursedAt) continue;
+      if (pulled.has(claim._id)) continue;
+      const slip = slipByEmployee.get(claim.employeeId);
+      if (!slip) continue;
+      const claimType = await ctx.db.get(claim.claimTypeId);
+      await ctx.db.insert("payrollAdjustments", {
+        orgId,
+        runId,
+        employeeId: claim.employeeId,
+        kind: "addition",
+        source: "claim",
+        label: `Claim — ${claimType?.name ?? claim.description}`,
+        amountCents: claim.amountCents,
+        cpfable: false, // expense reimbursements are not CPF-able
+        affectsGross: false,
+        sourceRefId: claim._id,
+        createdBy: userId,
+      });
+      if (!claim.sentToPayroll) {
+        await ctx.db.patch(claim._id, { sentToPayroll: true });
+      }
+      touched.add(slip._id);
+      added += 1;
+    }
+    for (const slipId of touched) {
+      const slip = await ctx.db.get(slipId);
+      if (slip) await recomputePayslip(ctx, slip);
+    }
+    await recomputeRunTotals(ctx, runId);
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "payroll.pull_claims",
+      entity: "payrollRuns",
+      entityId: runId,
+      after: { added },
+    });
+    return added;
+  },
+});
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 // The Adjust-Payroll / Review workspace: run + each payslip with its raw
@@ -919,6 +1113,156 @@ export const getRunWorkspace = query({
       payslips,
       available: { claims: claimsCount, unpaidLeaveDays, overtime },
     };
+  },
+});
+
+// Active employees with compensation on file who are NOT yet in this draft run
+// — the candidate list for "Add employee".
+export const addableEmployees = query({
+  args: { runId: v.id("payrollRuns") },
+  returns: v.array(
+    v.object({
+      employeeId: v.id("employees"),
+      name: v.string(),
+      positionTitle: v.union(v.string(), v.null()),
+      baseCents: v.number(),
+      currency: v.string(),
+    }),
+  ),
+  handler: async (ctx, { runId }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) return [];
+
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const inRun = new Set(slips.map((s) => s.employeeId));
+
+    const periodEnd = periodEndDate(run.periodMonth);
+    const employees = (
+      await ctx.db
+        .query("employees")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()
+    ).filter((e) => e.status !== "terminated" && !e.isVacant && !inRun.has(e._id));
+
+    const rows: {
+      employeeId: Id<"employees">;
+      name: string;
+      positionTitle: string | null;
+      baseCents: number;
+      currency: string;
+    }[] = [];
+    for (const e of employees) {
+      const comp = await effectiveCompensation(ctx, e._id, periodEnd);
+      if (!comp) continue; // only employees payroll can actually compute
+      const position = e.positionId ? await ctx.db.get(e.positionId) : null;
+      rows.push({
+        employeeId: e._id,
+        name: `${e.firstName} ${e.lastName}`,
+        positionTitle: position?.title ?? null,
+        baseCents: comp.baseMonthlyCents,
+        currency: comp.currency,
+      });
+    }
+    rows.sort((a, b) => a.name.localeCompare(b.name));
+    return rows;
+  },
+});
+
+// Claims in the run's period for employees in the run, with their approval /
+// reimbursement status — powers the claims picker. Only approved + reimbursed
+// claims are surfaced; `eligible` marks the ones that can actually be pulled
+// (approved, not reimbursed, not already pulled).
+export const claimsForRun = query({
+  args: { runId: v.id("payrollRuns") },
+  returns: v.array(
+    v.object({
+      claimId: v.id("claims"),
+      employeeId: v.id("employees"),
+      employeeName: v.string(),
+      claimType: v.string(),
+      description: v.string(),
+      amountCents: v.number(),
+      currency: v.string(),
+      incurredDate: v.string(),
+      status: claimStatus,
+      reimbursed: v.boolean(),
+      alreadyPulled: v.boolean(),
+      eligible: v.boolean(),
+    }),
+  ),
+  handler: async (ctx, { runId }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) return [];
+
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const empInRun = new Set(slips.map((s) => s.employeeId));
+
+    const existing = await ctx.db
+      .query("payrollAdjustments")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const pulled = new Set(
+      existing
+        .filter((a) => a.source === "claim" && a.sourceRefId)
+        .map((a) => a.sourceRefId as string),
+    );
+
+    const claims = await ctx.db
+      .query("claims")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+
+    const rows: {
+      claimId: Id<"claims">;
+      employeeId: Id<"employees">;
+      employeeName: string;
+      claimType: string;
+      description: string;
+      amountCents: number;
+      currency: string;
+      incurredDate: string;
+      status: Doc<"claims">["status"];
+      reimbursed: boolean;
+      alreadyPulled: boolean;
+      eligible: boolean;
+    }[] = [];
+    for (const c of claims) {
+      if (!empInRun.has(c.employeeId)) continue;
+      if (!c.incurredDate.startsWith(run.periodMonth)) continue;
+      if (c.status !== "approved" && c.status !== "reimbursed") continue;
+      const emp = await ctx.db.get(c.employeeId);
+      const type = await ctx.db.get(c.claimTypeId);
+      const reimbursed = c.status === "reimbursed" || !!c.reimbursedAt;
+      const alreadyPulled = pulled.has(c._id);
+      rows.push({
+        claimId: c._id,
+        employeeId: c.employeeId,
+        employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
+        claimType: type?.name ?? "Claim",
+        description: c.description,
+        amountCents: c.amountCents,
+        currency: c.currency,
+        incurredDate: c.incurredDate,
+        status: c.status,
+        reimbursed,
+        alreadyPulled,
+        eligible: c.status === "approved" && !reimbursed && !alreadyPulled,
+      });
+    }
+    rows.sort(
+      (a, b) =>
+        a.employeeName.localeCompare(b.employeeName) ||
+        a.incurredDate.localeCompare(b.incurredDate),
+    );
+    return rows;
   },
 });
 

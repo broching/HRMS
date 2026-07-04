@@ -98,13 +98,15 @@ export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
         key: "training",
         label: "Training & Certification",
         icon: IconCertificate,
-        show: canViewPersonal,
+        // Professional info — visible to every colleague, like experience.
+        show: true,
       },
       {
         key: "leave",
         label: "Leave Policies",
         icon: IconCalendarStats,
-        show: true,
+        // The person's own entitlements — self or HR/admin only.
+        show: isSelf || canViewPersonal,
       },
       {
         key: "payroll",

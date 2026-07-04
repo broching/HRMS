@@ -1,5 +1,5 @@
 import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, requirePermission, OrgContext } from "./auth";
 import { hasPermission } from "./lib/permissions";
@@ -75,17 +75,23 @@ async function hydrateClaim(ctx: QueryCtx, claim: Doc<"claims">) {
 async function requireClaimAccess(ctx: QueryCtx, claimId: Id<"claims">) {
   const orgCtx = await requireOrg(ctx);
   const claim = await ctx.db.get(claimId);
-  if (!claim || claim.orgId !== orgCtx.orgId) throw new Error("Claim not found.");
+  if (!claim || claim.orgId !== orgCtx.orgId) throw new ConvexError("Claim not found.");
   if (hasPermission(orgCtx.role, "claims:approve:finance")) {
     return { orgCtx, claim };
   }
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   if (own && claim.employeeId === own._id) return { orgCtx, claim };
+  // Anyone in the resolved approval chain can view the claim they're routing.
+  if (
+    claim.approvalChain?.some((s) => s.approverUserId === orgCtx.userId)
+  ) {
+    return { orgCtx, claim };
+  }
   const employee = await ctx.db.get(claim.employeeId);
   if (own && employee && employee.managerId === own._id) {
     return { orgCtx, claim };
   }
-  throw new Error("Not authorized to view this claim.");
+  throw new ConvexError("Not authorized to view this claim.");
 }
 
 // Approval step: the claim's current chain approver, or anyone with finance
@@ -99,12 +105,12 @@ async function assertManagerStage(
   if (claim.approvalChain && claim.approvalChain.length > 0) {
     const step = claim.approvalChain[claim.currentStepIndex ?? 0];
     if (step?.approverUserId === orgCtx.userId) return;
-    throw new Error("Not authorized to act on this claim.");
+    throw new ConvexError("Not authorized to act on this claim.");
   }
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const employee = await ctx.db.get(claim.employeeId);
   if (own && employee && employee.managerId === own._id) return;
-  throw new Error("Not authorized to act on this claim.");
+  throw new ConvexError("Not authorized to act on this claim.");
 }
 
 async function notify(
@@ -254,18 +260,18 @@ export const submit = mutation({
   handler: async (ctx, args) => {
     const { orgId, userId, org } = await requireOrg(ctx);
     const own = await employeeByUserId(ctx, orgId, userId);
-    if (!own) throw new Error("You don't have an employee profile yet.");
+    if (!own) throw new ConvexError("You don't have an employee profile yet.");
 
     const claimType = await ctx.db.get(args.claimTypeId);
     if (!claimType || claimType.orgId !== orgId || !claimType.active) {
-      throw new Error("Claim type not found.");
+      throw new ConvexError("Claim type not found.");
     }
-    if (args.amountCents <= 0) throw new Error("Amount must be positive.");
+    if (args.amountCents <= 0) throw new ConvexError("Amount must be positive.");
     if (claimType.requiresReceipt && args.receiptStorageIds.length === 0) {
-      throw new Error("This claim type requires a receipt.");
+      throw new ConvexError("This claim type requires a receipt.");
     }
     if (claimType.maxAmountCents && args.amountCents > claimType.maxAmountCents) {
-      throw new Error("Amount exceeds the per-transaction limit for this claim type.");
+      throw new ConvexError("Amount exceeds the per-transaction limit for this claim type.");
     }
 
     // Enforce yearly/monthly caps against the period the claim was incurred in.
@@ -281,20 +287,30 @@ export const submit = mutation({
         claimType.yearlyLimitCents &&
         yearlyUsedCents + args.amountCents > claimType.yearlyLimitCents
       ) {
-        throw new Error("This claim would exceed the yearly limit for this claim type.");
+        throw new ConvexError("This claim would exceed the yearly limit for this claim type.");
       }
       if (
         claimType.monthlyLimitCents &&
         monthlyUsedCents + args.amountCents > claimType.monthlyLimitCents
       ) {
-        throw new Error("This claim would exceed the monthly limit for this claim type.");
+        throw new ConvexError("This claim would exceed the monthly limit for this claim type.");
       }
     }
 
-    // Resolve the configured approval chain (with thresholds) for this claim.
+    // Resolve the configured approval chain (with thresholds) for this claim,
+    // plus whether a finance stage applies (only when finance approvers are
+    // configured). The status timeline is driven entirely by this process, so a
+    // claim with no finance approvers never shows a "pending finance" stage.
+    const settings = await resolveClaimSettings(ctx, orgId);
+    const requiresFinance = settings.financeApproverUserIds.length > 0;
     const chain = await buildApprovalChain(ctx, orgId, own, args.amountCents);
     const status: ClaimStatus =
-      chain.length > 0 ? "pending_manager" : "pending_finance";
+      chain.length > 0
+        ? "pending_manager"
+        : requiresFinance
+          ? "pending_finance"
+          : "approved";
+    const autoApproved = status === "approved";
     const id = await ctx.db.insert("claims", {
       orgId,
       employeeId: own._id,
@@ -309,8 +325,12 @@ export const submit = mutation({
       description: args.description,
       receiptStorageIds: args.receiptStorageIds,
       status,
+      requiresFinance,
       approvalChain: chain,
       currentStepIndex: chain.length > 0 ? 0 : undefined,
+      decidedAt: autoApproved ? Date.now() : undefined,
+      sentToPayroll:
+        autoApproved && settings.payrollMode === "automatic" ? true : undefined,
     });
 
     const claim = (await ctx.db.get(id))!;
@@ -325,7 +345,7 @@ export const submit = mutation({
         `${empName} submitted a claim`,
         id,
       );
-    } else {
+    } else if (requiresFinance) {
       await notifyFinance(ctx, orgId, claim, empName);
     }
     await writeAuditLog(ctx, {
@@ -349,9 +369,9 @@ export const managerApprove = mutation({
   handler: async (ctx, { claimId, note }) => {
     const orgCtx = await requireOrg(ctx);
     const claim = await ctx.db.get(claimId);
-    if (!claim || claim.orgId !== orgCtx.orgId) throw new Error("Claim not found.");
+    if (!claim || claim.orgId !== orgCtx.orgId) throw new ConvexError("Claim not found.");
     if (claim.status !== "pending_manager") {
-      throw new Error("Claim is not awaiting approval.");
+      throw new ConvexError("Claim is not awaiting approval.");
     }
 
     const chain = claim.approvalChain;
@@ -385,7 +405,7 @@ export const managerApprove = mutation({
     const step = chain[idx];
     const isApprover = step?.approverUserId === orgCtx.userId;
     if (!isApprover && !hasPermission(orgCtx.role, "claims:approve:finance")) {
-      throw new Error("Not authorized to approve this step.");
+      throw new ConvexError("Not authorized to approve this step.");
     }
 
     const updatedChain = chain.map((s, i) =>
@@ -412,7 +432,8 @@ export const managerApprove = mutation({
         `${empName}'s claim needs your approval`,
         claimId,
       );
-    } else {
+    } else if (claim.requiresFinance) {
+      // Chain complete, finance stage configured → hand off to finance.
       await ctx.db.patch(claimId, {
         status: "pending_finance",
         approvalChain: updatedChain,
@@ -430,6 +451,28 @@ export const managerApprove = mutation({
         claimId,
       );
       await notifyFinance(ctx, orgCtx.orgId, claim, empName);
+    } else {
+      // Chain complete, no finance stage → the approval is final.
+      const settings = await resolveClaimSettings(ctx, orgCtx.orgId);
+      await ctx.db.patch(claimId, {
+        status: "approved",
+        approvalChain: updatedChain,
+        currentStepIndex: nextIdx,
+        managerApproverUserId: orgCtx.userId,
+        decidedAt: Date.now(),
+        decisionNote: note,
+        sentToPayroll:
+          settings.payrollMode === "automatic" ? true : undefined,
+      });
+      await notify(
+        ctx,
+        orgCtx.orgId,
+        emp?.userId,
+        "claim.approved",
+        "Claim approved",
+        "Your claim was approved. You can mark it reimbursed once paid.",
+        claimId,
+      );
     }
 
     await writeAuditLog(ctx, {
@@ -453,9 +496,9 @@ export const financeApprove = mutation({
       "claims:approve:finance",
     );
     const claim = await ctx.db.get(claimId);
-    if (!claim || claim.orgId !== orgId) throw new Error("Claim not found.");
+    if (!claim || claim.orgId !== orgId) throw new ConvexError("Claim not found.");
     if (claim.status !== "pending_finance") {
-      throw new Error("Claim is not awaiting finance approval.");
+      throw new ConvexError("Claim is not awaiting finance approval.");
     }
     // Payroll connection: auto-queue for payroll when the org is on "automatic".
     const settings = await resolveClaimSettings(ctx, orgId);
@@ -493,15 +536,15 @@ export const reject = mutation({
   handler: async (ctx, { claimId, note }) => {
     const orgCtx = await requireOrg(ctx);
     const claim = await ctx.db.get(claimId);
-    if (!claim || claim.orgId !== orgCtx.orgId) throw new Error("Claim not found.");
+    if (!claim || claim.orgId !== orgCtx.orgId) throw new ConvexError("Claim not found.");
     if (claim.status === "pending_manager") {
       await assertManagerStage(ctx, orgCtx, claim);
     } else if (claim.status === "pending_finance") {
       if (!hasPermission(orgCtx.role, "claims:approve:finance")) {
-        throw new Error("Not authorized to reject this claim.");
+        throw new ConvexError("Not authorized to reject this claim.");
       }
     } else {
-      throw new Error("Claim is not pending.");
+      throw new ConvexError("Claim is not pending.");
     }
     await ctx.db.patch(claimId, {
       status: "rejected",
@@ -529,18 +572,31 @@ export const reject = mutation({
   },
 });
 
+// Mark an approved claim as reimbursed. Available to whoever owns the claim
+// (confirming they received the money) as well as finance.
 export const markReimbursed = mutation({
   args: { claimId: v.id("claims") },
   returns: v.null(),
   handler: async (ctx, { claimId }) => {
-    const { orgId, userId } = await requirePermission(
-      ctx,
-      "claims:approve:finance",
-    );
+    const orgCtx = await requireOrg(ctx);
+    const { orgId, userId } = orgCtx;
     const claim = await ctx.db.get(claimId);
-    if (!claim || claim.orgId !== orgId) throw new Error("Claim not found.");
+    if (!claim || claim.orgId !== orgId) throw new ConvexError("Claim not found.");
     if (claim.status !== "approved") {
-      throw new Error("Only approved claims can be reimbursed.");
+      throw new ConvexError("Only approved claims can be marked reimbursed.");
+    }
+    const own = await employeeByUserId(ctx, orgId, userId);
+    const isOwner = own && claim.employeeId === own._id;
+    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    if (!isOwner && !isFinance) {
+      throw new ConvexError("Not authorized to update this claim.");
+    }
+    // A claim queued for payroll is reimbursed through the payroll run; only
+    // finance can close it out manually.
+    if (isOwner && !isFinance && claim.sentToPayroll) {
+      throw new ConvexError(
+        "This claim is queued for payroll and will be reimbursed in your payslip.",
+      );
     }
     await ctx.db.patch(claimId, { status: "reimbursed", reimbursedAt: Date.now() });
     const emp = await ctx.db.get(claim.employeeId);
@@ -550,7 +606,7 @@ export const markReimbursed = mutation({
       emp?.userId,
       "claim.reimbursed",
       "Claim reimbursed",
-      "Your claim has been reimbursed.",
+      "Your claim has been marked reimbursed.",
       claimId,
     );
     await writeAuditLog(ctx, {
@@ -570,14 +626,14 @@ export const cancel = mutation({
   handler: async (ctx, { claimId }) => {
     const orgCtx = await requireOrg(ctx);
     const claim = await ctx.db.get(claimId);
-    if (!claim || claim.orgId !== orgCtx.orgId) throw new Error("Claim not found.");
+    if (!claim || claim.orgId !== orgCtx.orgId) throw new ConvexError("Claim not found.");
     if (claim.status !== "pending_manager" && claim.status !== "pending_finance") {
-      throw new Error("Claim cannot be cancelled.");
+      throw new ConvexError("Claim cannot be cancelled.");
     }
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isOwner = own && claim.employeeId === own._id;
     if (!isOwner && !hasPermission(orgCtx.role, "claims:approve:finance")) {
-      throw new Error("Not authorized to cancel this claim.");
+      throw new ConvexError("Not authorized to cancel this claim.");
     }
     await ctx.db.patch(claimId, { status: "cancelled" });
     await writeAuditLog(ctx, {
@@ -599,9 +655,9 @@ export const setSentToPayroll = mutation({
   handler: async (ctx, { claimId, value }) => {
     const { orgId } = await requirePermission(ctx, "claims:approve:finance");
     const claim = await ctx.db.get(claimId);
-    if (!claim || claim.orgId !== orgId) throw new Error("Claim not found.");
+    if (!claim || claim.orgId !== orgId) throw new ConvexError("Claim not found.");
     if (claim.status !== "approved") {
-      throw new Error("Only approved claims can be sent to payroll.");
+      throw new ConvexError("Only approved claims can be sent to payroll.");
     }
     await ctx.db.patch(claimId, { sentToPayroll: value || undefined });
     return null;
@@ -622,7 +678,7 @@ export const addComment = mutation({
   returns: v.null(),
   handler: async (ctx, { claimId, body }) => {
     const { orgCtx } = await requireClaimAccess(ctx, claimId);
-    if (!body.trim()) throw new Error("Comment is empty.");
+    if (!body.trim()) throw new ConvexError("Comment is empty.");
     await ctx.db.insert("claimComments", {
       orgId: orgCtx.orgId,
       claimId,
@@ -656,7 +712,28 @@ export const get = query({
   args: { claimId: v.id("claims") },
   returns: claimDetail,
   handler: async (ctx, { claimId }) => {
-    const { claim } = await requireClaimAccess(ctx, claimId);
+    const { orgCtx, claim } = await requireClaimAccess(ctx, claimId);
+    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const isMine = !!own && claim.employeeId === own._id;
+    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+
+    // Can the viewer act on the current pending stage?
+    let canApprove = false;
+    if (claim.status === "pending_finance") {
+      canApprove = isFinance;
+    } else if (claim.status === "pending_manager") {
+      if (isFinance) {
+        canApprove = true;
+      } else if (claim.approvalChain && claim.approvalChain.length > 0) {
+        const step = claim.approvalChain[claim.currentStepIndex ?? 0];
+        canApprove = step?.approverUserId === orgCtx.userId;
+      } else {
+        // Legacy chain-less claim → the claimant's manager decides.
+        const employee = await ctx.db.get(claim.employeeId);
+        canApprove = !!own && employee?.managerId === own._id;
+      }
+    }
+
     const base = await hydrateClaim(ctx, claim);
     const receiptUrls = (
       await Promise.all(
@@ -669,6 +746,22 @@ export const get = query({
       done: s.decidedByUserId != null,
       current: claim.status === "pending_manager" && i === stepIdx,
     }));
+
+    // Build the status timeline from the claim's actual configured process.
+    // Legacy claims (submitted before `requiresFinance` was snapshotted) always
+    // routed manager → finance, so keep both stages for them.
+    const legacy = claim.requiresFinance === undefined;
+    const hasManager = legacy
+      ? true
+      : (claim.approvalChain?.length ?? 0) > 0;
+    const hasFinance = legacy ? true : claim.requiresFinance === true;
+    const flow: ClaimStatus[] = [
+      ...(hasManager ? (["pending_manager"] as const) : []),
+      ...(hasFinance ? (["pending_finance"] as const) : []),
+      "approved",
+      "reimbursed",
+    ];
+
     return {
       ...base,
       taxAmountCents: claim.taxAmountCents ?? null,
@@ -678,6 +771,9 @@ export const get = query({
       receiptUrls,
       managerApproverUserId: claim.managerApproverUserId ?? null,
       financeApproverUserId: claim.financeApproverUserId ?? null,
+      isMine,
+      canApprove,
+      flow,
       approvalChain,
       sentToPayroll: claim.sentToPayroll ?? false,
     };
@@ -694,7 +790,7 @@ export const typeBalance = query({
     const { orgId, userId, org } = await requireOrg(ctx);
     const claimType = await ctx.db.get(claimTypeId);
     if (!claimType || claimType.orgId !== orgId) {
-      throw new Error("Claim type not found.");
+      throw new ConvexError("Claim type not found.");
     }
     const own = await employeeByUserId(ctx, orgId, userId);
 

@@ -1,11 +1,13 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
 import { IconCheck, IconX, IconSearch } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
+import { getErrorMessage } from "@/lib/errors"
+import { ClaimDetailDialog } from "@/features/claims/components/claim-detail"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,13 +42,14 @@ export function ClaimsApprovalQueue() {
   const [stage, setStage] = React.useState(ALL)
   const [typeName, setTypeName] = React.useState(ALL)
   const [search, setSearch] = React.useState("")
+  const [openId, setOpenId] = React.useState<Id<"claims"> | null>(null)
 
   async function run(p: Promise<unknown>, ok: string) {
     try {
       await p
       toast.success(ok)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Action failed")
+      toast.error(getErrorMessage(e, "Couldn't complete that action"))
     }
   }
 
@@ -130,12 +133,14 @@ export function ClaimsApprovalQueue() {
               </TableRow>
             ) : (
               filtered.map((c) => (
-                <TableRow key={c._id}>
+                <TableRow
+                  key={c._id}
+                  className="hover:bg-muted/50 cursor-pointer"
+                  onClick={() => setOpenId(c._id)}
+                >
                   <TableCell className="font-medium">{c.employeeName}</TableCell>
                   <TableCell>
-                    <Link href={`/claims/${c._id}`} className="hover:underline">
-                      {c.claimTypeName}
-                    </Link>
+                    <span className="font-medium">{c.claimTypeName}</span>
                     <div className="text-muted-foreground max-w-[220px] truncate text-xs">
                       {c.description}
                     </div>
@@ -153,14 +158,15 @@ export function ClaimsApprovalQueue() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() =>
+                        onClick={(e) => {
+                          e.stopPropagation()
                           run(
                             c.status === "pending_manager"
                               ? managerApprove({ claimId: c._id })
                               : financeApprove({ claimId: c._id }),
-                            "Approved",
+                            "Claim approved",
                           )
-                        }
+                        }}
                       >
                         <IconCheck className="size-4 text-green-600" />
                         Approve
@@ -168,7 +174,10 @@ export function ClaimsApprovalQueue() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => run(reject({ claimId: c._id }), "Rejected")}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          run(reject({ claimId: c._id }), "Claim rejected")
+                        }}
                       >
                         <IconX className="size-4 text-red-600" />
                         Reject
@@ -181,6 +190,12 @@ export function ClaimsApprovalQueue() {
           </TableBody>
         </Table>
       </div>
+
+      <ClaimDetailDialog
+        claimId={openId}
+        open={openId !== null}
+        onOpenChange={(o) => !o && setOpenId(null)}
+      />
     </div>
   )
 }

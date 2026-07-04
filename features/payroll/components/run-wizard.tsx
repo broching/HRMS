@@ -11,6 +11,7 @@ import {
   IconDownload,
   IconChevronDown,
   IconChevronRight,
+  IconArrowLeft,
 } from "@tabler/icons-react"
 import { Input } from "@/components/ui/input"
 import { api } from "@/convex/_generated/api"
@@ -268,18 +269,10 @@ function DownloadRow({
   )
 }
 
-function PaymentStep({
-  workspace,
-  onComplete,
-}: {
-  workspace: Workspace
-  onComplete: () => Promise<void>
-}) {
+function PaymentStep({ workspace }: { workspace: Workspace }) {
   const { run, payslips } = workspace
   const variance = useQuery(api.payroll.varianceReport, { runId: run._id })
-  const [confirmOpen, setConfirmOpen] = React.useState(false)
   const [paySearch, setPaySearch] = React.useState("")
-  const completed = run.status === "paid"
 
   const filteredPayments = payslips.filter((p) =>
     p.employeeName.toLowerCase().includes(paySearch.toLowerCase()),
@@ -457,25 +450,6 @@ function PaymentStep({
           </div>
         </CardContent>
       </Card>
-
-      <div className="flex justify-end">
-        {completed ? (
-          <Badge variant="default" className="self-center">
-            Completed{run.payDate ? ` · ${run.payDate}` : ""}
-          </Badge>
-        ) : (
-          <Button onClick={() => setConfirmOpen(true)}>Complete payroll</Button>
-        )}
-      </div>
-
-      <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title="Complete payroll?"
-        description="This finalizes the run and releases payslips to all employees. You won't be able to edit it afterwards."
-        confirmLabel="Complete payroll"
-        onConfirm={onComplete}
-      />
     </div>
   )
 }
@@ -487,6 +461,7 @@ export function RunWizard({ runId }: { runId: Id<"payrollRuns"> }) {
   const markPaid = useMutation(api.payroll.markPaid)
 
   const [step, setStep] = React.useState(1)
+  const [confirmOpen, setConfirmOpen] = React.useState(false)
   const initialised = React.useRef(false)
 
   React.useEffect(() => {
@@ -526,8 +501,22 @@ export function RunWizard({ runId }: { runId: Id<"payrollRuns"> }) {
     }
   }
 
+  const completed = run.status === "paid"
+
   return (
     <div className="flex flex-col gap-6">
+      <div className="px-4 lg:px-6">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground -ml-2 gap-1"
+          onClick={() => router.push("/hr-lounge/payroll")}
+        >
+          <IconArrowLeft className="size-4" />
+          Back to dashboard
+        </Button>
+      </div>
+
       <PageHeader
         title={`Run payroll — ${run.label}`}
         description={`Period ${run.periodMonth}`}
@@ -541,14 +530,19 @@ export function RunWizard({ runId }: { runId: Id<"payrollRuns"> }) {
 
       {step === 1 && <AdjustPayrollStep workspace={workspace} />}
       {step === 2 && <ReviewStep workspace={workspace} />}
-      {step === 3 && (
-        <PaymentStep workspace={workspace} onComplete={completePayroll} />
-      )}
+      {step === 3 && <PaymentStep workspace={workspace} />}
 
-      <div className="flex flex-wrap justify-between gap-2 px-4 lg:px-6">
-        <Button variant="ghost" onClick={() => router.push("/hr-lounge/payroll")}>
-          {step === 1 ? "Save as draft" : "Back to dashboard"}
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 lg:px-6">
+        <div>
+          {step === 1 && (
+            <Button
+              variant="outline"
+              onClick={() => router.push("/hr-lounge/payroll")}
+            >
+              Save as draft
+            </Button>
+          )}
+        </div>
         <div className="flex gap-2">
           {step > 1 && (
             <Button variant="outline" onClick={() => setStep(step - 1)}>
@@ -560,8 +554,25 @@ export function RunWizard({ runId }: { runId: Id<"payrollRuns"> }) {
               {step === 2 ? "Confirm" : "Continue"}
             </Button>
           )}
+          {step === 3 &&
+            (completed ? (
+              <Badge variant="default" className="self-center">
+                Completed{run.payDate ? ` · ${run.payDate}` : ""}
+              </Badge>
+            ) : (
+              <Button onClick={() => setConfirmOpen(true)}>Complete payroll</Button>
+            ))}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Complete payroll?"
+        description="This finalizes the run and releases payslips to all employees. You won't be able to edit it afterwards."
+        confirmLabel="Complete payroll"
+        onConfirm={completePayroll}
+      />
     </div>
   )
 }

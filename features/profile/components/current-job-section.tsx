@@ -36,7 +36,11 @@ export function CurrentJobSection({ employee }: { employee: ProfileData }) {
   const teams = useQuery(api.teams.list) ?? []
   const positions = useQuery(api.positions.list) ?? []
   const offices = useQuery(api.offices.list) ?? []
-  const allEmployees = useQuery(api.employees.list, {}) ?? []
+  // The manager picker is only used in edit mode, which is HR-only. Skip the
+  // directory fetch entirely for everyone else (regular employees viewing their
+  // own Job tab don't need — and used to error on — this query).
+  const allEmployees =
+    useQuery(api.employees.list, employee.canManage ? {} : "skip") ?? []
 
   const [editing, setEditing] = React.useState(false)
   const [saving, setSaving] = React.useState(false)

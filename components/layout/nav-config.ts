@@ -85,7 +85,8 @@ export const SECTIONS: NavSection[] = [
     title: "People",
     url: "/employees",
     icon: IconAddressBook,
-    permission: "employees:read:all",
+    // Directory + org chart are visible to every member; sensitive per-employee
+    // fields are redacted server-side (see employees.get).
     items: [
       { title: "Employee List", url: "/employees" },
       { title: "Org Chart", url: "/employees/org-chart" },

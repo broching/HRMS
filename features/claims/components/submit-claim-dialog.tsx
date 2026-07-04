@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select"
 import { FileUpload } from "@/components/shared/file-upload"
 import { useCurrentMember } from "@/hooks/use-current-member"
+import { getErrorMessage } from "@/lib/errors"
 import { CURRENCIES, formatLimit, formatMoney } from "@/features/claims/lib/labels"
 
 const today = () => new Date().toISOString().slice(0, 10)
@@ -46,7 +47,7 @@ export function SubmitClaimDialog() {
       await seedDefaults({})
       toast.success("Default claim types added")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not seed defaults")
+      toast.error(getErrorMessage(e, "Couldn't add default claim types"))
     }
   }
 
@@ -72,8 +73,22 @@ export function SubmitClaimDialog() {
   const baseCurrency = balance?.currency ?? "SGD"
 
   const amountCents = Math.round((Number(amount) || 0) * 100)
+  const perTxnLimit = balance?.perTransactionLimitCents ?? null
+  const overPerTxn = perTxnLimit != null && amountCents > perTxnLimit
   const overBalance =
     balance?.availableCents != null && amountCents > balance.availableCents
+
+  // Validate against the claim type's limits up front, so the same rules the
+  // server enforces surface as a clear inline message instead of a raw error.
+  const amountError =
+    amountCents <= 0
+      ? null
+      : overPerTxn
+        ? `Amount exceeds the ${formatMoney(perTxnLimit!, baseCurrency)} per-transaction limit for this claim type.`
+        : overBalance
+          ? `Amount exceeds the ${formatMoney(balance!.availableCents!, baseCurrency)} balance available for this claim type.`
+          : null
+  const receiptMissing = !!selected?.requiresReceipt && receipts.length === 0
 
   function reset() {
     setClaimTypeId("")
@@ -91,8 +106,9 @@ export function SubmitClaimDialog() {
     if (!claimTypeId) return toast.error("Choose a claim type")
     const value = Number(amount)
     if (!value || value <= 0) return toast.error("Enter a valid amount")
-    if (selected?.requiresReceipt && receipts.length === 0)
+    if (receiptMissing)
       return toast.error("This claim type requires a receipt")
+    if (amountError) return toast.error(amountError)
     setSubmitting(true)
     try {
       await submit({
@@ -112,7 +128,7 @@ export function SubmitClaimDialog() {
       setOpen(false)
       reset()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not submit")
+      toast.error(getErrorMessage(e, "Couldn't submit your claim"))
     } finally {
       setSubmitting(false)
     }
@@ -130,7 +146,7 @@ export function SubmitClaimDialog() {
         <DialogHeader>
           <DialogTitle>New claim</DialogTitle>
           <DialogDescription>
-            Goes to your manager, then finance for reimbursement.
+            Routed through your organisation&rsquo;s claim approval workflow.
           </DialogDescription>
         </DialogHeader>
 
@@ -255,10 +271,8 @@ export function SubmitClaimDialog() {
                 onChange={(e) => setAmount(e.target.value)}
               />
             </div>
-            {overBalance && (
-              <p className="text-destructive text-xs">
-                Exceeds the balance available for this claim type.
-              </p>
+            {amountError && (
+              <p className="text-destructive text-xs">{amountError}</p>
             )}
           </div>
 
@@ -358,7 +372,10 @@ export function SubmitClaimDialog() {
           <Button variant="ghost" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={submitting}>
+          <Button
+            onClick={handleSubmit}
+            disabled={submitting || !!amountError || receiptMissing}
+          >
             {submitting ? "Submitting…" : "Submit"}
           </Button>
         </DialogFooter>

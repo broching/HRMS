@@ -23,6 +23,7 @@ import {
   CLAIM_CATEGORY_LABELS,
   formatMoney,
 } from "@/features/claims/lib/labels"
+import { getErrorMessage } from "@/lib/errors"
 import { ClaimTypeDialog } from "./claim-type-dialog"
 
 type ClaimType = FunctionReturnType<typeof api.claimTypes.list>[number]
@@ -76,7 +77,7 @@ export function ClaimSettings() {
                     await seed({})
                     toast.success("Default claim types seeded")
                   } catch (e) {
-                    toast.error(e instanceof Error ? e.message : "Failed")
+                    toast.error(getErrorMessage(e, "Couldn't seed defaults"))
                   }
                 }}
               >

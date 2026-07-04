@@ -25,10 +25,10 @@ export const list = query({
         q.eq("recipientUserId", orgCtx.userId),
       )
       .order("desc")
-      .take(40);
+      .take(80);
     return rows
       .filter((n) => n.orgId === orgCtx.orgId)
-      .slice(0, 30)
+      .slice(0, 60)
       .map((n) => ({
         _id: n._id,
         _creationTime: n._creationTime,

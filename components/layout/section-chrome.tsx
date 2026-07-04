@@ -20,7 +20,10 @@ import {
 } from "@/components/layout/nav-config"
 import { SubNav } from "@/components/layout/sub-nav"
 
-function canSee(item: NavLink, role: HrmsRole | undefined): boolean {
+function canSee(
+  item: Pick<NavLink, "roles" | "permission">,
+  role: HrmsRole | undefined,
+): boolean {
   if (!role) return false
   if (item.roles && !item.roles.includes(role)) return false
   if (item.permission && !hasPermission(role, item.permission)) return false
@@ -37,9 +40,15 @@ export function SectionChrome({ children }: { children: React.ReactNode }) {
   const role = member?.role
 
   const section = resolveSection(pathname)
-  const items = section ? section.items.filter((i) => canSee(i, role)) : []
+  // A section the caller isn't allowed into (e.g. a regular employee deep-
+  // linking to /team) shows no chrome at all — the page's own guard renders the
+  // message under just the top nav, mirroring HR Lounge.
+  const sectionVisible = !!section && canSee(section, role)
+  const items = sectionVisible
+    ? section!.items.filter((i) => canSee(i, role))
+    : []
   const useSidebar =
-    !!section && section.layout === "sidebar" && items.length >= 2
+    sectionVisible && section!.layout === "sidebar" && items.length >= 2
 
   if (useSidebar) {
     return (
@@ -55,9 +64,11 @@ export function SectionChrome({ children }: { children: React.ReactNode }) {
     )
   }
 
+  const hideChrome = !!section && !sectionVisible
+
   return (
     <>
-      <SubNav />
+      {!hideChrome && <SubNav />}
       <main className="mx-auto w-full max-w-[1400px] flex-1 py-6">
         <div className="flex flex-col gap-4 md:gap-6">{children}</div>
       </main>

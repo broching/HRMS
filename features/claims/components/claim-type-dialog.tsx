@@ -6,6 +6,7 @@ import type { FunctionReturnType } from "convex/server"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { ClaimCategory } from "@/convex/lib/enums"
+import { getErrorMessage } from "@/lib/errors"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -93,7 +94,7 @@ export function ClaimTypeDialog({
       toast.success(isEdit ? "Claim type updated" : "Claim type created")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not save")
+      toast.error(getErrorMessage(e, "Couldn't save this claim type"))
     } finally {
       setSaving(false)
     }

@@ -463,9 +463,16 @@ export default defineSchema({
     decisionNote: v.optional(v.string()),
     // Settings-driven approval chain (resolved at submit). While `status` is
     // `pending_manager` the claim is working through `approvalChain` at
-    // `currentStepIndex`; once the chain completes it moves to `pending_finance`.
+    // `currentStepIndex`. Once the chain completes the claim moves to
+    // `pending_finance` when finance approvers are configured, otherwise
+    // straight to `approved`.
     approvalChain: v.optional(v.array(claimChainStep)),
     currentStepIndex: v.optional(v.number()),
+    // Snapshot (at submit) of whether this claim routes through a finance
+    // approval stage, taken from the org's claim settings. Drives the status
+    // timeline so it reflects the configured process. Absent on legacy claims,
+    // which always went through finance.
+    requiresFinance: v.optional(v.boolean()),
     // Queued for payroll reimbursement (auto-set on approval when the org's
     // payroll connection is "automatic"; toggled manually otherwise).
     sentToPayroll: v.optional(v.boolean()),

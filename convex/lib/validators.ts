@@ -476,6 +476,17 @@ export const claimDetail = v.object({
   receiptUrls: v.array(v.string()),
   managerApproverUserId: v.union(v.id("users"), v.null()),
   financeApproverUserId: v.union(v.id("users"), v.null()),
+  // Whether the viewer is the employee who filed this claim (owner) — used to
+  // offer the "mark reimbursed" action once approved.
+  isMine: v.boolean(),
+  // Whether the viewer can approve/reject the claim's current pending stage
+  // (current chain approver, or finance at the finance stage). Drives the
+  // decision buttons so they show for the right person regardless of role.
+  canApprove: v.boolean(),
+  // The ordered status stages this claim actually moves through, derived from
+  // the configured approval process (skips finance when no finance approvers
+  // are set). Drives the detail-view status timeline.
+  flow: v.array(claimStatus),
   // Resolved approval chain progress for the detail view.
   approvalChain: v.array(
     v.object({

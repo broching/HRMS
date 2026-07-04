@@ -39,8 +39,11 @@ export async function employeeByUserId(
   return matches.find((e) => e.orgId === orgId) ?? null;
 }
 
-// Resolve an employee the caller is allowed to view: HR/admin see anyone;
-// employees see themselves; managers see their direct reports.
+// Resolve an employee any org member may view. Basic profile (name, job,
+// experience/education, training) is directory-level information available to
+// every colleague — the sensitive sections (personal details, documents,
+// compensation, payroll) are redacted or gated by their own permission checks
+// in the individual callers. Only enforces same-org scope here.
 export async function requireEmployeeAccess(
   ctx: QueryCtx,
   employeeId: Id<"employees">,
@@ -50,13 +53,7 @@ export async function requireEmployeeAccess(
   if (!employee || employee.orgId !== orgCtx.orgId) {
     throw new Error("Employee not found.");
   }
-  if (hasPermission(orgCtx.role, "employees:read:all")) return { orgCtx, employee };
-  if (employee.userId && employee.userId === orgCtx.userId) {
-    return { orgCtx, employee };
-  }
-  const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
-  if (own && employee.managerId === own._id) return { orgCtx, employee };
-  throw new Error("Not authorized to view this employee.");
+  return { orgCtx, employee };
 }
 
 // If someone with this email is already a member of the org, link the new
@@ -93,7 +90,10 @@ function maskId(idNumber: string): { masked: string; last4: string } {
 
 // ─── Queries ─────────────────────────────────────────────────────────────
 
-// Directory listing for HR/Admin. Supports full-text search and filters.
+// Directory listing available to any org member. Returns only directory-safe
+// fields (name, work email, department, position, office, photo) — no salary,
+// personal ID, address or other locked personal data. Supports full-text search
+// and filters.
 export const list = query({
   args: {
     search: v.optional(v.string()),
@@ -104,7 +104,7 @@ export const list = query({
   },
   returns: v.array(employeeRow),
   handler: async (ctx, args) => {
-    const { orgId } = await requirePermission(ctx, "employees:read:all");
+    const { orgId } = await requireOrg(ctx);
 
     let rows;
     const search = args.search?.trim();
@@ -255,7 +255,9 @@ export const orgChart = query({
   args: {},
   returns: v.array(orgChartNode),
   handler: async (ctx) => {
-    const { orgId } = await requirePermission(ctx, "employees:read:all");
+    // Reporting structure is directory-safe (name, position, department,
+    // manager link) — visible to any org member.
+    const { orgId } = await requireOrg(ctx);
     const employees = (
       await ctx.db
         .query("employees")
@@ -334,8 +336,9 @@ export const get = query({
     ).filter((g): g is { storageId: Id<"_storage">; url: string } => g !== null);
 
     // Redact the locked personal section when the caller may not view it.
-    // Family + training are personal too — hidden from managers, shown to
-    // self + HR/admin.
+    // Family is personal too — hidden from colleagues, shown to self + HR/admin.
+    // Training & certification stays visible to everyone (professional info,
+    // like experience/education), so it's not part of this block.
     const personal = canViewPersonal
       ? {
           dob: employee.dob,
@@ -348,7 +351,6 @@ export const get = query({
           contact: employee.contact,
           personalFields: employee.personalFields,
           familyMembers: employee.familyMembers,
-          trainings: employee.trainings,
         }
       : {
           dob: undefined,
@@ -364,7 +366,6 @@ export const get = query({
             : undefined,
           personalFields: undefined,
           familyMembers: undefined,
-          trainings: undefined,
         };
 
     return {

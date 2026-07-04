@@ -12,6 +12,8 @@ import {
   IconCalendarMinus,
   IconReceipt,
   IconClock,
+  IconUserPlus,
+  IconUserMinus,
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -29,11 +31,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { ConfirmDialog } from "@/components/shared/confirm-dialog"
 import { formatMoney } from "@/features/payroll/lib/labels"
+import { getErrorMessage } from "@/lib/errors"
 import {
   AddAdjustmentDialog,
   BulkAdjustmentsDialog,
 } from "@/features/payroll/components/adjustment-dialogs"
+import {
+  AddEmployeeDialog,
+  ClaimsPickerDialog,
+} from "@/features/payroll/components/roster-dialogs"
 
 type Workspace = NonNullable<FunctionReturnType<typeof api.payroll.getRunWorkspace>>
 type PayslipRow = Workspace["payslips"][number]
@@ -46,20 +54,21 @@ function initials(name: string) {
 
 function ValidateBanner({
   available,
-  onPull,
+  onPullLeave,
+  onOpenClaims,
   pulling,
 }: {
   available: Workspace["available"]
-  onPull: () => void
+  onPullLeave: () => void
+  onOpenClaims: () => void
   pulling: boolean
 }) {
-  const hasPullable = available.claims > 0 || available.unpaidLeaveDays > 0
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border bg-muted/40 p-4">
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border bg-muted/40 p-4">
       <div className="text-sm font-medium">
         Validate payroll items
         <p className="text-muted-foreground text-xs font-normal">
-          Check available items before you continue.
+          Review and pull items before you continue.
         </p>
       </div>
       <div className="flex items-center gap-2 text-sm">
@@ -68,28 +77,25 @@ function ValidateBanner({
         {available.unpaidLeaveDays > 0 && (
           <Badge variant="secondary">{available.unpaidLeaveDays}d</Badge>
         )}
+        {available.unpaidLeaveDays > 0 && (
+          <Button size="sm" variant="outline" onClick={onPullLeave} disabled={pulling}>
+            Pull
+          </Button>
+        )}
       </div>
       <div className="flex items-center gap-2 text-sm">
         <IconReceipt className="text-muted-foreground size-4" />
         Claims
         {available.claims > 0 && <Badge variant="secondary">{available.claims}</Badge>}
+        <Button size="sm" variant="outline" onClick={onOpenClaims}>
+          Select claims
+        </Button>
       </div>
       <div className="flex items-center gap-2 text-sm">
         <IconClock className="text-muted-foreground size-4" />
         Overtime
         {available.overtime > 0 && <Badge variant="secondary">{available.overtime}</Badge>}
       </div>
-      {hasPullable && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="ml-auto"
-          onClick={onPull}
-          disabled={pulling}
-        >
-          Pull claims & no-pay leave
-        </Button>
-      )}
     </div>
   )
 }
@@ -175,7 +181,9 @@ function EmployeeRow({
   onToggle: () => void
 }) {
   const removeAdjustment = useMutation(api.payroll.removeAdjustment)
+  const removeEmployee = useMutation(api.payroll.removeEmployeeFromRun)
   const [addOpen, setAddOpen] = React.useState(false)
+  const [excludeOpen, setExcludeOpen] = React.useState(false)
 
   const additions = p.adjustments.filter((a) => a.kind === "addition")
   const deductions = p.adjustments.filter((a) => a.kind === "deduction")
@@ -187,7 +195,16 @@ function EmployeeRow({
       await removeAdjustment({ adjustmentId: id })
       toast.success("Item removed")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't remove item")
+      toast.error(getErrorMessage(e, "Couldn't remove item"))
+    }
+  }
+
+  async function exclude() {
+    try {
+      await removeEmployee({ runId, employeeId: p.employeeId })
+      toast.success(`${p.employeeName} excluded from the run`)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't exclude employee"))
     }
   }
 
@@ -297,7 +314,7 @@ function EmployeeRow({
                 </div>
               </div>
 
-              <div>
+              <div className="flex items-center justify-between gap-2">
                 <Button
                   size="sm"
                   variant="outline"
@@ -308,6 +325,18 @@ function EmployeeRow({
                 >
                   <IconPlus className="size-4" />
                   Add item
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setExcludeOpen(true)
+                  }}
+                >
+                  <IconUserMinus className="size-4" />
+                  Exclude from run
                 </Button>
               </div>
             </div>
@@ -321,6 +350,15 @@ function EmployeeRow({
         open={addOpen}
         onOpenChange={setAddOpen}
       />
+      <ConfirmDialog
+        open={excludeOpen}
+        onOpenChange={setExcludeOpen}
+        title={`Exclude ${p.employeeName}?`}
+        description="Their payslip and any pulled claims or leave for this run will be removed. You can add them back later."
+        confirmLabel="Exclude"
+        destructive
+        onConfirm={exclude}
+      />
     </>
   )
 }
@@ -331,6 +369,8 @@ export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
   const [showEmployer, setShowEmployer] = React.useState(false)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
   const [bulkOpen, setBulkOpen] = React.useState(false)
+  const [addEmpOpen, setAddEmpOpen] = React.useState(false)
+  const [claimsOpen, setClaimsOpen] = React.useState(false)
   const [pulling, setPulling] = React.useState(false)
 
   const { run, payslips, available } = workspace
@@ -347,19 +387,20 @@ export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
     })
   }
 
-  async function pull() {
+  async function pullLeave() {
     setPulling(true)
     try {
       const res = await syncAutoItems({
         runId: run._id,
-        sources: ["claim", "unpaid_leave"],
+        sources: ["unpaid_leave"],
       })
-      const added = res.claims + res.unpaidLeave
       toast.success(
-        added === 0 ? "Nothing new to pull" : `Pulled ${added} item${added === 1 ? "" : "s"}`,
+        res.unpaidLeave === 0
+          ? "Nothing new to pull"
+          : `Pulled ${res.unpaidLeave} no-pay leave item${res.unpaidLeave === 1 ? "" : "s"}`,
       )
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't pull items")
+      toast.error(getErrorMessage(e, "Couldn't pull items"))
     } finally {
       setPulling(false)
     }
@@ -367,7 +408,12 @@ export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6">
-      <ValidateBanner available={available} onPull={pull} pulling={pulling} />
+      <ValidateBanner
+        available={available}
+        onPullLeave={pullLeave}
+        onOpenClaims={() => setClaimsOpen(true)}
+        pulling={pulling}
+      />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Input
@@ -381,6 +427,10 @@ export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
             <Switch checked={showEmployer} onCheckedChange={setShowEmployer} />
             Employer contributions
           </Label>
+          <Button variant="outline" onClick={() => setAddEmpOpen(true)}>
+            <IconUserPlus className="size-4" />
+            Add employee
+          </Button>
           <Button variant="outline" onClick={() => setBulkOpen(true)}>
             <IconPlus className="size-4" />
             Add items in bulk
@@ -436,6 +486,18 @@ export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
         }))}
         open={bulkOpen}
         onOpenChange={setBulkOpen}
+      />
+
+      <AddEmployeeDialog
+        runId={run._id}
+        open={addEmpOpen}
+        onOpenChange={setAddEmpOpen}
+      />
+
+      <ClaimsPickerDialog
+        runId={run._id}
+        open={claimsOpen}
+        onOpenChange={setClaimsOpen}
       />
     </div>
   )

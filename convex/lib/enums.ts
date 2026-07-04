@@ -306,7 +306,9 @@ export type ClaimCategory =
   | "entertainment"
   | "custom";
 
-// Workflow: pending_manager → pending_finance → approved → reimbursed.
+// Workflow: pending_manager → (pending_finance, only when finance approvers are
+// configured) → approved → reimbursed. The finance stage is skipped entirely
+// when an org hasn't set up finance approvers.
 export const claimStatus = v.union(
   v.literal("pending_manager"),
   v.literal("pending_finance"),
