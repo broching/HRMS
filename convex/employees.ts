@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import {
   hrmsRole,
+  HrmsRole,
   employmentType,
   employeeStatus,
   gender,
@@ -65,7 +66,7 @@ async function linkExistingMember(
   orgId: Id<"organizations">,
   employeeId: Id<"employees">,
   loginEmail: string,
-  invitedRole?: "admin" | "hr" | "manager" | "employee",
+  invitedRole?: HrmsRole,
 ) {
   const members = await ctx.db
     .query("members")
@@ -74,6 +75,30 @@ async function linkExistingMember(
   for (const m of members) {
     const u = await ctx.db.get(m.userId);
     if (u?.email && u.email.toLowerCase() === loginEmail) {
+      await ctx.db.patch(employeeId, { userId: m.userId });
+      if (invitedRole) await ctx.db.patch(m._id, { role: invitedRole });
+      return;
+    }
+  }
+}
+
+// Same as linkExistingMember but keys on the Clerk username. Handles the case
+// where someone added by username is already a member of the org (the org-add
+// via Clerk was a no-op, so no membership webhook fires to link them).
+async function linkExistingMemberByUsername(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  employeeId: Id<"employees">,
+  loginUsername: string,
+  invitedRole?: HrmsRole,
+) {
+  const members = await ctx.db
+    .query("members")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  for (const m of members) {
+    const u = await ctx.db.get(m.userId);
+    if (u?.username && u.username.toLowerCase() === loginUsername) {
       await ctx.db.patch(employeeId, { userId: m.userId });
       if (invitedRole) await ctx.db.patch(m._id, { role: invitedRole });
       return;
@@ -559,6 +584,9 @@ export const create = mutation({
     employeeNumber: v.string(),
     // The email used to invite this person to the org (= their work email).
     loginEmail: v.optional(v.string()),
+    // The Clerk username used to add this person to the org, when they sign up
+    // with a username instead of (or in addition to) an email.
+    loginUsername: v.optional(v.string()),
     // HRMS role to grant once they accept the org invite.
     invitedRole: v.optional(hrmsRole),
     ...writableFields,
@@ -575,9 +603,11 @@ export const create = mutation({
       .unique();
     if (dup) throw new Error("Employee number already exists.");
 
-    const { idNumber, status, loginEmail, invitedRole, ...rest } = args;
+    const { idNumber, status, loginEmail, loginUsername, invitedRole, ...rest } =
+      args;
     const masked = idNumber ? maskId(idNumber) : undefined;
     const email = loginEmail?.trim().toLowerCase() || undefined;
+    const username = loginUsername?.trim().toLowerCase() || undefined;
     // The invite email is canonical for work email; keep contact in sync.
     const contact = email
       ? { ...(rest.contact ?? {}), workEmail: email }
@@ -588,6 +618,7 @@ export const create = mutation({
       ...rest,
       contact,
       loginEmail: email,
+      loginUsername: username,
       invitedRole,
       status: status ?? "active",
       idNumberMasked: masked?.masked,
@@ -598,8 +629,11 @@ export const create = mutation({
     });
 
     // If they're already in the org, link immediately; otherwise the link is
-    // made when they accept the invite (members.linkEmployeeOnJoin).
+    // made when they join (members.linkEmployeeOnJoin) — via email on invite
+    // acceptance, or via username once the org-add / signup completes.
     if (email) await linkExistingMember(ctx, orgId, id, email, invitedRole);
+    if (username && !email)
+      await linkExistingMemberByUsername(ctx, orgId, id, username, invitedRole);
 
     await writeAuditLog(ctx, {
       orgId,
@@ -607,7 +641,7 @@ export const create = mutation({
       action: "employee.create",
       entity: "employees",
       entityId: id,
-      after: { employeeNumber: args.employeeNumber, loginEmail: email },
+      after: { employeeNumber: args.employeeNumber, loginEmail: email, loginUsername: username },
     });
     return id;
   },
@@ -874,6 +908,256 @@ export const archive = mutation({
       action: "employee.archive",
       entity: "employees",
       entityId: employeeId,
+    });
+    return null;
+  },
+});
+
+// Best-effort storage delete — ignores already-removed files.
+async function tryDeleteStorage(ctx: MutationCtx, id?: Id<"_storage"> | null) {
+  if (!id) return;
+  try {
+    await ctx.storage.delete(id);
+  } catch {
+    // already gone
+  }
+}
+
+// Permanently delete an employee and cascade their owned operational records
+// (documents, equipment, job history, leave, claims, attendance, scheduling,
+// compensation, performance) plus their files, and clear references other rows
+// hold to them (reports' manager, dept head, team lead, hiring manager,
+// appraiser, feed audiences). Financial records are protected: an employee with
+// payslips can't be deleted — archive instead to preserve payroll history.
+export const remove = mutation({
+  args: { employeeId: v.id("employees") },
+  returns: v.null(),
+  handler: async (ctx, { employeeId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgId) {
+      throw new Error("Employee not found.");
+    }
+
+    // Protect payroll history: a generated payslip is a financial record.
+    const payslip = await ctx.db
+      .query("payslips")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .first();
+    if (payslip) {
+      throw new Error(
+        "This employee has payslips. Archive them instead of deleting to preserve payroll records.",
+      );
+    }
+
+    // ── Delete owned records (+ their files) ────────────────────────────────
+    const documents = await ctx.db
+      .query("employeeDocuments")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const d of documents) {
+      await tryDeleteStorage(ctx, d.storageId);
+      for (const sid of d.storageIds ?? []) await tryDeleteStorage(ctx, sid);
+      await ctx.db.delete(d._id);
+    }
+
+    const claims = await ctx.db
+      .query("claims")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const c of claims) {
+      for (const sid of c.receiptStorageIds) await tryDeleteStorage(ctx, sid);
+      const comments = await ctx.db
+        .query("claimComments")
+        .withIndex("by_claim", (q) => q.eq("claimId", c._id))
+        .collect();
+      for (const cm of comments) await ctx.db.delete(cm._id);
+      await ctx.db.delete(c._id);
+    }
+
+    const leaveRequests = await ctx.db
+      .query("leaveRequests")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const lr of leaveRequests) {
+      await tryDeleteStorage(ctx, lr.attachmentStorageId);
+      await ctx.db.delete(lr._id);
+    }
+
+    // Straightforward by-employee deletes (no owned files).
+    const leaveBalances = await ctx.db
+      .query("leaveBalances")
+      .withIndex("by_org_employee_year", (q) =>
+        q.eq("orgId", orgId).eq("employeeId", employeeId),
+      )
+      .collect();
+    for (const row of leaveBalances) await ctx.db.delete(row._id);
+
+    const equipment = await ctx.db
+      .query("equipment")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of equipment) await ctx.db.delete(row._id);
+
+    const jobHistory = await ctx.db
+      .query("jobHistory")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of jobHistory) await ctx.db.delete(row._id);
+
+    const attendance = await ctx.db
+      .query("attendanceRecords")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of attendance) await ctx.db.delete(row._id);
+
+    const corrections = await ctx.db
+      .query("attendanceCorrections")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of corrections) await ctx.db.delete(row._id);
+
+    const shifts = await ctx.db
+      .query("shiftAssignments")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of shifts) await ctx.db.delete(row._id);
+
+    const compensation = await ctx.db
+      .query("compensation")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of compensation) await ctx.db.delete(row._id);
+
+    const goals = await ctx.db
+      .query("goals")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of goals) await ctx.db.delete(row._id);
+
+    const devPlans = await ctx.db
+      .query("developmentPlans")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of devPlans) await ctx.db.delete(row._id);
+
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of reviews) await ctx.db.delete(row._id);
+
+    const reviewObjectives = await ctx.db
+      .query("reviewObjectives")
+      .withIndex("by_employee_cycle", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of reviewObjectives) await ctx.db.delete(row._id);
+
+    const reviewCompetencies = await ctx.db
+      .query("reviewCompetencies")
+      .withIndex("by_employee_cycle", (q) => q.eq("employeeId", employeeId))
+      .collect();
+    for (const row of reviewCompetencies) await ctx.db.delete(row._id);
+
+    const feedbackAbout = await ctx.db
+      .query("feedback")
+      .withIndex("by_subject", (q) => q.eq("subjectEmployeeId", employeeId))
+      .collect();
+    for (const row of feedbackAbout) await ctx.db.delete(row._id);
+
+    const f360Subject = await ctx.db
+      .query("feedback360Assignments")
+      .withIndex("by_subject", (q) => q.eq("subjectEmployeeId", employeeId))
+      .collect();
+    for (const row of f360Subject) await ctx.db.delete(row._id);
+    const f360Giver = await ctx.db
+      .query("feedback360Assignments")
+      .withIndex("by_giver_status", (q) => q.eq("giverEmployeeId", employeeId))
+      .collect();
+    for (const row of f360Giver) await ctx.db.delete(row._id);
+
+    // leavePolicyAssignments has no by-employee index; it's a small table.
+    const assignments = await ctx.db.query("leavePolicyAssignments").collect();
+    for (const a of assignments) {
+      if (a.employeeId === employeeId) await ctx.db.delete(a._id);
+    }
+
+    // ── Clear references other rows hold to this employee ──────────────────
+    const reports = await ctx.db
+      .query("employees")
+      .withIndex("by_org_manager", (q) =>
+        q.eq("orgId", orgId).eq("managerId", employeeId),
+      )
+      .collect();
+    for (const r of reports) await ctx.db.patch(r._id, { managerId: undefined });
+
+    const appraisals = await ctx.db
+      .query("reviews")
+      .withIndex("by_manager_status", (q) => q.eq("managerId", employeeId))
+      .collect();
+    for (const r of appraisals) await ctx.db.patch(r._id, { managerId: undefined });
+
+    const departments = await ctx.db
+      .query("departments")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const d of departments) {
+      if (d.headEmployeeId === employeeId) {
+        await ctx.db.patch(d._id, { headEmployeeId: undefined });
+      }
+    }
+
+    const teams = await ctx.db
+      .query("teams")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const t of teams) {
+      if (t.leadEmployeeId === employeeId) {
+        await ctx.db.patch(t._id, { leadEmployeeId: undefined });
+      }
+    }
+
+    const jobs = await ctx.db
+      .query("jobs")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const j of jobs) {
+      if (j.hiringManagerEmployeeId === employeeId) {
+        await ctx.db.patch(j._id, { hiringManagerEmployeeId: undefined });
+      }
+    }
+
+    const feedPosts = await ctx.db
+      .query("feedPosts")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const p of feedPosts) {
+      if (p.audienceEmployeeIds?.includes(employeeId)) {
+        await ctx.db.patch(p._id, {
+          audienceEmployeeIds: p.audienceEmployeeIds.filter(
+            (e) => e !== employeeId,
+          ),
+        });
+      }
+    }
+
+    // ── Finally, the employee + their own files ─────────────────────────────
+    await tryDeleteStorage(ctx, employee.photoStorageId);
+    for (const sid of employee.galleryStorageIds ?? []) {
+      await tryDeleteStorage(ctx, sid);
+    }
+    await ctx.db.delete(employeeId);
+
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "employee.delete",
+      entity: "employees",
+      entityId: employeeId,
+      before: {
+        employeeNumber: employee.employeeNumber,
+        name: `${employee.firstName} ${employee.lastName}`,
+      },
     });
     return null;
   },

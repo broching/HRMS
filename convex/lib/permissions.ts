@@ -31,23 +31,28 @@ export type Permission = (typeof PERMISSIONS)[number];
 
 const ALL: Permission[] = [...PERMISSIONS];
 
+const HR_PERMISSIONS: Permission[] = [
+  "members:manage",
+  "employees:manage",
+  "employees:read:all",
+  "leave:config",
+  "leave:approve:all",
+  "claims:approve:finance",
+  "payroll:manage",
+  "recruitment:manage",
+  "attendance:config",
+  "scheduling:manage",
+  "performance:manage",
+  "reports:view",
+  "audit:view",
+];
+
 export const ROLE_PERMISSIONS: Record<HrmsRole, readonly Permission[]> = {
   admin: ALL,
-  hr: [
-    "members:manage",
-    "employees:manage",
-    "employees:read:all",
-    "leave:config",
-    "leave:approve:all",
-    "claims:approve:finance",
-    "payroll:manage",
-    "recruitment:manage",
-    "attendance:config",
-    "scheduling:manage",
-    "performance:manage",
-    "reports:view",
-    "audit:view",
-  ],
+  hr: HR_PERMISSIONS,
+  // Finance currently mirrors HR (same access, incl. the HR Lounge). Kept as a
+  // distinct role so its permissions can diverge later without a data migration.
+  finance: HR_PERMISSIONS,
   manager: [
     // Org-wide capabilities a manager has; report-scoped approvals are
     // granted relationally in handlers, not here.

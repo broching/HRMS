@@ -38,22 +38,37 @@ export function mapClerkRole(clerkRole: string | undefined): HrmsRole {
 }
 
 // When a user joins the org, link them to the employee record HR pre-created
-// for their invite email (matching `employees.loginEmail`). Returns the role
-// the employee was invited with, so the membership can be seeded accordingly.
+// for their invite. Matches on `employees.loginEmail` first, then on
+// `employees.loginUsername` (people added by username rather than email).
+// Returns the role the employee was invited with, so the membership can be
+// seeded accordingly.
 async function linkEmployeeOnJoin(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   userId: Id<"users">,
   userEmail: string | undefined,
 ): Promise<HrmsRole | undefined> {
-  if (!userEmail) return undefined;
-  const email = userEmail.toLowerCase();
-  const employee = await ctx.db
-    .query("employees")
-    .withIndex("by_org_loginEmail", (q) =>
-      q.eq("orgId", orgId).eq("loginEmail", email),
-    )
-    .first();
+  const user = await ctx.db.get(userId);
+  const email = (userEmail ?? user?.email)?.toLowerCase();
+  const username = user?.username?.toLowerCase();
+
+  let employee = null;
+  if (email) {
+    employee = await ctx.db
+      .query("employees")
+      .withIndex("by_org_loginEmail", (q) =>
+        q.eq("orgId", orgId).eq("loginEmail", email),
+      )
+      .first();
+  }
+  if (!employee && username) {
+    employee = await ctx.db
+      .query("employees")
+      .withIndex("by_org_loginUsername", (q) =>
+        q.eq("orgId", orgId).eq("loginUsername", username),
+      )
+      .first();
+  }
   if (!employee) return undefined;
   if (!employee.userId) await ctx.db.patch(employee._id, { userId });
   return employee.invitedRole;
@@ -277,6 +292,7 @@ export const list = query({
       userId: v.id("users"),
       name: v.string(),
       email: v.optional(v.string()),
+      username: v.optional(v.string()),
       imageUrl: v.optional(v.string()),
       role: hrmsRole,
       status: v.union(
@@ -305,8 +321,11 @@ export const list = query({
         return {
           memberId: m._id,
           userId: m.userId,
-          name: user?.name ?? "Unknown",
+          // Username-only accounts have no first/last name — fall back so the
+          // row isn't blank.
+          name: user?.name?.trim() || user?.username || user?.email || "Unknown",
           email: user?.email,
+          username: user?.username,
           imageUrl: user?.imageUrl,
           role: m.role,
           status: m.status,
@@ -314,6 +333,25 @@ export const list = query({
         };
       }),
     );
+  },
+});
+
+// The membership + current role behind an employee profile, so HR/admin can
+// change the person's role from their profile. Returns null when the employee
+// isn't a linked org member yet (e.g. invite not accepted, or a vacant role).
+export const roleForEmployee = query({
+  args: { employeeId: v.id("employees") },
+  returns: v.union(
+    v.null(),
+    v.object({ memberId: v.id("members"), role: hrmsRole }),
+  ),
+  handler: async (ctx, { employeeId }) => {
+    const { orgId } = await requirePermission(ctx, "members:manage");
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgId || !employee.userId) return null;
+    const member = await memberByOrgAndUser(ctx, orgId, employee.userId);
+    if (!member || member.status === "removed") return null;
+    return { memberId: member._id, role: member.role };
   },
 });
 

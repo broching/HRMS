@@ -51,7 +51,8 @@ export default function MembersSettingsPage() {
   const setRole = useMutation(api.members.setRole)
 
   // Server enforces this too; the UI check just avoids a confusing error state.
-  const canManage = me?.role === "admin" || me?.role === "hr"
+  const canManage =
+    me?.role === "admin" || me?.role === "hr" || me?.role === "finance"
 
   async function handleRoleChange(
     memberId: Id<"members">,
@@ -139,9 +140,9 @@ export default function MembersSettingsPage() {
                         </Avatar>
                         <div className="flex flex-col">
                           <span className="text-sm font-medium">{m.name}</span>
-                          {m.email && (
+                          {(m.email ?? m.username) && (
                             <span className="text-muted-foreground text-xs">
-                              {m.email}
+                              {m.email ?? `@${m.username}`}
                             </span>
                           )}
                         </div>

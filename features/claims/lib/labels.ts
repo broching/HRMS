@@ -1,6 +1,7 @@
 import type { ClaimStatus, ClaimCategory } from "@/convex/lib/enums"
 
 export const CLAIM_STATUS_LABELS: Record<ClaimStatus, string> = {
+  draft: "Draft",
   pending_manager: "Pending manager",
   pending_finance: "Pending finance",
   approved: "Approved",
@@ -13,6 +14,7 @@ export const CLAIM_STATUS_BADGE: Record<
   ClaimStatus,
   "default" | "secondary" | "outline" | "destructive"
 > = {
+  draft: "outline",
   pending_manager: "secondary",
   pending_finance: "secondary",
   approved: "default",
@@ -30,6 +32,26 @@ export const CLAIM_CATEGORY_LABELS: Record<ClaimCategory, string> = {
   training: "Training",
   entertainment: "Entertainment",
   custom: "Custom",
+}
+
+// ─── Month helpers (YYYY-MM) ────────────────────────────────────────────────
+
+export function currentMonth(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+}
+
+export function addMonth(ym: string, delta: number): string {
+  const [y, m] = ym.split("-").map(Number)
+  const d = new Date(y, m - 1 + delta, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+}
+
+export function monthLabel(ym: string): string {
+  const d = new Date(`${ym}-01T00:00:00`)
+  return Number.isNaN(d.getTime())
+    ? ym
+    : d.toLocaleDateString(undefined, { month: "long", year: "numeric" })
 }
 
 export function formatMoney(cents: number, currency: string): string {

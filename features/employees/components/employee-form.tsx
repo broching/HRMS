@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { useForm, type Control, type FieldPath } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { useQuery, useMutation } from "convex/react"
+import { useQuery, useMutation, useAction } from "convex/react"
 import { useOrganization } from "@clerk/nextjs"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
@@ -52,7 +52,8 @@ const schema = z.object({
   idNumber: z.string().optional(),
   personalEmail: z.string().optional(),
   workEmail: z.string().optional(),
-  role: z.enum(["admin", "hr", "manager", "employee"]),
+  username: z.string().optional(),
+  role: z.enum(["admin", "hr", "finance", "manager", "employee"]),
   phone: z.string().optional(),
   addressLine1: z.string().optional(),
   addressLine2: z.string().optional(),
@@ -90,6 +91,7 @@ const HRMS_ROLES: { value: HrmsRole; label: string }[] = [
   { value: "employee", label: "Employee" },
   { value: "manager", label: "Manager" },
   { value: "hr", label: "HR" },
+  { value: "finance", label: "Finance" },
   { value: "admin", label: "Admin" },
 ]
 
@@ -128,7 +130,12 @@ function TextField({
         <FormItem>
           <FormLabel>{label}</FormLabel>
           <FormControl>
-            <Input type={type} placeholder={placeholder} {...field} />
+            <Input
+              type={type}
+              placeholder={placeholder}
+              {...field}
+              value={field.value ?? ""}
+            />
           </FormControl>
           <FormMessage />
         </FormItem>
@@ -195,6 +202,7 @@ export function EmployeeForm({
   const { organization } = useOrganization()
   const create = useMutation(api.employees.create)
   const update = useMutation(api.employees.update)
+  const addByUsername = useAction(api.orgMembers.addByUsername)
 
   const departments = useQuery(api.departments.list) ?? []
   const teams = useQuery(api.teams.list) ?? []
@@ -281,32 +289,61 @@ export function EmployeeForm({
         router.push(`/employees/${employeeId}`)
       } else {
         const email = opt(values.workEmail)
-        if (!email || !EMAIL_RE.test(email)) {
-          toast.error("Enter a valid work email to invite this person.")
+        const username = opt(values.username)?.toLowerCase()
+        if (!email && !username) {
+          toast.error("Enter a work email or a username to add this person.")
           return
         }
-        // Invite them to the Clerk organization (best-effort — if it fails,
-        // e.g. they're already a member, we still create + link the profile).
-        let inviteWarning: string | null = null
-        try {
-          await organization?.inviteMember({
-            emailAddress: email,
-            role: clerkRoleFor(values.role),
-          })
-        } catch (e) {
-          inviteWarning =
-            e instanceof Error ? e.message : "the invitation could not be sent"
+        if (email && !EMAIL_RE.test(email)) {
+          toast.error("Enter a valid work email.")
+          return
         }
+
+        // Create + link the profile first, so whichever join path completes
+        // (email invite acceptance, or username org-add) links it reliably.
         const id = await create({
           employeeNumber: values.employeeNumber,
           loginEmail: email,
+          loginUsername: username,
           invitedRole: values.role,
           ...common,
         })
-        if (inviteWarning) {
-          toast.warning(`Employee created, but invite not sent: ${inviteWarning}`)
+
+        // Then wire up access (best-effort — a failure here doesn't undo the
+        // profile). Email → Clerk org invitation. Username → direct org-add of
+        // the existing account, or a pending link auto-resolved on signup.
+        const notes: string[] = []
+        if (email) {
+          try {
+            await organization?.inviteMember({
+              emailAddress: email,
+              role: clerkRoleFor(values.role),
+            })
+          } catch (e) {
+            notes.push(
+              `email invite not sent (${e instanceof Error ? e.message : "unknown error"})`,
+            )
+          }
+        }
+        if (username) {
+          try {
+            const res = await addByUsername({ username, role: values.role })
+            if (res.status === "not_found") {
+              notes.push(
+                `no account named “${username}” yet — they’ll be added automatically when they sign up`,
+              )
+            }
+          } catch (e) {
+            notes.push(
+              `could not add “${username}” (${e instanceof Error ? e.message : "unknown error"})`,
+            )
+          }
+        }
+
+        if (notes.length) {
+          toast.warning(`Employee created. ${notes.join("; ")}.`)
         } else {
-          toast.success("Employee created and invited to the organization")
+          toast.success("Employee created and added to the organization")
         }
         router.push(`/employees/${id}`)
       }
@@ -347,6 +384,14 @@ export function EmployeeForm({
               placeholder="name@company.com"
             />
             {!employeeId && (
+              <TextField
+                control={form.control}
+                name="username"
+                label="Username (adds by account)"
+                placeholder="jdoe"
+              />
+            )}
+            {!employeeId && (
               <SelectField
                 control={form.control}
                 name="role"
@@ -356,9 +401,11 @@ export function EmployeeForm({
             )}
             {!employeeId && (
               <p className="text-muted-foreground col-span-full text-xs">
-                Adding an employee invites them to the organization with this
-                email. They become a member when they accept, and their profile
-                is linked automatically.
+                Add a person by <strong>work email</strong>, <strong>username</strong>,
+                or both — you need at least one. An email sends an org invite they
+                accept; a username adds their existing account directly (or links
+                automatically once they sign up with it). Their profile is linked
+                either way.
               </p>
             )}
           </CardContent>

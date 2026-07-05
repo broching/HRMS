@@ -30,7 +30,9 @@ import {
   claimCategory,
   claimStatus,
   claimApproverStep,
+  claimAssigneeGroup,
   claimPayrollMode,
+  claimExchangeMode,
   attendanceMethod,
   attendanceStatus,
   correctionStatus,
@@ -111,6 +113,7 @@ const employeeFields = {
   orgId: v.id("organizations"),
   userId: v.optional(v.id("users")),
   loginEmail: v.optional(v.string()),
+  loginUsername: v.optional(v.string()),
   invitedRole: v.optional(hrmsRole),
   employeeNumber: v.string(),
   isVacant: v.optional(v.boolean()),
@@ -453,6 +456,7 @@ const claimRowFields = {
   _id: v.id("claims"),
   _creationTime: v.number(),
   employeeId: v.id("employees"),
+  groupId: v.optional(v.id("claimGroups")),
   employeeName: v.string(),
   claimTypeName: v.string(),
   category: claimCategory,
@@ -460,6 +464,7 @@ const claimRowFields = {
   currency: v.string(),
   incurredDate: v.string(),
   description: v.string(),
+  remarks: v.optional(v.string()),
   status: claimStatus,
   receiptCount: v.number(),
   decisionNote: v.optional(v.string()),
@@ -467,15 +472,40 @@ const claimRowFields = {
 
 export const claimRow = v.object(claimRowFields);
 
+// A claim receipt resolved to a servable URL plus its stored content type, so
+// the UI can render images/PDFs inline (and open any file in a new tab). The
+// storageId lets the edit form preserve existing attachments.
+export const claimReceipt = v.object({
+  storageId: v.id("_storage"),
+  url: v.string(),
+  contentType: v.union(v.string(), v.null()),
+});
+
 export const claimDetail = v.object({
   ...claimRowFields,
   taxAmountCents: v.union(v.number(), v.null()),
   localAmountCents: v.union(v.number(), v.null()),
   localCurrency: v.union(v.string(), v.null()),
+  // Foreign-currency exchange snapshot (null on same-currency claims).
+  exchangeRate: v.union(v.number(), v.null()),
+  exchangeMode: v.union(claimExchangeMode, v.null()),
+  exchangeRateDate: v.union(v.string(), v.null()),
+  exchangeProvider: v.union(v.string(), v.null()),
   receiptNo: v.union(v.string(), v.null()),
-  receiptUrls: v.array(v.string()),
+  receipts: v.array(claimReceipt),
   managerApproverUserId: v.union(v.id("users"), v.null()),
   financeApproverUserId: v.union(v.id("users"), v.null()),
+  // Whether the viewer may edit this claim (an approver acting on a pending
+  // claim). Drives the edit affordance in the detail view.
+  canEdit: v.boolean(),
+  // Edit audit trail (who changed what, when) resolved to display names.
+  edits: v.array(
+    v.object({
+      editedByName: v.string(),
+      editedAt: v.number(),
+      summary: v.string(),
+    }),
+  ),
   // Whether the viewer is the employee who filed this claim (owner) — used to
   // offer the "mark reimbursed" action once approved.
   isMine: v.boolean(),
@@ -498,6 +528,53 @@ export const claimDetail = v.object({
   sentToPayroll: v.boolean(),
 });
 
+// One employee's bucket in the approver's queue: how many of their claims await
+// the caller, and the base-currency total across them.
+export const claimApprovalGroup = v.object({
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  pendingCount: v.number(),
+  totalAmountCents: v.number(),
+  currency: v.string(),
+});
+
+// One claim in the per-employee approval drill-down, with receipts resolved for
+// quick inline/new-tab viewing.
+export const claimApprovalItem = v.object({
+  ...claimRowFields,
+  receipts: v.array(claimReceipt),
+});
+
+// One monthly claim group (batch) in the approver's queue. `pendingCount` is how
+// many of its claims await the caller right now; a group is "complete" (shown
+// under the completed section) when nothing in it awaits the caller. Totals/
+// counts reflect only the claims the caller is allowed to see.
+export const claimApprovalGroupRow = v.object({
+  groupId: v.id("claimGroups"),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  periodMonth: v.string(),
+  sequence: v.number(),
+  title: v.union(v.string(), v.null()),
+  submittedAt: v.union(v.number(), v.null()),
+  pendingCount: v.number(), // awaiting the caller
+  visibleCount: v.number(), // total claims the caller can see in the group
+  approvedCount: v.number(),
+  rejectedCount: v.number(),
+  totalAmountCents: v.number(), // sum of visible claims
+  currency: v.string(),
+  complete: v.boolean(), // pendingCount === 0
+});
+
+// One claim inside a group drill-down. `canAct` = the caller may approve/reject
+// it now (it's awaiting their step); otherwise it's shown read-only (already
+// approved, or rejected and visible to the caller under the top-down rule).
+export const claimGroupApprovalItem = v.object({
+  ...claimRowFields,
+  receipts: v.array(claimReceipt),
+  canAct: v.boolean(),
+});
+
 // Org claim settings (return of claimSettings.get) — resolved with defaults so
 // the form always has a complete shape to bind to.
 export const claimSettingsValue = v.object({
@@ -505,6 +582,7 @@ export const claimSettingsValue = v.object({
   transactionValidityMonths: v.union(v.number(), v.null()),
   hrApproverUserIds: v.array(v.id("users")),
   financeApproverUserIds: v.array(v.id("users")),
+  assigneeGroups: v.array(claimAssigneeGroup),
   approvalWorkflow: v.array(claimApproverStep),
   payrollMode: claimPayrollMode,
   payrollItem: v.union(v.string(), v.null()),

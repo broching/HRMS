@@ -10,7 +10,7 @@ export default function HrClaimsPage() {
         description="Claims awaiting finance approval and reimbursement."
       />
       <ClaimsTabs />
-      <ClaimsApprovalQueue />
+      <ClaimsApprovalQueue showOrgFilters />
     </div>
   )
 }

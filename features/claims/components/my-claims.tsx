@@ -9,6 +9,10 @@ import type { Id } from "@/convex/_generated/dataModel"
 import type { ClaimStatus } from "@/convex/lib/enums"
 import { getErrorMessage } from "@/lib/errors"
 import { ClaimDetailDialog } from "@/features/claims/components/claim-detail"
+import { ClaimEditLauncher } from "@/features/claims/components/claim-edit-dialog"
+import { ConfirmDialog } from "@/features/claims/components/confirm-dialog"
+import { MonthNav } from "@/features/claims/components/month-nav"
+import { SubmitClaimDialog } from "@/features/claims/components/submit-claim-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -31,56 +35,145 @@ import { Skeleton } from "@/components/ui/skeleton"
 import {
   CLAIM_STATUS_BADGE,
   CLAIM_STATUS_LABELS,
+  currentMonth,
   formatMoney,
+  monthLabel,
 } from "@/features/claims/lib/labels"
 
 const ALL = "all"
+// Statuses the owner can filter by (drafts included; "cancelled" is legacy).
 const STATUSES: ClaimStatus[] = [
+  "draft",
   "pending_manager",
   "pending_finance",
   "approved",
   "rejected",
   "reimbursed",
-  "cancelled",
 ]
 
 export function MyClaims() {
+  const [month, setMonth] = React.useState(currentMonth())
   const claims = useQuery(api.claims.mine)
   const claimTypes = useQuery(api.claimTypes.list, { includeInactive: true }) ?? []
-  const cancel = useMutation(api.claims.cancel)
+  const del = useMutation(api.claims.deleteClaim)
+  const submitMonth = useMutation(api.claims.submitMonth)
+  const resubmit = useMutation(api.claims.resubmitClaims)
 
   const [typeId, setTypeId] = React.useState(ALL)
   const [status, setStatus] = React.useState(ALL)
   const [search, setSearch] = React.useState("")
-  const [fromDate, setFromDate] = React.useState("")
   const [openId, setOpenId] = React.useState<Id<"claims"> | null>(null)
+  const [editId, setEditId] = React.useState<Id<"claims"> | null>(null)
+  const [deleteId, setDeleteId] = React.useState<Id<"claims"> | null>(null)
+  const [submitAllOpen, setSubmitAllOpen] = React.useState(false)
+  const [resubmitOpen, setResubmitOpen] = React.useState(false)
+  const [selected, setSelected] = React.useState<Set<Id<"claims">>>(new Set())
+  const [busy, setBusy] = React.useState(false)
 
-  async function handleCancel(claimId: Id<"claims">) {
-    try {
-      await cancel({ claimId })
-      toast.success("Claim cancelled")
-    } catch (e) {
-      toast.error(getErrorMessage(e, "Couldn't cancel this claim"))
-    }
-  }
+  // Reset the resubmit selection whenever the month changes.
+  React.useEffect(() => {
+    setSelected(new Set())
+  }, [month])
 
   const typeNameById = new Map(claimTypes.map((t) => [t._id, t.name]))
 
-  const filtered = (claims ?? []).filter((c) => {
-    if (typeId !== ALL && typeNameById.get(typeId as Id<"claimTypes">) !== c.claimTypeName)
-      return false
-    if (status !== ALL && c.status !== status) return false
-    if (fromDate && c.incurredDate < fromDate) return false
-    if (search.trim()) {
-      const q = search.trim().toLowerCase()
-      const hay = `${c.claimTypeName} ${c.description}`.toLowerCase()
-      if (!hay.includes(q)) return false
+  const monthClaims = (claims ?? [])
+    .filter((c) => c.incurredDate.startsWith(month))
+    .filter((c) => {
+      if (typeId !== ALL && typeNameById.get(typeId as Id<"claimTypes">) !== c.claimTypeName)
+        return false
+      if (status !== ALL && c.status !== status) return false
+      if (search.trim()) {
+        const q = search.trim().toLowerCase()
+        const hay = `${c.claimTypeName} ${c.description}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+    .sort((a, b) => (a.incurredDate < b.incurredDate ? 1 : -1))
+
+  const draftCount = (claims ?? []).filter(
+    (c) => c.status === "draft" && c.incurredDate.startsWith(month),
+  ).length
+  const monthTotal = monthClaims.reduce((s, c) => s + c.amountCents, 0)
+  const monthCurrency = monthClaims[0]?.currency ?? "SGD"
+
+  // Rejected claims in the month can be bundled into a fresh submission group.
+  function toggleSelected(id: Id<"claims">) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  async function handleDelete() {
+    if (!deleteId) return
+    setBusy(true)
+    try {
+      await del({ claimId: deleteId })
+      toast.success("Claim deleted")
+      setDeleteId(null)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't delete this claim"))
+    } finally {
+      setBusy(false)
     }
-    return true
-  })
+  }
+
+  async function handleSubmitAll() {
+    setBusy(true)
+    try {
+      const { submitted } = await submitMonth({ month })
+      toast.success(
+        `Submitted ${submitted} claim${submitted === 1 ? "" : "s"} for approval`,
+      )
+      setSubmitAllOpen(false)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't submit claims"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleResubmit() {
+    setBusy(true)
+    try {
+      const { submitted } = await resubmit({ claimIds: [...selected] })
+      toast.success(
+        `Resubmitted ${submitted} claim${submitted === 1 ? "" : "s"} in a new batch`,
+      )
+      setResubmitOpen(false)
+      setSelected(new Set())
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't resubmit claims"))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Month + batch actions */}
+      <div className="flex flex-col gap-3 px-4 sm:flex-row sm:items-center sm:justify-between lg:px-6">
+        <MonthNav month={month} onChange={setMonth} />
+        <div className="flex items-center gap-2">
+          {selected.size > 0 && (
+            <Button variant="outline" onClick={() => setResubmitOpen(true)}>
+              Resubmit selected ({selected.size})
+            </Button>
+          )}
+          {draftCount > 0 && (
+            <Button variant="outline" onClick={() => setSubmitAllOpen(true)}>
+              Submit all ({draftCount})
+            </Button>
+          )}
+          <SubmitClaimDialog month={month} />
+        </div>
+      </div>
+
+      {/* Filters */}
       <div className="flex flex-col gap-3 px-4 lg:flex-row lg:items-center lg:px-6">
         <Select value={typeId} onValueChange={setTypeId}>
           <SelectTrigger className="w-full lg:w-48">
@@ -117,26 +210,13 @@ export function MyClaims() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-1">
-          <Input
-            type="date"
-            aria-label="From date"
-            className="w-full lg:w-44"
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-          />
-          {fromDate && (
-            <Button variant="ghost" size="sm" onClick={() => setFromDate("")}>
-              Clear
-            </Button>
-          )}
-        </div>
       </div>
 
       <div className="mx-4 rounded-lg border lg:mx-6">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-10" />
               <TableHead>Type</TableHead>
               <TableHead>Amount</TableHead>
               <TableHead>Date</TableHead>
@@ -147,26 +227,40 @@ export function MyClaims() {
           <TableBody>
             {claims === undefined ? (
               <TableRow>
-                <TableCell colSpan={5}>
+                <TableCell colSpan={6}>
                   <Skeleton className="h-6 w-full" />
                 </TableCell>
               </TableRow>
-            ) : filtered.length === 0 ? (
+            ) : monthClaims.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="text-muted-foreground py-8 text-center"
                 >
-                  No claims found.
+                  No claims for {monthLabel(month)}.
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((c) => (
+              monthClaims.map((c) => (
                 <TableRow
                   key={c._id}
                   className="hover:bg-muted/50 cursor-pointer"
                   onClick={() => setOpenId(c._id)}
                 >
+                  <TableCell
+                    className="w-10"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {c.status === "rejected" && (
+                      <input
+                        type="checkbox"
+                        className="size-4 cursor-pointer align-middle"
+                        aria-label="Select for resubmission"
+                        checked={selected.has(c._id)}
+                        onChange={() => toggleSelected(c._id)}
+                      />
+                    )}
+                  </TableCell>
                   <TableCell>
                     <span className="font-medium">{c.claimTypeName}</span>
                     <div className="text-muted-foreground max-w-[280px] truncate text-xs">
@@ -183,41 +277,90 @@ export function MyClaims() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setOpenId(c._id)
-                      }}
+                    <div
+                      className="flex justify-end gap-1"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      View
-                    </Button>
-                    {(c.status === "pending_manager" ||
-                      c.status === "pending_finance") && (
+                      {c.status === "draft" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setEditId(c._id)}
+                        >
+                          Edit
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleCancel(c._id)
-                        }}
+                        onClick={() => setOpenId(c._id)}
                       >
-                        Cancel
+                        View
                       </Button>
-                    )}
+                      {(c.status === "draft" || c.status === "rejected") && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive"
+                          onClick={() => setDeleteId(c._id)}
+                        >
+                          Delete
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
             )}
           </TableBody>
         </Table>
+        {monthClaims.length > 0 && (
+          <div className="text-muted-foreground flex justify-end gap-1 border-t px-4 py-2 text-sm">
+            <span>{monthLabel(month)} total:</span>
+            <span className="text-foreground font-semibold tabular-nums">
+              {formatMoney(monthTotal, monthCurrency)}
+            </span>
+          </div>
+        )}
       </div>
 
       <ClaimDetailDialog
         claimId={openId}
         open={openId !== null}
         onOpenChange={(o) => !o && setOpenId(null)}
+      />
+      <ClaimEditLauncher
+        claimId={editId}
+        open={editId !== null}
+        onOpenChange={(o) => !o && setEditId(null)}
+      />
+      <ConfirmDialog
+        open={deleteId !== null}
+        onOpenChange={(o) => !o && setDeleteId(null)}
+        title="Delete claim?"
+        description="This permanently removes the claim and its attachments. This can't be undone."
+        confirmLabel="Delete"
+        destructive
+        busy={busy}
+        onConfirm={handleDelete}
+      />
+      <ConfirmDialog
+        open={submitAllOpen}
+        onOpenChange={setSubmitAllOpen}
+        title="Submit all drafts?"
+        description={`Submit ${draftCount} draft claim${draftCount === 1 ? "" : "s"} for ${monthLabel(month)} into the approval workflow. You won't be able to edit them afterwards.`}
+        confirmLabel="Submit all"
+        busy={busy}
+        onConfirm={handleSubmitAll}
+      />
+      <ConfirmDialog
+        open={resubmitOpen}
+        onOpenChange={setResubmitOpen}
+        title="Resubmit selected claims?"
+        description={`This bundles ${selected.size} rejected claim${selected.size === 1 ? "" : "s"} into a new submission batch and sends ${selected.size === 1 ? "it" : "them"} back through the approval workflow.`}
+        confirmLabel="Resubmit"
+        busy={busy}
+        onConfirm={handleResubmit}
       />
     </div>
   )

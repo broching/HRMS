@@ -289,6 +289,8 @@ async function buildExpenseClaims(
     { key: "description", label: "Description", group: "Expense Claims" },
   ];
   const rows: Row[] = claims
+    // Unsubmitted drafts are private to the employee — keep them out of reports.
+    .filter((c) => c.status !== "draft")
     .map((c) => {
       const emp = byId.get(c.employeeId);
       return {

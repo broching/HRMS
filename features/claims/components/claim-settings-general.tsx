@@ -2,9 +2,33 @@
 
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
-import type { FunctionReturnType } from "convex/server"
 import { toast } from "sonner"
-import { IconTrash, IconPlus, IconChevronDown } from "@tabler/icons-react"
+import {
+  IconTrash,
+  IconChevronDown,
+  IconGripVertical,
+} from "@tabler/icons-react"
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  restrictToVerticalAxis,
+  restrictToParentElement,
+} from "@dnd-kit/modifiers"
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Badge } from "@/components/ui/badge"
@@ -27,11 +51,17 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { getErrorMessage } from "@/lib/errors"
 import { dollarsToCents, centsToInput } from "@/features/payroll/lib/labels"
-
-type Options = FunctionReturnType<typeof api.claimSettings.options>
 
 // ─── Generic multi-select on a list of {value,label} ─────────────────────────
 
@@ -101,21 +131,35 @@ function MultiSelect({
 
 // ─── Form state ──────────────────────────────────────────────────────────────
 
+// Reserved ids for the built-in assignee groups (mirror convex/lib/enums.ts).
+const GROUP_HR = "hr"
+const GROUP_FINANCE = "finance"
+
 type RuleForm = { amount: string; officeIds: Id<"offices">[] }
 type StepForm = {
-  approverType: "position" | "specific"
+  key: string // stable id for drag-and-drop + React keys
+  approverType: "position" | "specific" | "group"
   value: string
   thresholdEnabled: boolean
   rules: RuleForm[]
 }
+type GroupForm = { id: string; name: string; userIds: Id<"users">[] }
 type FormState = {
   cutoffDay: number
   validityMonths: number | null
   hrApproverUserIds: Id<"users">[]
   financeApproverUserIds: Id<"users">[]
+  assigneeGroups: GroupForm[]
   workflow: StepForm[]
   payrollMode: "manual" | "automatic"
   payrollItem: string
+}
+
+// A locally-unique id for new steps/groups.
+function newId() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2)
 }
 
 function Section({
@@ -171,12 +215,61 @@ function RadioRow({
   )
 }
 
+// Sortable wrapper for one approval-workflow step. Provides a drag handle
+// (rendered via the render-prop) wired to dnd-kit's sortable listeners.
+function SortableStep({
+  id,
+  children,
+}: {
+  id: string
+  children: (handle: React.ReactNode) => React.ReactNode
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id })
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : undefined,
+    zIndex: isDragging ? 10 : undefined,
+    position: "relative",
+  }
+  const handle = (
+    <button
+      type="button"
+      className="text-muted-foreground/50 hover:text-foreground -ml-1 cursor-grab touch-none active:cursor-grabbing"
+      aria-label="Drag to reorder"
+      {...attributes}
+      {...listeners}
+    >
+      <IconGripVertical className="size-4" />
+    </button>
+  )
+  return (
+    <div ref={setNodeRef} style={style}>
+      {children(handle)}
+    </div>
+  )
+}
+
 export function ClaimSettingsGeneral() {
   const data = useQuery(api.claimSettings.get)
   const options = useQuery(api.claimSettings.options)
   const save = useMutation(api.claimSettings.save)
   const [form, setForm] = React.useState<FormState | null>(null)
   const [busy, setBusy] = React.useState(false)
+  const [confirmOpen, setConfirmOpen] = React.useState(false)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  )
 
   React.useEffect(() => {
     if (data && form === null) {
@@ -185,7 +278,13 @@ export function ClaimSettingsGeneral() {
         validityMonths: data.transactionValidityMonths,
         hrApproverUserIds: data.hrApproverUserIds,
         financeApproverUserIds: data.financeApproverUserIds,
+        assigneeGroups: data.assigneeGroups.map((g) => ({
+          id: g.id,
+          name: g.name,
+          userIds: g.userIds,
+        })),
         workflow: data.approvalWorkflow.map((s) => ({
+          key: newId(),
           approverType: s.approverType,
           value: s.value,
           thresholdEnabled: s.thresholdEnabled,
@@ -227,8 +326,61 @@ export function ClaimSettingsGeneral() {
         : f,
     )
   }
+  function patchGroup(i: number, p: Partial<GroupForm>) {
+    setForm((f) =>
+      f
+        ? {
+            ...f,
+            assigneeGroups: f.assigneeGroups.map((g, j) =>
+              j === i ? { ...g, ...p } : g,
+            ),
+          }
+        : f,
+    )
+  }
 
-  async function onSave() {
+  // Selectable approver groups for workflow steps: the two built-ins plus any
+  // custom groups the admin has defined.
+  const groupOpts = [
+    { value: GROUP_HR, label: "HR" },
+    { value: GROUP_FINANCE, label: "Finance" },
+    ...form.assigneeGroups.map((g) => ({
+      value: g.id,
+      label: g.name.trim() || "Untitled group",
+    })),
+  ]
+
+  function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    setForm((f) => {
+      if (!f) return f
+      const from = f.workflow.findIndex((s) => s.key === active.id)
+      const to = f.workflow.findIndex((s) => s.key === over.id)
+      if (from < 0 || to < 0) return f
+      return { ...f, workflow: arrayMove(f.workflow, from, to) }
+    })
+  }
+
+  // Validate, then confirm — approval-chain changes only affect future claims.
+  function onSave() {
+    if (!form) return
+    if (form.assigneeGroups.some((g) => !g.name.trim())) {
+      toast.error("Every assignee group needs a name.")
+      return
+    }
+    if (form.workflow.some((s) => s.approverType === "group" && !s.value)) {
+      toast.error("Pick a group for each group approver step.")
+      return
+    }
+    if (form.workflow.some((s) => s.approverType === "specific" && !s.value)) {
+      toast.error("Pick a person for each specific approver step.")
+      return
+    }
+    setConfirmOpen(true)
+  }
+
+  async function doSave() {
     if (!form) return
     setBusy(true)
     try {
@@ -237,6 +389,11 @@ export function ClaimSettingsGeneral() {
         transactionValidityMonths: form.validityMonths,
         hrApproverUserIds: form.hrApproverUserIds,
         financeApproverUserIds: form.financeApproverUserIds,
+        assigneeGroups: form.assigneeGroups.map((g) => ({
+          id: g.id,
+          name: g.name.trim(),
+          userIds: g.userIds,
+        })),
         approvalWorkflow: form.workflow.map((s) => ({
           approverType: s.approverType,
           value: s.value,
@@ -250,6 +407,7 @@ export function ClaimSettingsGeneral() {
         payrollItem: form.payrollItem.trim() || null,
       })
       toast.success("Claim settings saved")
+      setConfirmOpen(false)
     } catch (e) {
       toast.error(getErrorMessage(e, "Couldn't save settings"))
     } finally {
@@ -258,7 +416,11 @@ export function ClaimSettingsGeneral() {
   }
 
   const positionLabel = (s: StepForm) =>
-    s.approverType === "position" ? "Position" : "Specific person"
+    s.approverType === "position"
+      ? "Position"
+      : s.approverType === "group"
+        ? "Assignee group"
+        : "Specific person"
 
   return (
     <div className="px-4 lg:px-6">
@@ -316,7 +478,7 @@ export function ClaimSettingsGeneral() {
         {/* Claim assignees */}
         <Section
           title="Claim assignees"
-          description="People responsible for approving claims. Give them claims access in HR Lounge."
+          description="People responsible for approving claims. HR and Finance automatically review each claim after the approval workflow below — HR first, then Finance. Custom groups only apply when added as a workflow step."
         >
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-1.5">
@@ -341,177 +503,308 @@ export function ClaimSettingsGeneral() {
                 placeholder="Choose"
               />
             </div>
+
+            {form.assigneeGroups.length > 0 && (
+              <>
+                <Separator className="my-1" />
+                {form.assigneeGroups.map((g, gi) => (
+                  <div
+                    key={g.id}
+                    className="bg-muted/30 flex flex-col gap-2 rounded-md border p-3"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="h-8 max-w-xs font-medium"
+                        placeholder="Group name (e.g. Fraud checker)"
+                        value={g.name}
+                        onChange={(e) =>
+                          patchGroup(gi, { name: e.target.value })
+                        }
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive size-8"
+                        onClick={() =>
+                          patch({
+                            assigneeGroups: form.assigneeGroups.filter(
+                              (_, j) => j !== gi,
+                            ),
+                          })
+                        }
+                      >
+                        <IconTrash className="size-4" />
+                      </Button>
+                    </div>
+                    <MultiSelect
+                      options={memberOpts}
+                      selected={g.userIds as string[]}
+                      onChange={(v) =>
+                        patchGroup(gi, { userIds: v as Id<"users">[] })
+                      }
+                      placeholder="Choose members"
+                    />
+                  </div>
+                ))}
+              </>
+            )}
+
+            <button
+              type="button"
+              className="text-primary w-fit text-sm font-medium"
+              onClick={() =>
+                patch({
+                  assigneeGroups: [
+                    ...form.assigneeGroups,
+                    { id: newId(), name: "", userIds: [] },
+                  ],
+                })
+              }
+            >
+              + Add group
+            </button>
           </div>
         </Section>
 
         {/* Approval workflow */}
         <Section
           title="Approval workflow"
-          description="Set the approval chain for employees' claim reports. Higher tiers can apply only above a threshold."
+          description="Set the approval chain for employees' claim reports. Drag to reorder. Higher tiers can apply only above a threshold."
         >
           <div className="flex flex-col gap-5">
-            {form.workflow.map((step, i) => (
-              <div key={i} className="flex flex-col gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-muted-foreground w-24 text-sm">
-                    {i === 0 ? "1st" : i === 1 ? "2nd" : i === 2 ? "3rd" : `${i + 1}th`}{" "}
-                    Approver
-                  </span>
-                  <Select
-                    value={step.approverType}
-                    onValueChange={(v) =>
-                      patchStep(i, {
-                        approverType: v as "position" | "specific",
-                        value: v === "position" ? "manager" : "",
-                      })
-                    }
-                  >
-                    <SelectTrigger className="w-40">
-                      <SelectValue>{positionLabel(step)}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="position">Position</SelectItem>
-                      <SelectItem value="specific">Specific person</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {step.approverType === "position" ? (
-                    <Select
-                      value={step.value || "manager"}
-                      onValueChange={(v) => patchStep(i, { value: v })}
-                    >
-                      <SelectTrigger className="w-44">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="manager">Manager</SelectItem>
-                        <SelectItem value="department_head">
-                          Department head
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Select
-                      value={step.value}
-                      onValueChange={(v) => patchStep(i, { value: v })}
-                    >
-                      <SelectTrigger className="w-44">
-                        <SelectValue placeholder="Choose person" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {options.members.map((m) => (
-                          <SelectItem key={m.userId} value={m.userId}>
-                            {m.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                  {i > 0 && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-destructive"
-                      onClick={() =>
-                        patch({
-                          workflow: form.workflow.filter((_, j) => j !== i),
-                        })
-                      }
-                    >
-                      <IconTrash className="size-4" />
-                    </Button>
-                  )}
-                </div>
-
-                <label className="ml-24 flex w-fit items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={step.thresholdEnabled}
-                    onCheckedChange={(c) =>
-                      patchStep(i, {
-                        thresholdEnabled: c === true,
-                        rules:
-                          c === true && step.rules.length === 0
-                            ? [{ amount: "", officeIds: [] }]
-                            : step.rules,
-                      })
-                    }
-                  />
-                  Enable threshold
-                </label>
-
-                {step.thresholdEnabled && (
-                  <div className="border-primary/40 ml-24 flex flex-col gap-3 border-l-2 bg-muted/40 p-3 text-sm">
-                    <p className="text-muted-foreground">
-                      This approver applies only once a claim exceeds the threshold
-                      below.
-                    </p>
-                    {step.rules.map((rule, ri) => (
-                      <div key={ri} className="flex flex-wrap items-end gap-3">
-                        <div className="flex flex-col gap-1">
-                          <Label className="text-xs">Amount is more than</Label>
-                          <Input
-                            className="w-40"
-                            inputMode="decimal"
-                            placeholder="e.g. 400"
-                            value={rule.amount}
-                            onChange={(e) =>
-                              patchStep(i, {
-                                rules: step.rules.map((r, j) =>
-                                  j === ri ? { ...r, amount: e.target.value } : r,
-                                ),
-                              })
-                            }
-                          />
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <Label className="text-xs">Offices (empty = all)</Label>
-                          <div className="w-56">
-                            <MultiSelect
-                              options={officeOpts}
-                              selected={rule.officeIds as string[]}
-                              onChange={(v) =>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+              onDragEnd={onDragEnd}
+            >
+              <SortableContext
+                items={form.workflow.map((s) => s.key)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="flex flex-col gap-5">
+                  {form.workflow.map((step, i) => (
+                    <SortableStep key={step.key} id={step.key}>
+                      {(handle) => (
+                        <div className="flex flex-col gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {handle}
+                            <span className="text-muted-foreground w-20 text-sm">
+                              {i === 0
+                                ? "1st"
+                                : i === 1
+                                  ? "2nd"
+                                  : i === 2
+                                    ? "3rd"
+                                    : `${i + 1}th`}{" "}
+                              Approver
+                            </span>
+                            <Select
+                              value={step.approverType}
+                              onValueChange={(v) =>
                                 patchStep(i, {
-                                  rules: step.rules.map((r, j) =>
-                                    j === ri
-                                      ? { ...r, officeIds: v as Id<"offices">[] }
-                                      : r,
-                                  ),
+                                  approverType: v as StepForm["approverType"],
+                                  value:
+                                    v === "position"
+                                      ? "manager"
+                                      : v === "group"
+                                        ? GROUP_HR
+                                        : "",
                                 })
                               }
-                              placeholder="All offices"
-                            />
+                            >
+                              <SelectTrigger className="w-40">
+                                <SelectValue>{positionLabel(step)}</SelectValue>
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="position">Position</SelectItem>
+                                <SelectItem value="group">
+                                  Assignee group
+                                </SelectItem>
+                                <SelectItem value="specific">
+                                  Specific person
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {step.approverType === "position" ? (
+                              <Select
+                                value={step.value || "manager"}
+                                onValueChange={(v) => patchStep(i, { value: v })}
+                              >
+                                <SelectTrigger className="w-44">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="manager">Manager</SelectItem>
+                                  <SelectItem value="department_head">
+                                    Department head
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                            ) : step.approverType === "group" ? (
+                              <Select
+                                value={step.value}
+                                onValueChange={(v) => patchStep(i, { value: v })}
+                              >
+                                <SelectTrigger className="w-44">
+                                  <SelectValue placeholder="Choose group" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {groupOpts.map((g) => (
+                                    <SelectItem key={g.value} value={g.value}>
+                                      {g.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <Select
+                                value={step.value}
+                                onValueChange={(v) => patchStep(i, { value: v })}
+                              >
+                                <SelectTrigger className="w-44">
+                                  <SelectValue placeholder="Choose person" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {options.members.map((m) => (
+                                    <SelectItem key={m.userId} value={m.userId}>
+                                      {m.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )}
+                            {form.workflow.length > 1 && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-destructive"
+                                onClick={() =>
+                                  patch({
+                                    workflow: form.workflow.filter(
+                                      (_, j) => j !== i,
+                                    ),
+                                  })
+                                }
+                              >
+                                <IconTrash className="size-4" />
+                              </Button>
+                            )}
                           </div>
+
+                          <label className="ml-28 flex w-fit items-center gap-2 text-sm">
+                            <Checkbox
+                              checked={step.thresholdEnabled}
+                              onCheckedChange={(c) =>
+                                patchStep(i, {
+                                  thresholdEnabled: c === true,
+                                  rules:
+                                    c === true && step.rules.length === 0
+                                      ? [{ amount: "", officeIds: [] }]
+                                      : step.rules,
+                                })
+                              }
+                            />
+                            Enable threshold
+                          </label>
+
+                          {step.thresholdEnabled && (
+                            <div className="border-primary/40 ml-28 flex flex-col gap-3 border-l-2 bg-muted/40 p-3 text-sm">
+                              <p className="text-muted-foreground">
+                                This approver applies only once a claim exceeds the
+                                threshold below.
+                              </p>
+                              {step.rules.map((rule, ri) => (
+                                <div
+                                  key={ri}
+                                  className="flex flex-wrap items-end gap-3"
+                                >
+                                  <div className="flex flex-col gap-1">
+                                    <Label className="text-xs">
+                                      Amount is more than
+                                    </Label>
+                                    <Input
+                                      className="w-40"
+                                      inputMode="decimal"
+                                      placeholder="e.g. 400"
+                                      value={rule.amount}
+                                      onChange={(e) =>
+                                        patchStep(i, {
+                                          rules: step.rules.map((r, j) =>
+                                            j === ri
+                                              ? { ...r, amount: e.target.value }
+                                              : r,
+                                          ),
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <Label className="text-xs">
+                                      Offices (empty = all)
+                                    </Label>
+                                    <div className="w-56">
+                                      <MultiSelect
+                                        options={officeOpts}
+                                        selected={rule.officeIds as string[]}
+                                        onChange={(v) =>
+                                          patchStep(i, {
+                                            rules: step.rules.map((r, j) =>
+                                              j === ri
+                                                ? {
+                                                    ...r,
+                                                    officeIds:
+                                                      v as Id<"offices">[],
+                                                  }
+                                                : r,
+                                            ),
+                                          })
+                                        }
+                                        placeholder="All offices"
+                                      />
+                                    </div>
+                                  </div>
+                                  {step.rules.length > 1 && (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="size-8 text-destructive"
+                                      onClick={() =>
+                                        patchStep(i, {
+                                          rules: step.rules.filter(
+                                            (_, j) => j !== ri,
+                                          ),
+                                        })
+                                      }
+                                    >
+                                      <IconTrash className="size-4" />
+                                    </Button>
+                                  )}
+                                </div>
+                              ))}
+                              <button
+                                type="button"
+                                className="text-primary w-fit text-sm font-medium"
+                                onClick={() =>
+                                  patchStep(i, {
+                                    rules: [
+                                      ...step.rules,
+                                      { amount: "", officeIds: [] },
+                                    ],
+                                  })
+                                }
+                              >
+                                + Add rule
+                              </button>
+                            </div>
+                          )}
                         </div>
-                        {step.rules.length > 1 && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-destructive"
-                            onClick={() =>
-                              patchStep(i, {
-                                rules: step.rules.filter((_, j) => j !== ri),
-                              })
-                            }
-                          >
-                            <IconTrash className="size-4" />
-                          </Button>
-                        )}
-                      </div>
-                    ))}
-                    <button
-                      type="button"
-                      className="text-primary w-fit text-sm font-medium"
-                      onClick={() =>
-                        patchStep(i, {
-                          rules: [...step.rules, { amount: "", officeIds: [] }],
-                        })
-                      }
-                    >
-                      + Add rule
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
+                      )}
+                    </SortableStep>
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
             <button
               type="button"
               className="text-primary w-fit text-sm font-medium"
@@ -520,6 +813,7 @@ export function ClaimSettingsGeneral() {
                   workflow: [
                     ...form.workflow,
                     {
+                      key: newId(),
                       approverType: "position",
                       value: "manager",
                       thresholdEnabled: false,
@@ -570,6 +864,31 @@ export function ClaimSettingsGeneral() {
           {busy ? "Saving…" : "Save settings"}
         </Button>
       </div>
+
+      <Dialog open={confirmOpen} onOpenChange={(o) => !busy && setConfirmOpen(o)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save claim settings?</DialogTitle>
+            <DialogDescription>
+              These changes apply <strong>only to claims created after saving</strong>.
+              Claims already submitted keep the approval chain they were created
+              with, so in-flight approvals aren&apos;t disrupted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button onClick={doSave} disabled={busy}>
+              {busy ? "Saving…" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

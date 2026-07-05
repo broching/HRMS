@@ -1,5 +1,4 @@
 import { PageHeader } from "@/components/shared/page-header"
-import { SubmitClaimDialog } from "@/features/claims/components/submit-claim-dialog"
 import { MyClaims } from "@/features/claims/components/my-claims"
 
 export default function ClaimsPage() {
@@ -8,9 +7,7 @@ export default function ClaimsPage() {
       <PageHeader
         title="My claims"
         description="Submit expenses and track reimbursement."
-      >
-        <SubmitClaimDialog />
-      </PageHeader>
+      />
       <MyClaims />
     </div>
   )

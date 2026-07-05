@@ -3,11 +3,18 @@
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
-import { IconCheck, IconPaperclip } from "@tabler/icons-react"
+import {
+  IconCheck,
+  IconPaperclip,
+  IconExternalLink,
+  IconPencil,
+  IconZoomIn,
+  IconZoomOut,
+  IconZoomReset,
+} from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { ClaimStatus } from "@/convex/lib/enums"
 import { useCurrentMember } from "@/hooks/use-current-member"
 import { hasPermission } from "@/convex/lib/permissions"
 import { getErrorMessage } from "@/lib/errors"
@@ -24,9 +31,11 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { PageHeader } from "@/components/shared/page-header"
 import {
@@ -35,48 +44,9 @@ import {
   CLAIM_CATEGORY_LABELS,
   formatMoney,
 } from "@/features/claims/lib/labels"
+import { ClaimEditDialog } from "@/features/claims/components/claim-edit-dialog"
 
 type ClaimDoc = FunctionReturnType<typeof api.claims.get>
-
-// The status timeline reflects the claim's actual configured process (`flow`),
-// so a claim without a finance stage never shows "Pending finance".
-function StatusTimeline({
-  flow,
-  status,
-}: {
-  flow: ClaimStatus[]
-  status: ClaimStatus
-}) {
-  const idx = flow.indexOf(status)
-  const terminal = status === "rejected" || status === "cancelled"
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {flow.map((s, i) => (
-        <div key={s} className="flex items-center gap-2">
-          <span
-            className={cn(
-              "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs",
-              !terminal && i <= idx
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-muted-foreground",
-            )}
-          >
-            {!terminal && i < idx && <IconCheck className="size-3" />}
-            {CLAIM_STATUS_LABELS[s]}
-          </span>
-          {i < flow.length - 1 && (
-            <span className="text-muted-foreground">→</span>
-          )}
-        </div>
-      ))}
-      {terminal && (
-        <Badge variant={CLAIM_STATUS_BADGE[status]}>
-          {CLAIM_STATUS_LABELS[status]}
-        </Badge>
-      )}
-    </div>
-  )
-}
 
 // The decision / lifecycle actions available on a claim, gated by the viewer's
 // role and whether they own the claim. `onDone` (used by the dialog) closes the
@@ -97,6 +67,8 @@ function ClaimActions({
   const markReimbursed = useMutation(api.claims.markReimbursed)
   const setSentToPayroll = useMutation(api.claims.setSentToPayroll)
   const [busy, setBusy] = React.useState(false)
+  const [rejectOpen, setRejectOpen] = React.useState(false)
+  const [rejectNote, setRejectNote] = React.useState("")
 
   const role = member?.role
   const isFinance = role ? hasPermission(role, "claims:approve:finance") : false
@@ -104,9 +76,6 @@ function ClaimActions({
   // queued for payroll, in which case reimbursement flows through the run and
   // only finance should close it out.
   const canReimburse = isFinance || (claim.isMine && !claim.sentToPayroll)
-  const canCancel = claim.isMine || isFinance
-
-  const cancel = useMutation(api.claims.cancel)
 
   async function run(p: Promise<unknown>, ok: string) {
     setBusy(true)
@@ -126,13 +95,11 @@ function ClaimActions({
   const showApprovalActions = isPending && claim.canApprove
   const showReimburse = claim.status === "approved" && canReimburse
   const showPayrollToggle = claim.status === "approved" && isFinance
-  const showCancel = isPending && canCancel
 
   if (
     !showApprovalActions &&
     !showReimburse &&
     !showPayrollToggle &&
-    !showCancel &&
     !(claim.status === "approved" && claim.sentToPayroll)
   ) {
     return null
@@ -159,10 +126,50 @@ function ClaimActions({
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => run(reject({ claimId }), "Claim rejected")}
+            onClick={() => setRejectOpen(true)}
           >
             Reject
           </Button>
+          <Dialog open={rejectOpen} onOpenChange={(o) => !busy && setRejectOpen(o)}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Reject claim</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-2">
+                <Label>Reason (shared with the employee)</Label>
+                <Textarea
+                  rows={3}
+                  value={rejectNote}
+                  onChange={(e) => setRejectNote(e.target.value)}
+                  placeholder="Why is this claim being rejected?"
+                />
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => setRejectOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() =>
+                    run(
+                      reject({
+                        claimId,
+                        note: rejectNote.trim() || undefined,
+                      }),
+                      "Claim rejected",
+                    )
+                  }
+                >
+                  Reject claim
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
       {showReimburse && (
@@ -196,16 +203,6 @@ function ClaimActions({
           Queued for payroll
         </Badge>
       )}
-      {showCancel && (
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => run(cancel({ claimId }), "Claim cancelled")}
-        >
-          Cancel
-        </Button>
-      )}
     </div>
   )
 }
@@ -221,9 +218,30 @@ function ClaimDetailsCard({
   claimId: Id<"claims">
   onDone?: () => void
 }) {
+  const [editOpen, setEditOpen] = React.useState(false)
   return (
     <div className="flex flex-col gap-4">
-      <StatusTimeline flow={claim.flow} status={claim.status} />
+      {claim.canEdit && (
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => setEditOpen(true)}
+          >
+            <IconPencil className="size-3.5" />
+            Edit
+          </Button>
+        </div>
+      )}
+      {claim.canEdit && (
+        <ClaimEditDialog
+          claim={claim}
+          claimId={claimId}
+          open={editOpen}
+          onOpenChange={setEditOpen}
+        />
+      )}
 
       {claim.approvalChain.length > 0 && (
         <div className="flex flex-col gap-1.5 rounded-lg border p-3">
@@ -261,8 +279,25 @@ function ClaimDetailsCard({
         />
         {claim.localAmountCents !== null && claim.localCurrency && (
           <Field
-            label="Local currency amount"
+            label="Original amount"
             value={formatMoney(claim.localAmountCents, claim.localCurrency)}
+          />
+        )}
+        {claim.exchangeRate !== null && claim.localCurrency && (
+          <Field
+            label="Exchange rate"
+            value={
+              <span>
+                1 {claim.localCurrency} = {claim.exchangeRate} {claim.currency}
+                <span className="text-muted-foreground block text-xs">
+                  {claim.exchangeMode === "auto" ? "Auto" : "Manual"}
+                  {claim.exchangeProvider
+                    ? ` · ${claim.exchangeProvider}`
+                    : ""}
+                  {claim.exchangeRateDate ? ` · ${claim.exchangeRateDate}` : ""}
+                </span>
+              </span>
+            }
           />
         )}
         {claim.taxAmountCents !== null && (
@@ -274,31 +309,200 @@ function ClaimDetailsCard({
         <Field label="Date incurred" value={claim.incurredDate} />
         {claim.receiptNo && <Field label="Receipt No" value={claim.receiptNo} />}
         <Field label="Description" value={claim.description} />
+        {claim.remarks && <Field label="Remarks" value={claim.remarks} />}
         {claim.decisionNote && (
           <Field label="Decision note" value={claim.decisionNote} />
         )}
       </div>
 
-      {claim.receiptUrls.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <span className="text-muted-foreground text-xs">Receipts</span>
-          {claim.receiptUrls.map((url, i) => (
-            <a
-              key={i}
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1 text-sm hover:underline"
-            >
-              <IconPaperclip className="size-3.5" />
-              Receipt {i + 1}
-            </a>
-          ))}
+      {claim.receipts.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <span className="text-muted-foreground text-xs">
+            Receipts ({claim.receipts.length})
+          </span>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {claim.receipts.map((r, i) => (
+              <ReceiptPreview key={i} url={r.url} contentType={r.contentType} index={i} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {claim.edits.length > 0 && (
+        <div className="flex flex-col gap-1 rounded-lg border p-3">
+          <span className="text-muted-foreground text-xs">Edit history</span>
+          {claim.edits
+            .slice()
+            .reverse()
+            .map((e, i) => (
+              <div key={i} className="text-sm">
+                <span className="font-medium">{e.editedByName}</span>
+                <span className="text-muted-foreground">
+                  {" "}
+                  · {new Date(e.editedAt).toLocaleString()}
+                </span>
+                <p className="text-muted-foreground text-xs">{e.summary}</p>
+              </div>
+            ))}
         </div>
       )}
 
       <ClaimActions claim={claim} claimId={claimId} onDone={onDone} />
     </div>
+  )
+}
+
+// One receipt rendered inline: images and PDFs show a preview; anything else
+// falls back to a link. Images open a zoomable lightbox on click; every preview
+// can also open the raw file in a new tab.
+function ReceiptPreview({
+  url,
+  contentType,
+  index,
+}: {
+  url: string
+  contentType: string | null
+  index: number
+}) {
+  const isImage = contentType?.startsWith("image/")
+  const isPdf = contentType === "application/pdf"
+  const [zoomOpen, setZoomOpen] = React.useState(false)
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between">
+        <span className="text-muted-foreground text-xs">
+          Receipt {index + 1}
+        </span>
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary flex items-center gap-1 text-xs hover:underline"
+        >
+          <IconExternalLink className="size-3" />
+          Open
+        </a>
+      </div>
+      {isImage ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setZoomOpen(true)}
+            className="group relative cursor-zoom-in"
+            title="Click to zoom"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url}
+              alt={`Receipt ${index + 1}`}
+              className="max-h-72 w-full rounded-md border object-contain"
+            />
+            <span className="bg-background/80 text-muted-foreground absolute right-1.5 bottom-1.5 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] opacity-0 transition-opacity group-hover:opacity-100">
+              <IconZoomIn className="size-3" />
+              Zoom
+            </span>
+          </button>
+          <ReceiptLightbox
+            url={url}
+            index={index}
+            open={zoomOpen}
+            onOpenChange={setZoomOpen}
+          />
+        </>
+      ) : isPdf ? (
+        <object
+          data={url}
+          type="application/pdf"
+          className="h-72 w-full rounded-md border"
+        >
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1 p-2 text-sm hover:underline"
+          >
+            <IconPaperclip className="size-3.5" />
+            Open PDF
+          </a>
+        </object>
+      ) : (
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-1 rounded-md border p-2 text-sm hover:underline"
+        >
+          <IconPaperclip className="size-3.5" />
+          Open attachment
+        </a>
+      )}
+    </div>
+  )
+}
+
+// Full-screen zoomable/pannable receipt viewer. Zoom via the buttons or the
+// mouse wheel; when zoomed past the frame the container scrolls to pan.
+function ReceiptLightbox({
+  url,
+  index,
+  open,
+  onOpenChange,
+}: {
+  url: string
+  index: number
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [scale, setScale] = React.useState(1)
+  React.useEffect(() => {
+    if (open) setScale(1)
+  }, [open])
+  const zoomIn = () => setScale((s) => Math.min(6, +(s + 0.5).toFixed(2)))
+  const zoomOut = () => setScale((s) => Math.max(1, +(s - 0.5).toFixed(2)))
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[92vh] w-[95vw] max-w-[95vw] flex-col gap-2 p-3">
+        <DialogHeader className="flex-row items-center justify-between gap-2 space-y-0 pr-8">
+          <DialogTitle className="text-sm">Receipt {index + 1}</DialogTitle>
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="icon" className="size-8" onClick={zoomOut} title="Zoom out">
+              <IconZoomOut className="size-4" />
+            </Button>
+            <span className="text-muted-foreground w-12 text-center text-xs tabular-nums">
+              {Math.round(scale * 100)}%
+            </span>
+            <Button variant="outline" size="icon" className="size-8" onClick={zoomIn} title="Zoom in">
+              <IconZoomIn className="size-4" />
+            </Button>
+            <Button variant="outline" size="icon" className="size-8" onClick={() => setScale(1)} title="Reset">
+              <IconZoomReset className="size-4" />
+            </Button>
+            <a href={url} target="_blank" rel="noreferrer" title="Open in new tab">
+              <Button variant="outline" size="icon" className="size-8">
+                <IconExternalLink className="size-4" />
+              </Button>
+            </a>
+          </div>
+        </DialogHeader>
+        <div
+          className="flex-1 overflow-auto rounded-md border bg-muted/30"
+          onWheel={(e) => {
+            if (e.deltaY < 0) zoomIn()
+            else zoomOut()
+          }}
+        >
+          <div className="flex min-h-full min-w-full items-center justify-center p-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url}
+              alt={`Receipt ${index + 1}`}
+              style={{ transform: `scale(${scale})` }}
+              className="max-h-[80vh] origin-center object-contain transition-transform"
+            />
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -408,7 +612,7 @@ export function ClaimDetailDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className="max-h-[92vh] w-[95vw] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Claim details</DialogTitle>
         </DialogHeader>

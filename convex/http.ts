@@ -17,11 +17,23 @@ http.route({
     }
     switch ((event as any).type) {
       case "user.created": // intentional fallthrough
-      case "user.updated":
+      case "user.updated": {
         await ctx.runMutation(internal.users.upsertFromClerk, {
           data: event.data as any,
         });
+        // If they signed up (or added) a username that HR pre-created an
+        // employee for, add them to those orgs directly (Clerk can't email a
+        // username an invite). No-op when there's no username / nothing pending.
+        const clerkUserId = (event.data as any).id as string | undefined;
+        if (clerkUserId) {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.orgMembers.resolvePendingForUser,
+            { clerkUserId },
+          );
+        }
         break;
+      }
 
       case "user.deleted": {
         const clerkUserId = (event.data as any).id!;

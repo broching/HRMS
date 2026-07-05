@@ -68,12 +68,15 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
     )
   }
 
-  const allowed = member?.role === "admin" || member?.role === "hr"
+  const allowed =
+    member?.role === "admin" ||
+    member?.role === "hr" ||
+    member?.role === "finance"
   if (!allowed) {
     return (
       <div className="px-4 py-6 lg:px-6">
         <p className="text-muted-foreground text-sm">
-          The HR Lounge is available to HR and admins only.
+          The HR Lounge is available to HR, Finance and admins only.
         </p>
       </div>
     )

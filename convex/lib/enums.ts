@@ -10,10 +10,11 @@ import { v } from "convex/values";
 export const hrmsRole = v.union(
   v.literal("admin"),
   v.literal("hr"),
+  v.literal("finance"),
   v.literal("manager"),
   v.literal("employee"),
 );
-export type HrmsRole = "admin" | "hr" | "manager" | "employee";
+export type HrmsRole = "admin" | "hr" | "finance" | "manager" | "employee";
 
 // Membership lifecycle, mirrored from Clerk organization membership state.
 export const memberStatus = v.union(
@@ -306,10 +307,13 @@ export type ClaimCategory =
   | "entertainment"
   | "custom";
 
-// Workflow: pending_manager → (pending_finance, only when finance approvers are
-// configured) → approved → reimbursed. The finance stage is skipped entirely
-// when an org hasn't set up finance approvers.
+// Workflow: draft (owner is still preparing the month's batch; not visible to
+// approvers) → pending_manager → (pending_finance, only when finance approvers
+// are configured) → approved → reimbursed. The finance stage is skipped entirely
+// when an org hasn't set up finance approvers. "cancelled" is retained for
+// legacy claims only (the cancel action was removed in favour of delete).
 export const claimStatus = v.union(
+  v.literal("draft"),
   v.literal("pending_manager"),
   v.literal("pending_finance"),
   v.literal("approved"),
@@ -318,6 +322,7 @@ export const claimStatus = v.union(
   v.literal("cancelled"),
 );
 export type ClaimStatus =
+  | "draft"
   | "pending_manager"
   | "pending_finance"
   | "approved"
@@ -335,17 +340,36 @@ export const claimApprovalThresholdRule = v.object({
   officeIds: v.array(v.id("offices")),
 });
 
+// A named pool of members that can be assigned to approve claims (e.g. HR,
+// Finance, or a custom "Fraud checker" group). Built-in HR and Finance groups
+// live in their own dedicated settings fields and are referenced by the reserved
+// ids "hr"/"finance"; custom groups are stored here with generated ids. Any
+// member of the group can act on an approval step that targets it.
+export const claimAssigneeGroup = v.object({
+  id: v.string(),
+  name: v.string(),
+  userIds: v.array(v.id("users")),
+});
+export const CLAIM_GROUP_HR = "hr";
+export const CLAIM_GROUP_FINANCE = "finance";
+
 // One step in the claim approval workflow. `approverType` "position" resolves a
 // role relative to the claimant (manager / department_head); "specific" names a
-// member (value = userId). When `thresholdEnabled`, the step only applies if a
-// claim matches one of its `rules`.
+// member (value = userId); "group" targets an assignee group (value = group id,
+// where any member can approve). When `thresholdEnabled`, the step only applies
+// if a claim matches one of its `rules`.
 export const claimApproverPosition = v.union(
   v.literal("manager"),
   v.literal("department_head"),
 );
+export const claimApproverType = v.union(
+  v.literal("position"),
+  v.literal("specific"),
+  v.literal("group"),
+);
 export const claimApproverStep = v.object({
-  approverType: v.union(v.literal("position"), v.literal("specific")),
-  value: v.string(), // "manager" | "department_head" | userId
+  approverType: claimApproverType,
+  value: v.string(), // "manager" | "department_head" | userId | group id
   thresholdEnabled: v.boolean(),
   rules: v.array(claimApprovalThresholdRule),
 });
@@ -361,13 +385,35 @@ export type ClaimPayrollMode = "manual" | "automatic";
 // submit time from the org's approval workflow. `approverUserId` is resolved
 // from the step's position/specific target against the claimant.
 export const claimChainStep = v.object({
-  approverType: v.union(v.literal("position"), v.literal("specific")),
-  value: v.string(), // "manager" | "department_head" | userId (config)
+  approverType: claimApproverType,
+  value: v.string(), // "manager" | "department_head" | userId | group id (config)
   approverUserId: v.optional(v.id("users")),
-  label: v.string(), // e.g. "Manager — Jane Tan"
+  // For "group" steps: every member eligible to act on this step. Any one of
+  // them can approve. `approverUserId` holds the first (primary) for legacy
+  // single-approver checks and notification targeting.
+  approverUserIds: v.optional(v.array(v.id("users"))),
+  label: v.string(), // e.g. "Manager — Jane Tan" or "Finance"
   decidedByUserId: v.optional(v.id("users")),
   decidedAt: v.optional(v.number()),
   note: v.optional(v.string()),
+});
+
+// How a foreign-currency claim's exchange rate was obtained. "manual" = the
+// submitter typed the rate; "auto" = fetched live from the FX provider and
+// locked (with its date) onto the claim at submit time.
+export const claimExchangeMode = v.union(
+  v.literal("manual"),
+  v.literal("auto"),
+);
+export type ClaimExchangeMode = "manual" | "auto";
+
+// One entry in a claim's edit audit trail — who changed it, when, and a
+// human-readable summary of what changed. Approvers may edit a pending claim;
+// every edit appends here so the trail is visible on the claim.
+export const claimEditEntry = v.object({
+  editedByUserId: v.id("users"),
+  editedAt: v.number(),
+  summary: v.string(),
 });
 
 // ─── Feed module ───────────────────────────────────────────────────────────

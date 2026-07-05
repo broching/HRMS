@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
 import {
   IconUser,
@@ -14,15 +15,25 @@ import {
   IconCoin,
   IconReceipt2,
   IconPencil,
+  IconTrash,
   type Icon,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { getErrorMessage } from "@/lib/errors"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { FileUpload } from "@/components/shared/file-upload"
@@ -38,6 +49,7 @@ import { DocumentsSection } from "./documents-section"
 import { CompensationSection } from "./compensation-section"
 import { FamilySection } from "./family-section"
 import { EquipmentSection } from "./equipment-section"
+import { ProfileRoleSelect } from "./role-select"
 import { LeavePoliciesSection } from "./leave-policies-section"
 import { PayrollSection } from "./payroll-section"
 
@@ -53,10 +65,34 @@ type SectionKey =
   | "payroll"
 
 export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
-  const employee = useQuery(api.employees.get, { employeeId })
+  const router = useRouter()
+  const [deleted, setDeleted] = React.useState(false)
+  // Once deleted, stop subscribing to `employees.get` — the record is gone and
+  // the query would throw "Employee not found" while we navigate away.
+  const employee = useQuery(
+    api.employees.get,
+    deleted ? "skip" : { employeeId },
+  )
   const setMyPhoto = useMutation(api.employees.setMyPhoto)
   const setPhoto = useMutation(api.employees.setPhoto)
+  const removeEmployee = useMutation(api.employees.remove)
   const [section, setSection] = React.useState<SectionKey>("profile")
+  const [confirmDelete, setConfirmDelete] = React.useState(false)
+  const [deleting, setDeleting] = React.useState(false)
+
+  async function handleDelete() {
+    setDeleting(true)
+    try {
+      await removeEmployee({ employeeId })
+      setDeleted(true)
+      setConfirmDelete(false)
+      toast.success("Employee deleted")
+      router.push("/employees")
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't delete this employee"))
+      setDeleting(false)
+    }
+  }
 
   if (employee === undefined) {
     return <Skeleton className="mx-4 h-96 rounded-xl lg:mx-6" />
@@ -210,12 +246,25 @@ export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
 
           <div className="flex flex-col items-start gap-3 lg:ml-auto lg:items-end">
             {canManage && !isSelf && (
-              <Button asChild variant="outline">
-                <Link href={`/employees/${employeeId}/edit`}>
-                  <IconPencil className="size-4" />
-                  Edit
-                </Link>
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button asChild variant="outline">
+                  <Link href={`/employees/${employeeId}/edit`}>
+                    <IconPencil className="size-4" />
+                    Edit
+                  </Link>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <IconTrash className="size-4" />
+                  Delete
+                </Button>
+              </div>
+            )}
+            {canManage && !isSelf && (
+              <ProfileRoleSelect employeeId={employeeId} />
             )}
             <div className="flex flex-col items-start gap-1 lg:items-end">
               <span className="text-muted-foreground text-xs">
@@ -303,6 +352,36 @@ export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
           )}
         </Card>
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={(o) => !deleting && setConfirmDelete(o)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete employee?</DialogTitle>
+            <DialogDescription>
+              This permanently deletes {employee.firstName} {employee.lastName} and
+              their records (documents, claims, leave, attendance, scheduling,
+              compensation and performance). This can&apos;t be undone. To keep
+              their history instead, edit their status to Terminated.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setConfirmDelete(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? "Deleting…" : "Delete employee"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

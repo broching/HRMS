@@ -68,7 +68,7 @@ export const SECTIONS: NavSection[] = [
     title: "Team",
     url: "/team",
     icon: IconUsersGroup,
-    roles: ["admin", "hr", "manager"],
+    roles: ["admin", "hr", "finance", "manager"],
     layout: "sidebar",
     items: [
       { title: "Team", url: "/team", icon: IconUsersGroup },
@@ -97,7 +97,7 @@ export const SECTIONS: NavSection[] = [
     title: "HR Lounge",
     url: "/hr-lounge",
     icon: IconBriefcase,
-    roles: ["admin", "hr"],
+    roles: ["admin", "hr", "finance"],
     // Module navigation lives in the in-page HR Lounge sidebar, so the top
     // sub-nav is collapsed to a single entry (SubNav hides when <2 items).
     items: [{ title: "HR Lounge", url: "/hr-lounge" }],

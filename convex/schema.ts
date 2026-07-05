@@ -35,8 +35,11 @@ import {
   claimCategory,
   claimStatus,
   claimApproverStep,
+  claimAssigneeGroup,
   claimPayrollMode,
   claimChainStep,
+  claimExchangeMode,
+  claimEditEntry,
   jobStatus,
   candidateStage,
   candidateSource,
@@ -84,8 +87,13 @@ export default defineSchema({
     // this is the Clerk ID, stored in the subject JWT field
     externalId: v.string(),
     email: v.optional(v.string()),
+    // Clerk username, when the account was created with a username identifier
+    // rather than (or in addition to) an email. Lowercased.
+    username: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
-  }).index("byExternalId", ["externalId"]),
+  })
+    .index("byExternalId", ["externalId"])
+    .index("by_username", ["username"]),
 
   // Authoritative auth + RBAC record linking a user to an organization.
   // Synced from Clerk `organizationMembership.*` webhooks; `role` is seeded
@@ -152,6 +160,10 @@ export default defineSchema({
     // The email this person is invited to the org with — also their work email.
     // Used to link the employee to their `members`/`users` row when they join.
     loginEmail: v.optional(v.string()), // lowercased
+    // The Clerk username this person is invited/added to the org with — an
+    // alternative to email for people who sign up with a username identifier.
+    // Used to link the employee to their `members`/`users` row on join. Lowercased.
+    loginUsername: v.optional(v.string()),
     // HRMS role to apply to their membership once they accept the invite.
     invitedRole: v.optional(hrmsRole),
     employeeNumber: v.string(),
@@ -207,6 +219,10 @@ export default defineSchema({
     .index("by_org_manager", ["orgId", "managerId"])
     .index("by_org_employeeNumber", ["orgId", "employeeNumber"])
     .index("by_org_loginEmail", ["orgId", "loginEmail"])
+    .index("by_org_loginUsername", ["orgId", "loginUsername"])
+    // Global (cross-org) lookup used to auto-add pending username invitees to
+    // every org that is waiting on them, once they sign up.
+    .index("by_loginUsername", ["loginUsername"])
     .index("by_userId", ["userId"])
     .searchIndex("search_name", {
       searchField: "searchName",
@@ -428,6 +444,22 @@ export default defineSchema({
     active: v.boolean(),
   }).index("by_org", ["orgId"]),
 
+  // A monthly batch of claims one employee submits together. Approvers act on
+  // the group as a unit. Resubmitting rejected claims for a month creates a new
+  // group with the next `sequence` (so a month can have several groups over time).
+  claimGroups: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    periodMonth: v.string(), // "YYYY-MM"
+    sequence: v.number(), // 1-based per (employee, month); resubmissions increment
+    title: v.optional(v.string()), // display label, e.g. "June 2026 · Resubmission 2"
+    submittedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_employee", ["employeeId"])
+    .index("by_org_month", ["orgId", "periodMonth"])
+    .index("by_employee_month", ["employeeId", "periodMonth"]),
+
   // Org-wide expense-claim configuration (one row per org). Drives the claim
   // cut-off, transaction validity window, approval workflow (with thresholds),
   // and how approved claims flow to payroll.
@@ -437,6 +469,9 @@ export default defineSchema({
     transactionValidityMonths: v.optional(v.number()), // undefined = no limit
     hrApproverUserIds: v.array(v.id("users")),
     financeApproverUserIds: v.array(v.id("users")),
+    // Custom assignee groups (beyond the built-in HR/Finance) that approval
+    // workflow steps can target by id. Absent on orgs configured before groups.
+    assigneeGroups: v.optional(v.array(claimAssigneeGroup)),
     approvalWorkflow: v.array(claimApproverStep),
     payrollMode: claimPayrollMode,
     payrollItem: v.optional(v.string()),
@@ -445,15 +480,27 @@ export default defineSchema({
   claims: defineTable({
     orgId: v.id("organizations"),
     employeeId: v.id("employees"),
+    // The monthly batch this claim was submitted in. Absent on drafts (not yet
+    // submitted) and on legacy claims submitted before groups existed.
+    groupId: v.optional(v.id("claimGroups")),
     claimTypeId: v.id("claimTypes"),
     amountCents: v.number(),
     currency: v.string(),
     taxAmountCents: v.optional(v.number()),
     localAmountCents: v.optional(v.number()), // amount in original/foreign currency
     localCurrency: v.optional(v.string()),
+    // Foreign-currency conversion, locked at submit. `amountCents` (base/org
+    // currency) = localAmountCents × exchangeRate. `exchangeRateDate` is the
+    // date the rate is for (submit date for "auto"); it never changes on review.
+    exchangeRate: v.optional(v.number()), // base units per 1 foreign unit
+    exchangeMode: v.optional(claimExchangeMode),
+    exchangeRateDate: v.optional(v.string()), // ISO date
+    exchangeProvider: v.optional(v.string()), // e.g. "frankfurter" | "manual"
     receiptNo: v.optional(v.string()),
     incurredDate: v.string(), // ISO date
     description: v.string(),
+    // Free-text remarks about the claim (set by the submitter and/or approvers).
+    remarks: v.optional(v.string()),
     receiptStorageIds: v.array(v.id("_storage")),
     status: claimStatus,
     managerApproverUserId: v.optional(v.id("users")),
@@ -468,6 +515,11 @@ export default defineSchema({
     // straight to `approved`.
     approvalChain: v.optional(v.array(claimChainStep)),
     currentStepIndex: v.optional(v.number()),
+    // When rejected, the chain step index at which the rejection happened
+    // (finance-stage rejection = `approvalChain.length`). Drives top-down reject
+    // visibility: a rejected claim is visible to approvers at steps up to and
+    // including this index (plus the claimant and finance), never to later ones.
+    rejectedStepIndex: v.optional(v.number()),
     // Snapshot (at submit) of whether this claim routes through a finance
     // approval stage, taken from the org's claim settings. Drives the status
     // timeline so it reflects the configured process. Absent on legacy claims,
@@ -476,10 +528,13 @@ export default defineSchema({
     // Queued for payroll reimbursement (auto-set on approval when the org's
     // payroll connection is "automatic"; toggled manually otherwise).
     sentToPayroll: v.optional(v.boolean()),
+    // Audit trail of approver edits (append-only). Absent until first edited.
+    edits: v.optional(v.array(claimEditEntry)),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
-    .index("by_employee", ["employeeId"]),
+    .index("by_employee", ["employeeId"])
+    .index("by_group", ["groupId"]),
 
   claimComments: defineTable({
     orgId: v.id("organizations"),
