@@ -68,16 +68,47 @@ export const SECTIONS: NavSection[] = [
     title: "Team",
     url: "/team",
     icon: IconUsersGroup,
-    roles: ["admin", "hr", "finance", "manager"],
+    // Any approver (managers + roles granting team access) sees the Team tab.
+    permission: "team:access",
     layout: "sidebar",
     items: [
-      { title: "Team", url: "/team", icon: IconUsersGroup },
-      { title: "Team Calendar", url: "/leave/calendar", icon: IconCalendarStats },
-      { title: "Leave Approvals", url: "/leave/requests", icon: IconCalendarCheck },
-      { title: "Claim Approvals", url: "/claims/requests", icon: IconReceipt2 },
-      { title: "Team Attendance", url: "/attendance/team", icon: IconClockHour4 },
-      { title: "Roster", url: "/scheduling/roster", icon: IconCalendarTime },
-      { title: "Team Reviews", url: "/performance/team", icon: IconChartBar },
+      { title: "Team", url: "/team", icon: IconUsersGroup, permission: "team:access" },
+      {
+        title: "Team Calendar",
+        url: "/leave/calendar",
+        icon: IconCalendarStats,
+        permission: "leave:approve",
+      },
+      {
+        title: "Leave Approvals",
+        url: "/leave/requests",
+        icon: IconCalendarCheck,
+        permission: "leave:approve",
+      },
+      {
+        title: "Claim Approvals",
+        url: "/claims/requests",
+        icon: IconReceipt2,
+        permission: "claims:approve",
+      },
+      {
+        title: "Team Attendance",
+        url: "/attendance/team",
+        icon: IconClockHour4,
+        permission: "attendance:team",
+      },
+      {
+        title: "Roster",
+        url: "/scheduling/roster",
+        icon: IconCalendarTime,
+        permission: "scheduling:roster",
+      },
+      {
+        title: "Team Reviews",
+        url: "/performance/team",
+        icon: IconChartBar,
+        permission: "performance:team",
+      },
     ],
   },
   {
@@ -97,7 +128,8 @@ export const SECTIONS: NavSection[] = [
     title: "HR Lounge",
     url: "/hr-lounge",
     icon: IconBriefcase,
-    roles: ["admin", "hr", "finance"],
+    // HR Lounge is HR + admin only.
+    permission: "hr:access",
     // Module navigation lives in the in-page HR Lounge sidebar, so the top
     // sub-nav is collapsed to a single entry (SubNav hides when <2 items).
     items: [{ title: "HR Lounge", url: "/hr-lounge" }],

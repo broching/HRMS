@@ -2,7 +2,7 @@ import { query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { getOrgContext } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 
 /**
  * HR Lounge → Reports → Statistics. Read-only org-wide analytics computed live
@@ -69,7 +69,7 @@ export const general = query({
   ),
   handler: async (ctx) => {
     const orgCtx = await getOrgContext(ctx);
-    if (!orgCtx || !hasPermission(orgCtx.role, "reports:view")) return null;
+    if (!orgCtx || !ctxHasPermission(orgCtx, "reports:view")) return null;
     const orgId = orgCtx.orgId;
     const now = Date.now();
 
@@ -186,7 +186,7 @@ export const attrition = query({
   ),
   handler: async (ctx, { year }) => {
     const orgCtx = await getOrgContext(ctx);
-    if (!orgCtx || !hasPermission(orgCtx.role, "reports:view")) return null;
+    if (!orgCtx || !ctxHasPermission(orgCtx, "reports:view")) return null;
     const orgId = orgCtx.orgId;
     const targetYear = year ?? new Date().getFullYear();
 
@@ -253,7 +253,7 @@ export const leave = query({
   ),
   handler: async (ctx, { year }) => {
     const orgCtx = await getOrgContext(ctx);
-    if (!orgCtx || !hasPermission(orgCtx.role, "reports:view")) return null;
+    if (!orgCtx || !ctxHasPermission(orgCtx, "reports:view")) return null;
     const orgId = orgCtx.orgId;
     const targetYear = year ?? new Date().getFullYear();
 
@@ -359,7 +359,7 @@ export const payroll = query({
   ),
   handler: async (ctx, { year, departmentId }) => {
     const orgCtx = await getOrgContext(ctx);
-    if (!orgCtx || !hasPermission(orgCtx.role, "payroll:manage")) return null;
+    if (!orgCtx || !ctxHasPermission(orgCtx, "payroll:manage")) return null;
     const orgId = orgCtx.orgId;
 
     const [departments, employees, runs] = await Promise.all([

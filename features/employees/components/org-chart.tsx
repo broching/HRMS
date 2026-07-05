@@ -19,7 +19,7 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { FunctionReturnType } from "convex/server"
 import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission } from "@/convex/lib/permissions"
+import { permitted } from "@/convex/lib/permissions"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -76,7 +76,7 @@ export function OrgChart() {
   const offices = useQuery(api.offices.list) ?? []
   const { organization } = useOrganization()
   const member = useCurrentMember()
-  const canManage = member ? hasPermission(member.role, "employees:manage") : false
+  const canManage = permitted(member?.permissions, "employees:manage")
 
   const [highlight, setHighlight] = React.useState<Highlight>(null)
   const [sidebarOpen, setSidebarOpen] = React.useState(true)

@@ -2,7 +2,7 @@ import { mutation, query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, requirePermission } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { writeAuditLog } from "./lib/audit";
 import { allowanceItem, cpfStatus } from "./lib/enums";
 import { compensationDoc, compensationRow } from "./lib/validators";
@@ -56,7 +56,7 @@ export const forProfile = query({
       throw new Error("Employee not found.");
     }
     const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
-    if (!isSelf && !hasPermission(orgCtx.role, "payroll:manage")) {
+    if (!isSelf && !ctxHasPermission(orgCtx, "payroll:manage")) {
       throw new Error("Not authorized to view compensation.");
     }
     const rows = await ctx.db

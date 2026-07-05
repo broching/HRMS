@@ -16,7 +16,7 @@ import {
   resumeEntryValidator,
 } from "./lib/enums";
 import { requireOrg, getOrgContext, requirePermission } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { writeAuditLog } from "./lib/audit";
 import { buildSearchName } from "./model/employee";
 import {
@@ -334,11 +334,11 @@ export const get = query({
     const { orgCtx, employee } = await requireEmployeeAccess(ctx, employeeId);
 
     const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
-    const canManage = hasPermission(orgCtx.role, "employees:manage");
+    const canManage = ctxHasPermission(orgCtx, "employees:manage");
     const canViewPersonal =
-      isSelf || hasPermission(orgCtx.role, "employees:read:all");
+      isSelf || ctxHasPermission(orgCtx, "employees:read:all");
     const canViewCompensation =
-      isSelf || hasPermission(orgCtx.role, "payroll:manage");
+      isSelf || ctxHasPermission(orgCtx, "payroll:manage");
     const canEdit = isSelf || canManage;
 
     const [department, team, position, manager, office] = await Promise.all([

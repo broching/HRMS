@@ -2,7 +2,7 @@ import { mutation, query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, OrgContext } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { writeAuditLog } from "./lib/audit";
 
@@ -43,7 +43,7 @@ async function access(
   orgCtx: OrgContext,
   employeeId: Id<"employees">,
 ): Promise<{ canView: boolean; canEdit: boolean }> {
-  if (hasPermission(orgCtx.role, "performance:manage"))
+  if (ctxHasPermission(orgCtx, "performance:manage"))
     return { canView: true, canEdit: true };
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   if (own && own._id === employeeId) return { canView: true, canEdit: true };

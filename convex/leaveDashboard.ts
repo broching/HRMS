@@ -2,7 +2,7 @@ import { query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { getOrgContext } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import {
   leaveDashboardRow,
   leaveDashboardEmployeeRow,
@@ -62,7 +62,7 @@ export const adminCalendar = query({
   returns: v.array(leaveDashboardRow),
   handler: async (ctx, args) => {
     const orgCtx = await getOrgContext(ctx);
-    if (!orgCtx || !hasPermission(orgCtx.role, "leave:approve:all")) return [];
+    if (!orgCtx || !ctxHasPermission(orgCtx, "leave:approve:all")) return [];
     const all = await ctx.db
       .query("leaveRequests")
       .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
@@ -90,7 +90,7 @@ export const pending = query({
   returns: v.array(leaveDashboardRow),
   handler: async (ctx) => {
     const orgCtx = await getOrgContext(ctx);
-    if (!orgCtx || !hasPermission(orgCtx.role, "leave:approve:all")) return [];
+    if (!orgCtx || !ctxHasPermission(orgCtx, "leave:approve:all")) return [];
     const [pendingReqs, infoReqs] = await Promise.all([
       ctx.db
         .query("leaveRequests")
@@ -123,7 +123,7 @@ export const employees = query({
   returns: v.array(leaveDashboardEmployeeRow),
   handler: async (ctx, args) => {
     const orgCtx = await getOrgContext(ctx);
-    if (!orgCtx || !hasPermission(orgCtx.role, "leave:approve:all")) return [];
+    if (!orgCtx || !ctxHasPermission(orgCtx, "leave:approve:all")) return [];
     const employees = await ctx.db
       .query("employees")
       .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))

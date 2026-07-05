@@ -270,7 +270,7 @@ export function ClaimEditDialog({
 
         <DialogFooter>
           <Button
-            variant="ghost"
+            variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >

@@ -2,7 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { equipmentStatus } from "./lib/enums";
 import { requireOrg, requirePermission } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { writeAuditLog } from "./lib/audit";
 import { equipmentRow } from "./lib/validators";
 
@@ -18,7 +18,7 @@ export const listForEmployee = query({
       throw new Error("Employee not found.");
     }
     const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
-    if (!isSelf && !hasPermission(orgCtx.role, "employees:read:all")) {
+    if (!isSelf && !ctxHasPermission(orgCtx, "employees:read:all")) {
       throw new Error("Not authorized to view this equipment.");
     }
     const rows = await ctx.db

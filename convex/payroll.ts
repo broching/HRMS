@@ -2,7 +2,7 @@ import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, requirePermission } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { effectiveCompensation } from "./compensation";
 import { computeCpf, ageOn } from "./model/cpf";
@@ -1391,7 +1391,7 @@ export const forEmployeeProfile = query({
       throw new Error("Employee not found.");
     }
     const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
-    if (!isSelf && !hasPermission(orgCtx.role, "payroll:manage")) {
+    if (!isSelf && !ctxHasPermission(orgCtx, "payroll:manage")) {
       throw new Error("Not authorized to view payslips.");
     }
     const slips = await ctx.db
@@ -1412,7 +1412,7 @@ export const getPayslip = query({
     const slip = await ctx.db.get(payslipId);
     if (!slip || slip.orgId !== orgCtx.orgId) throw new Error("Payslip not found.");
 
-    const canManage = hasPermission(orgCtx.role, "payroll:manage");
+    const canManage = ctxHasPermission(orgCtx, "payroll:manage");
     if (!canManage) {
       const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
       if (!own || slip.employeeId !== own._id || slip.status === "draft") {

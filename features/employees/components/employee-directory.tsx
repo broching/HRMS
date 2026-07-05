@@ -34,7 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { PageHeader } from "@/components/shared/page-header"
 import { cn } from "@/lib/utils"
 import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission } from "@/convex/lib/permissions"
+import { permitted } from "@/convex/lib/permissions"
 
 const ALL = "all"
 const PAGE_SIZE = 10
@@ -56,9 +56,7 @@ export function EmployeeDirectory({
   const [page, setPage] = React.useState(1)
 
   const member = useCurrentMember()
-  const canManage = member?.role
-    ? hasPermission(member.role, "employees:manage")
-    : false
+  const canManage = permitted(member?.permissions, "employees:manage")
 
   // Debounce the search box so we don't refire the query on every keystroke.
   React.useEffect(() => {

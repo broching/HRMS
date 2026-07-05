@@ -2,7 +2,7 @@ import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, requirePermission, OrgContext } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { reviewRow, reviewDetail, appraisalDetail } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
@@ -43,7 +43,7 @@ export async function loadReviewAccess(ctx: QueryCtx, reviewId: Id<"reviews">) {
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const isSubject = !!own && own._id === review.employeeId;
   const isManager = !!own && review.managerId === own._id;
-  const canManagePerf = hasPermission(orgCtx.role, "performance:manage");
+  const canManagePerf = ctxHasPermission(orgCtx, "performance:manage");
   if (!isSubject && !isManager && !canManagePerf) {
     throw new Error("Not authorized to view this review.");
   }

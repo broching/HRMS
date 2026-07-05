@@ -384,7 +384,7 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => setOpen(false)}>
+          <Button variant="outline" onClick={() => setOpen(false)}>
             Cancel
           </Button>
           <Button

@@ -2,7 +2,12 @@ import { ConvexError } from "convex/values";
 import { QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { HrmsRole } from "./lib/enums";
-import { Permission, hasPermission } from "./lib/permissions";
+import {
+  Permission,
+  ROLE_PERMISSIONS,
+  ROLE_PRESETS,
+  sanitizePermissions,
+} from "./lib/permissions";
 
 /**
  * Tenancy + RBAC core. Every domain query/mutation resolves the caller's
@@ -21,6 +26,42 @@ export interface OrgContext {
   org: Doc<"organizations">;
   member: Doc<"members">;
   role: HrmsRole;
+  // Resolved effective permissions for the caller — from their assigned role
+  // document when set, else the static matrix for their legacy role enum.
+  permissions: Set<Permission>;
+}
+
+/**
+ * Resolve a member's effective permission set. Prefers the assigned role
+ * document (data-driven, supports custom roles); falls back to the static
+ * matrix keyed by the legacy role enum when no role document is assigned or
+ * found.
+ */
+export async function resolveMemberPermissions(
+  ctx: QueryCtx,
+  member: Doc<"members">,
+): Promise<Set<Permission>> {
+  if (member.roleId) {
+    const roleDoc = await ctx.db.get(member.roleId);
+    if (roleDoc) {
+      // Preset roles are code-authoritative and locked, so resolve them from
+      // ROLE_PRESETS by key — never the stored doc, which may predate a preset
+      // permission change. Custom roles resolve from their stored permissions.
+      if (roleDoc.isPreset && roleDoc.key) {
+        return new Set(ROLE_PRESETS[roleDoc.key].permissions);
+      }
+      return new Set(sanitizePermissions(roleDoc.permissions));
+    }
+  }
+  return new Set(ROLE_PERMISSIONS[member.role]);
+}
+
+/** Non-throwing permission check against a resolved OrgContext. */
+export function ctxHasPermission(
+  orgCtx: OrgContext,
+  permission: Permission,
+): boolean {
+  return orgCtx.permissions.has(permission);
 }
 
 // Custom Clerk claims that ride along on the identity object.
@@ -70,6 +111,7 @@ export async function getOrgContext(ctx: QueryCtx): Promise<OrgContext | null> {
     org,
     member,
     role: member.role,
+    permissions: await resolveMemberPermissions(ctx, member),
   };
 }
 
@@ -106,7 +148,7 @@ export async function requirePermission(
   permission: Permission,
 ): Promise<OrgContext> {
   const orgCtx = await requireOrg(ctx);
-  if (!hasPermission(orgCtx.role, permission)) {
+  if (!orgCtx.permissions.has(permission)) {
     throw new ConvexError({
       code: "FORBIDDEN",
       message: `Missing permission: ${permission}.`,

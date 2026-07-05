@@ -7,7 +7,7 @@ import {
   requirePermission,
   OrgContext,
 } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { shiftAssignmentRow, schedulableEmployee } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
@@ -23,7 +23,7 @@ async function schedulableScope(
   ctx: QueryCtx,
   orgCtx: OrgContext,
 ): Promise<Scope> {
-  if (hasPermission(orgCtx.role, "scheduling:manage")) {
+  if (ctxHasPermission(orgCtx, "scheduling:manage")) {
     return { all: true, ids: new Set() };
   }
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
@@ -42,7 +42,7 @@ async function assertCanScheduleEmployee(
   orgCtx: OrgContext,
   employeeId: Id<"employees">,
 ) {
-  if (hasPermission(orgCtx.role, "scheduling:manage")) return;
+  if (ctxHasPermission(orgCtx, "scheduling:manage")) return;
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const target = await ctx.db.get(employeeId);
   if (own && target && target.managerId === own._id) return;

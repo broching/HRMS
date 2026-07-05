@@ -1,13 +1,15 @@
 "use client"
 
+import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
 import { IconUserPlus } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { ROLE_PERMISSIONS } from "@/convex/lib/permissions"
-import { useCurrentMember } from "@/hooks/use-current-member"
+import { getErrorMessage } from "@/lib/errors"
+import { useHasPermission } from "@/hooks/use-permission"
+import { HrLoungeShell } from "@/features/hr-lounge/components/hr-lounge-shell"
 import {
   Avatar,
   AvatarFallback,
@@ -32,10 +34,6 @@ import {
 } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
 
-const ROLES = Object.keys(ROLE_PERMISSIONS) as Array<
-  keyof typeof ROLE_PERMISSIONS
->
-
 function initials(name: string) {
   return name
     .split(" ")
@@ -46,28 +44,40 @@ function initials(name: string) {
 }
 
 export default function MembersSettingsPage() {
-  const me = useCurrentMember()
-  const members = useQuery(api.members.list)
-  const setRole = useMutation(api.members.setRole)
-
   // Server enforces this too; the UI check just avoids a confusing error state.
-  const canManage =
-    me?.role === "admin" || me?.role === "hr" || me?.role === "finance"
+  const canManage = useHasPermission("members:manage")
+  const members = useQuery(api.members.list, canManage ? {} : "skip")
+  const roles = useQuery(api.roles.assignable, canManage ? {} : "skip")
+  const setRoleId = useMutation(api.members.setRoleId)
+  const ensureSeeded = useMutation(api.roles.ensureSeeded)
+
+  // Make sure the preset roles exist so the dropdown is never empty.
+  React.useEffect(() => {
+    if (canManage) ensureSeeded().catch(() => {})
+  }, [canManage, ensureSeeded])
+
+  // Resolve a member's current role selection: their explicit roleId, or — for
+  // members not yet assigned a role document — the preset matching their legacy
+  // role enum.
+  const presetByKey = new Map(
+    (roles ?? []).filter((r) => r.key).map((r) => [r.key as string, r._id]),
+  )
 
   async function handleRoleChange(
     memberId: Id<"members">,
-    role: (typeof ROLES)[number],
+    roleId: Id<"roles">,
   ) {
     try {
-      await setRole({ memberId, role })
+      await setRoleId({ memberId, roleId })
       toast.success("Role updated")
-    } catch {
-      toast.error("Could not update role")
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Could not update role"))
     }
   }
 
   return (
-    <div className="flex flex-col gap-4 px-4 lg:px-6">
+    <HrLoungeShell>
+    <div className="flex flex-col gap-4 px-4 py-4 lg:px-6">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Members</h1>
@@ -87,7 +97,7 @@ export default function MembersSettingsPage() {
         )}
       </div>
 
-      {me !== undefined && !canManage ? (
+      {canManage === false ? (
         <p className="text-muted-foreground text-sm">
           You don&apos;t have permission to manage members.
         </p>
@@ -171,21 +181,23 @@ export default function MembersSettingsPage() {
                     </TableCell>
                     <TableCell>
                       <Select
-                        value={m.role}
-                        onValueChange={(role) =>
+                        value={
+                          m.roleId ?? presetByKey.get(m.role) ?? undefined
+                        }
+                        onValueChange={(roleId) =>
                           handleRoleChange(
                             m.memberId,
-                            role as (typeof ROLES)[number],
+                            roleId as Id<"roles">,
                           )
                         }
                       >
-                        <SelectTrigger className="w-[160px] capitalize">
-                          <SelectValue />
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Select role" />
                         </SelectTrigger>
                         <SelectContent>
-                          {ROLES.map((r) => (
-                            <SelectItem key={r} value={r} className="capitalize">
-                              {r}
+                          {(roles ?? []).map((r) => (
+                            <SelectItem key={r._id} value={r._id}>
+                              {r.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -199,5 +211,6 @@ export default function MembersSettingsPage() {
         </div>
       )}
     </div>
+    </HrLoungeShell>
   )
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useQuery, useMutation } from "convex/react"
+import { useQuery, useMutation, useConvex } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
 import {
   IconSearch,
@@ -10,6 +10,7 @@ import {
   IconChevronDown,
   IconArrowLeft,
   IconMessage,
+  IconDownload,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
@@ -33,6 +34,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -55,13 +62,58 @@ import {
   formatMoney,
   monthLabel,
 } from "@/features/claims/lib/labels"
+import {
+  downloadClaims,
+  type ClaimExportRow,
+} from "@/features/claims/lib/export"
 
 type Group = FunctionReturnType<typeof api.claims.approvalClaimGroups>[number]
 const ALL = "all"
 
-// Roles that hold the finance-approval permission (see ROLE_PERMISSIONS) — the
-// ones allowed to mark a group reimbursed.
-const FINANCE_ROLES = new Set(["admin", "hr", "finance"])
+// Export dropdown (CSV / Excel). `fetchRows` pulls the flat rows on demand so a
+// large export isn't held in a live subscription.
+function ExportMenu({
+  label = "Export",
+  filename,
+  fetchRows,
+}: {
+  label?: string
+  filename: string
+  fetchRows: () => Promise<ClaimExportRow[]>
+}) {
+  const [busy, setBusy] = React.useState(false)
+  async function run(format: "csv" | "excel") {
+    setBusy(true)
+    try {
+      const rows = await fetchRows()
+      if (rows.length === 0) {
+        toast.info("No claims to export.")
+        return
+      }
+      downloadClaims(rows, format, filename)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't export claims"))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" disabled={busy}>
+          <IconDownload className="size-4" />
+          {label}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => run("csv")}>CSV (.csv)</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => run("excel")}>
+          Excel (.xls)
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 // A short "June 2026" / "June 2026 · Resubmission 1" batch label.
 function batchLabel(g: Group): string {
@@ -70,10 +122,15 @@ function batchLabel(g: Group): string {
 }
 
 // `showOrgFilters` adds department/team filters for the HR-wide view.
+// `source` selects the data set: "mine" = batches awaiting the caller (Team →
+// Claim Approvals); "all" = every batch org-wide (HR Lounge oversight, requires
+// `claims:read:all`).
 export function ClaimsApprovalQueue({
   showOrgFilters,
+  source = "mine",
 }: {
   showOrgFilters?: boolean
+  source?: "mine" | "all"
 }) {
   const [month, setMonth] = React.useState(currentMonth())
   const [departmentId, setDepartmentId] = React.useState(ALL)
@@ -86,12 +143,23 @@ export function ClaimsApprovalQueue({
     useQuery(api.departments.list, showOrgFilters ? {} : "skip") ?? []
   const teams = useQuery(api.teams.list, showOrgFilters ? {} : "skip") ?? []
 
-  const groups = useQuery(api.claims.approvalClaimGroups, {
+  const filterArgs = {
     month,
     departmentId:
       departmentId !== ALL ? (departmentId as Id<"departments">) : undefined,
     teamId: teamId !== ALL ? (teamId as Id<"teams">) : undefined,
-  })
+  }
+  const mineGroups = useQuery(
+    api.claims.approvalClaimGroups,
+    source === "mine" ? filterArgs : "skip",
+  )
+  const allGroups = useQuery(
+    api.claims.allClaimGroups,
+    source === "all" ? filterArgs : "skip",
+  )
+  const groups = source === "all" ? allGroups : mineGroups
+
+  const convex = useConvex()
 
   const matches = (g: Group) =>
     search.trim()
@@ -105,6 +173,7 @@ export function ClaimsApprovalQueue({
     return (
       <GroupClaims
         group={selected}
+        source={source}
         onBack={() => setSelected(null)}
       />
     )
@@ -154,6 +223,13 @@ export function ClaimsApprovalQueue({
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+          <ExportMenu
+            label={source === "all" ? "Export all" : "Export"}
+            filename={`claims-${month}`}
+            fetchRows={() =>
+              convex.query(api.claims.exportRows, { source, ...filterArgs })
+            }
+          />
         </div>
       </div>
 
@@ -164,7 +240,7 @@ export function ClaimsApprovalQueue({
             <TableRow>
               <TableHead>Employee</TableHead>
               <TableHead>Batch</TableHead>
-              <TableHead>Claims to approve</TableHead>
+              <TableHead>{source === "all" ? "Pending" : "Claims to approve"}</TableHead>
               <TableHead>Total amount</TableHead>
               <TableHead className="w-10" />
             </TableRow>
@@ -182,7 +258,9 @@ export function ClaimsApprovalQueue({
                   colSpan={5}
                   className="text-muted-foreground py-8 text-center"
                 >
-                  Nothing awaiting your approval for {monthLabel(month)}.
+                  {source === "all"
+                    ? `No claim batches with pending claims for ${monthLabel(month)}.`
+                    : `Nothing awaiting your approval for ${monthLabel(month)}.`}
                 </TableCell>
               </TableRow>
             ) : (
@@ -290,18 +368,27 @@ type GroupClaim = FunctionReturnType<
 // "approve all" and, for finance, "mark all reimbursed".
 function GroupClaims({
   group,
+  source,
   onBack,
 }: {
   group: Group
+  source: "mine" | "all"
   onBack: () => void
 }) {
-  const claims = useQuery(api.claims.approvalClaimsForGroup, {
-    groupId: group.groupId,
-  })
+  const mineClaims = useQuery(
+    api.claims.approvalClaimsForGroup,
+    source === "mine" ? { groupId: group.groupId } : "skip",
+  )
+  const allClaims = useQuery(
+    api.claims.allClaimsForGroup,
+    source === "all" ? { groupId: group.groupId } : "skip",
+  )
+  const claims = source === "all" ? allClaims : mineClaims
   const member = useCurrentMember()
   const reject = useMutation(api.claims.reject)
   const approveAll = useMutation(api.claims.approveAllForGroup)
   const markReimbursed = useMutation(api.claims.markGroupReimbursed)
+  const convex = useConvex()
 
   const [openId, setOpenId] = React.useState<Id<"claims"> | null>(null)
   const [editId, setEditId] = React.useState<Id<"claims"> | null>(null)
@@ -322,7 +409,9 @@ function GroupClaims({
     (c) => c.status === "approved",
   ).length
   const canReimburse =
-    !!member && FINANCE_ROLES.has(member.role) && approvedCount > 0
+    !!member &&
+    member.permissions.includes("claims:approve:finance") &&
+    approvedCount > 0
 
   async function handleReject() {
     if (!rejectId) return
@@ -375,10 +464,20 @@ function GroupClaims({
         <Button variant="outline" size="icon" className="size-8" onClick={onBack}>
           <IconArrowLeft className="size-4" />
         </Button>
-        <div>
+        <div className="flex-1">
           <h3 className="font-semibold">{group.employeeName}</h3>
           <p className="text-muted-foreground text-sm">{batchLabel(group)}</p>
         </div>
+        <ExportMenu
+          label="Export claims"
+          filename={`claims-${group.employeeName.replace(/\s+/g, "-")}`}
+          fetchRows={() =>
+            convex.query(api.claims.exportRows, {
+              source,
+              employeeId: group.employeeId,
+            })
+          }
+        />
       </div>
 
       <div className="mx-4 rounded-lg border lg:mx-6">
@@ -460,14 +559,14 @@ function GroupClaims({
                         onClick={(e) => e.stopPropagation()}
                       >
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
                           onClick={() => setEditId(c._id)}
                         >
                           Edit
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="icon"
                           className="size-8"
                           title="Remark"
@@ -481,7 +580,7 @@ function GroupClaims({
                           <IconMessage className="size-4" />
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
                           className="text-destructive"
                           onClick={() => setRejectId(c._id)}
@@ -571,7 +670,7 @@ function GroupClaims({
           </div>
           <DialogFooter>
             <Button
-              variant="ghost"
+              variant="outline"
               disabled={busy}
               onClick={() => {
                 setRejectId(null)
@@ -652,7 +751,7 @@ function RemarkDialog({
           />
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
           <Button onClick={save} disabled={busy}>

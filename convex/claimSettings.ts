@@ -1,7 +1,8 @@
 import { mutation, query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
-import { requirePermission } from "./auth";
+import { requirePermission, resolveMemberPermissions } from "./auth";
+import { ROLE_PRESETS } from "./lib/permissions";
 import {
   claimApproverStep,
   claimAssigneeGroup,
@@ -95,10 +96,19 @@ export const options = query({
         // username (then email) so they're selectable with a readable label.
         const name =
           user?.name?.trim() || user?.username || user?.email || "Unknown";
+        // Role/permission context for the assignee guardrail.
+        const roleDoc = m.roleId ? await ctx.db.get(m.roleId) : null;
+        const isCustomRole = !!roleDoc && !roleDoc.isPreset;
+        const roleName = roleDoc?.name ?? ROLE_PRESETS[m.role].label;
+        const perms = await resolveMemberPermissions(ctx, m);
         return {
           userId: m.userId,
+          memberId: m._id,
           name,
           role: m.role,
+          roleName,
+          isCustomRole,
+          hasFinanceAccess: perms.has("claims:approve:finance"),
         };
       }),
     );

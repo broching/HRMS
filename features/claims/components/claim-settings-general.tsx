@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
 import {
@@ -61,6 +62,7 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { getErrorMessage } from "@/lib/errors"
+import { useHasPermission } from "@/hooks/use-permission"
 import { dollarsToCents, centsToInput } from "@/features/payroll/lib/labels"
 
 // ─── Generic multi-select on a list of {value,label} ─────────────────────────
@@ -257,13 +259,32 @@ function SortableStep({
   )
 }
 
+// One flagged assignee in the HR/Finance guardrail: someone added as an
+// approver who can't actually act on claims yet.
+type GuardUser = {
+  userId: Id<"users">
+  memberId: Id<"members">
+  name: string
+  roleName: string
+  isCustomRole: boolean
+}
+
 export function ClaimSettingsGeneral() {
   const data = useQuery(api.claimSettings.get)
   const options = useQuery(api.claimSettings.options)
   const save = useMutation(api.claimSettings.save)
+  const assignPreset = useMutation(api.roles.assignPreset)
+  const canManageMembers = useHasPermission("members:manage")
+  const router = useRouter()
   const [form, setForm] = React.useState<FormState | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
+  // Guardrail dialog: flagged approvers for the HR or Finance group.
+  const [guard, setGuard] = React.useState<{
+    group: "HR" | "Finance"
+    presetKey: "hr" | "finance"
+    users: GuardUser[]
+  } | null>(null)
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, {
@@ -315,9 +336,81 @@ export function ClaimSettingsGeneral() {
     value: o._id as string,
     label: o.name,
   }))
+  const memberById = new Map(options.members.map((m) => [m.userId as string, m]))
 
   function patch(p: Partial<FormState>) {
     setForm((f) => (f ? { ...f, ...p } : f))
+  }
+
+  // Commit an approver id into the HR/Finance list (deduped).
+  function addApprover(group: "HR" | "Finance", userId: Id<"users">) {
+    if (group === "HR") {
+      setForm((f) =>
+        f && !f.hrApproverUserIds.includes(userId)
+          ? { ...f, hrApproverUserIds: [...f.hrApproverUserIds, userId] }
+          : f,
+      )
+    } else {
+      setForm((f) =>
+        f && !f.financeApproverUserIds.includes(userId)
+          ? { ...f, financeApproverUserIds: [...f.financeApproverUserIds, userId] }
+          : f,
+      )
+    }
+  }
+
+  // Update an HR/Finance approver list. Someone can only be *added* once they
+  // can actually act on claims — anyone newly picked who lacks access is held
+  // back (not committed) and surfaced in the guardrail so the admin grants them
+  // access first. Removals always go through.
+  function handleAssigneeChange(group: "HR" | "Finance", next: string[]) {
+    const field =
+      group === "HR" ? "hrApproverUserIds" : "financeApproverUserIds"
+    const prev = (form?.[field] ?? []) as string[]
+
+    const flagged: GuardUser[] = next
+      .filter((u) => !prev.includes(u))
+      .map((u) => memberById.get(u))
+      .filter((m): m is NonNullable<typeof m> => !!m && !m.hasFinanceAccess)
+      .map((m) => ({
+        userId: m.userId,
+        memberId: m.memberId,
+        name: m.name,
+        roleName: m.roleName,
+        isCustomRole: m.isCustomRole,
+      }))
+
+    // Drop the flagged additions; keep allowed additions and honour removals.
+    const flaggedIds = new Set(flagged.map((f) => f.userId as string))
+    const committed = next.filter((u) => !flaggedIds.has(u)) as Id<"users">[]
+    if (group === "HR") patch({ hrApproverUserIds: committed })
+    else patch({ financeApproverUserIds: committed })
+
+    if (flagged.length > 0) {
+      setGuard({
+        group,
+        presetKey: group === "HR" ? "hr" : "finance",
+        users: flagged,
+      })
+    }
+  }
+
+  async function grantPreset(u: GuardUser) {
+    if (!guard) return
+    const group = guard.group
+    try {
+      await assignPreset({ memberId: u.memberId, key: guard.presetKey })
+      // Now that they can act on claims, add them to the approver list.
+      addApprover(group, u.userId)
+      toast.success(`${u.name} is now ${group}`)
+      setGuard((g) => {
+        if (!g) return g
+        const remaining = g.users.filter((x) => x.userId !== u.userId)
+        return remaining.length ? { ...g, users: remaining } : null
+      })
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't assign role"))
+    }
   }
   function patchStep(i: number, p: Partial<StepForm>) {
     setForm((f) =>
@@ -486,9 +579,7 @@ export function ClaimSettingsGeneral() {
               <MultiSelect
                 options={memberOpts}
                 selected={form.hrApproverUserIds as string[]}
-                onChange={(v) =>
-                  patch({ hrApproverUserIds: v as Id<"users">[] })
-                }
+                onChange={(v) => handleAssigneeChange("HR", v)}
                 placeholder="Choose"
               />
             </div>
@@ -497,9 +588,7 @@ export function ClaimSettingsGeneral() {
               <MultiSelect
                 options={memberOpts}
                 selected={form.financeApproverUserIds as string[]}
-                onChange={(v) =>
-                  patch({ financeApproverUserIds: v as Id<"users">[] })
-                }
+                onChange={(v) => handleAssigneeChange("Finance", v)}
                 placeholder="Choose"
               />
             </div>
@@ -522,7 +611,7 @@ export function ClaimSettingsGeneral() {
                         }
                       />
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="icon"
                         className="text-destructive size-8"
                         onClick={() =>
@@ -676,7 +765,7 @@ export function ClaimSettingsGeneral() {
                             )}
                             {form.workflow.length > 1 && (
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="icon"
                                 className="size-8 text-destructive"
                                 onClick={() =>
@@ -766,7 +855,7 @@ export function ClaimSettingsGeneral() {
                                   </div>
                                   {step.rules.length > 1 && (
                                     <Button
-                                      variant="ghost"
+                                      variant="outline"
                                       size="icon"
                                       className="size-8 text-destructive"
                                       onClick={() =>
@@ -877,7 +966,7 @@ export function ClaimSettingsGeneral() {
           </DialogHeader>
           <DialogFooter>
             <Button
-              variant="ghost"
+              variant="outline"
               disabled={busy}
               onClick={() => setConfirmOpen(false)}
             >
@@ -885,6 +974,72 @@ export function ClaimSettingsGeneral() {
             </Button>
             <Button onClick={doSave} disabled={busy}>
               {busy ? "Saving…" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* HR/Finance assignee guardrail */}
+      <Dialog open={!!guard} onOpenChange={(o) => !o && setGuard(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Grant {guard?.group} claim access?</DialogTitle>
+            <DialogDescription>
+              {guard?.users.length === 1 ? "This person" : "These people"} can&apos;t
+              act on claims yet, so they haven&apos;t been added to the{" "}
+              {guard?.group} approvers. Grant access below to add them.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            {guard?.users.map((u) => (
+              <div
+                key={u.userId}
+                className="flex items-center justify-between gap-3 rounded-md border p-3"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{u.name}</p>
+                  <p className="text-muted-foreground text-xs">
+                    {u.isCustomRole
+                      ? `Custom role “${u.roleName}” — missing claim approval`
+                      : `Current role: ${u.roleName}`}
+                  </p>
+                </div>
+                {u.isCustomRole ? (
+                  <Button
+                    variant="outline"
+                    className="shrink-0"
+                    onClick={() => {
+                      setGuard(null)
+                      router.push("/settings/org-structure")
+                    }}
+                  >
+                    Edit role
+                  </Button>
+                ) : canManageMembers ? (
+                  <Button
+                    className="shrink-0"
+                    onClick={() => grantPreset(u)}
+                  >
+                    Assign {guard?.group}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="shrink-0"
+                    onClick={() => {
+                      setGuard(null)
+                      router.push("/settings/members")
+                    }}
+                  >
+                    Manage in Members
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGuard(null)}>
+              Done
             </Button>
           </DialogFooter>
         </DialogContent>

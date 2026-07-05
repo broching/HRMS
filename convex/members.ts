@@ -217,6 +217,10 @@ export const current = query({
       orgSlug: v.optional(v.string()),
       userName: v.string(),
       role: hrmsRole,
+      // The assigned role document, when the member has been given one.
+      roleId: v.union(v.id("roles"), v.null()),
+      // Resolved effective permissions — the authoritative gate for client UI.
+      permissions: v.array(v.string()),
     }),
   ),
   handler: async (ctx) => {
@@ -230,6 +234,8 @@ export const current = query({
       orgSlug: orgCtx.org.slug,
       userName: orgCtx.user.name,
       role: orgCtx.role,
+      roleId: orgCtx.member.roleId ?? null,
+      permissions: [...orgCtx.permissions],
     };
   },
 });
@@ -295,6 +301,7 @@ export const list = query({
       username: v.optional(v.string()),
       imageUrl: v.optional(v.string()),
       role: hrmsRole,
+      roleId: v.union(v.id("roles"), v.null()),
       status: v.union(
         v.literal("active"),
         v.literal("invited"),
@@ -328,6 +335,7 @@ export const list = query({
           username: user?.username,
           imageUrl: user?.imageUrl,
           role: m.role,
+          roleId: m.roleId ?? null,
           status: m.status,
           employeeId: employee?._id ?? null,
         };
@@ -377,6 +385,44 @@ export const setRole = mutation({
       entityId: memberId,
       before: { role: before },
       after: { role },
+    });
+    return null;
+  },
+});
+
+// Assign a data-driven role (from the `roles` table) to a member. This is the
+// authoritative role assignment: the role's permissions become the member's
+// effective permissions. When the role is a preset, the legacy `role` enum is
+// kept in sync so fallbacks and Clerk mapping stay coherent.
+export const setRoleId = mutation({
+  args: { memberId: v.id("members"), roleId: v.id("roles") },
+  returns: v.null(),
+  handler: async (ctx, { memberId, roleId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "members:manage");
+    const member = await ctx.db.get(memberId);
+    if (!member || member.orgId !== orgId) {
+      throw new Error("Member not found in this organization.");
+    }
+    const role = await ctx.db.get(roleId);
+    if (!role || role.orgId !== orgId) {
+      throw new Error("Role not found in this organization.");
+    }
+    if (member.roleId === roleId) return null;
+    const before = { roleId: member.roleId ?? null, role: member.role };
+    await ctx.db.patch(memberId, {
+      roleId,
+      // Keep the legacy enum aligned with preset roles; leave it untouched for
+      // custom roles (which have no enum equivalent — roleId drives access).
+      ...(role.isPreset && role.key ? { role: role.key } : {}),
+    });
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "member.role.assign",
+      entity: "members",
+      entityId: memberId,
+      before,
+      after: { roleId, roleName: role.name },
     });
     return null;
   },

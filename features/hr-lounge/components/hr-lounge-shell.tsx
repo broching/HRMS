@@ -22,6 +22,7 @@ import {
 } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { useCurrentMember } from "@/hooks/use-current-member"
+import { permitted, type Permission } from "@/convex/lib/permissions"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
@@ -31,26 +32,77 @@ type Item = {
   href?: string
   exact?: boolean
   comingSoon?: boolean
+  // Sub-function gate; omitted items are visible to anyone with hr:access.
+  permission?: Permission
 }
 
 // The HR module rail. The core HR modules live in-shell under /hr-lounge so the
 // rail stays present; a few advanced screens still deep-link to admin pages.
+// Each entry is gated by the permission backing that module, so removing a
+// permission from a role hides the module from that role's rail.
 const ITEMS: Item[] = [
   { label: "Overview", icon: IconLayoutDashboard, href: "/hr-lounge/overview" },
-  { label: "Employee List", icon: IconUsers, href: "/hr-lounge", exact: true },
-  { label: "Leave", icon: IconCalendarStats, href: "/hr-lounge/leave" },
-  { label: "Payroll", icon: IconCash, href: "/hr-lounge/payroll" },
+  {
+    label: "Employee List",
+    icon: IconUsers,
+    href: "/hr-lounge",
+    exact: true,
+    permission: "employees:manage",
+  },
+  {
+    label: "Leave",
+    icon: IconCalendarStats,
+    href: "/hr-lounge/leave",
+    permission: "leave:config",
+  },
+  {
+    label: "Payroll",
+    icon: IconCash,
+    href: "/hr-lounge/payroll",
+    permission: "payroll:manage",
+  },
   {
     label: "Compensation",
     icon: IconCoin,
     href: "/hr-lounge/payroll/compensation",
+    permission: "payroll:manage",
   },
-  { label: "Expense Claims", icon: IconReceipt2, href: "/hr-lounge/claims" },
-  { label: "Recruitment", icon: IconBriefcase, href: "/hr-lounge/recruitment" },
-  { label: "Performance", icon: IconChartBar, href: "/hr-lounge/performance" },
-  { label: "Reports", icon: IconReportAnalytics, href: "/hr-lounge/reports" },
-  { label: "Org Structure", icon: IconSitemap, href: "/settings/org-structure" },
-  { label: "Members", icon: IconUserCog, href: "/settings/members" },
+  {
+    label: "Expense Claims",
+    icon: IconReceipt2,
+    href: "/hr-lounge/claims",
+    permission: "claims:read:all",
+  },
+  {
+    label: "Recruitment",
+    icon: IconBriefcase,
+    href: "/hr-lounge/recruitment",
+    permission: "recruitment:manage",
+  },
+  {
+    label: "Performance",
+    icon: IconChartBar,
+    href: "/hr-lounge/performance",
+    permission: "performance:manage",
+  },
+  {
+    label: "Reports",
+    icon: IconReportAnalytics,
+    href: "/hr-lounge/reports",
+    permission: "reports:view",
+  },
+  {
+    label: "Org Structure",
+    icon: IconSitemap,
+    href: "/settings/org-structure",
+    permission: "employees:manage",
+  },
+  {
+    label: "Members",
+    icon: IconUserCog,
+    href: "/settings/members",
+    permission: "members:manage",
+  },
   { label: "Onboarding", icon: IconUserPlus, comingSoon: true },
 ]
 
@@ -68,24 +120,26 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
     )
   }
 
-  const allowed =
-    member?.role === "admin" ||
-    member?.role === "hr" ||
-    member?.role === "finance"
+  const allowed = !!member?.permissions?.includes("hr:access")
   if (!allowed) {
     return (
       <div className="px-4 py-6 lg:px-6">
         <p className="text-muted-foreground text-sm">
-          The HR Lounge is available to HR, Finance and admins only.
+          The HR Lounge is available to HR and admins only.
         </p>
       </div>
     )
   }
 
+  // Only show modules this member's role can actually open.
+  const items = ITEMS.filter(
+    (item) => !item.permission || permitted(member?.permissions, item.permission),
+  )
+
   // Longest-matching href wins, so e.g. /hr-lounge/payroll/compensation
   // highlights Compensation rather than also lighting up Payroll.
   let activeHref: string | null = null
-  for (const item of ITEMS) {
+  for (const item of items) {
     if (!item.href) continue
     const match = item.exact
       ? pathname === item.href
@@ -132,7 +186,7 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
         <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
-          {ITEMS.map((item) => {
+          {items.map((item) => {
             const active = isActive(item)
             const content = (
               <span

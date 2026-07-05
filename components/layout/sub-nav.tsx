@@ -4,7 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 
 import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission } from "@/convex/lib/permissions"
+import { permitted } from "@/convex/lib/permissions"
 import type { HrmsRole } from "@/convex/lib/enums"
 import { cn } from "@/lib/utils"
 import {
@@ -13,10 +13,14 @@ import {
   type NavLink,
 } from "@/components/layout/nav-config"
 
-function canSee(item: NavLink, role: HrmsRole | undefined): boolean {
+function canSee(
+  item: NavLink,
+  role: HrmsRole | undefined,
+  permissions: readonly string[] | undefined,
+): boolean {
   if (!role) return false
   if (item.roles && !item.roles.includes(role)) return false
-  if (item.permission && !hasPermission(role, item.permission)) return false
+  if (item.permission && !permitted(permissions, item.permission)) return false
   return true
 }
 
@@ -28,7 +32,7 @@ export function SubNav() {
   const section = resolveSection(pathname)
   if (!section) return null
 
-  const items = section.items.filter((i) => canSee(i, role))
+  const items = section.items.filter((i) => canSee(i, role, member?.permissions))
   if (items.length < 2) return null
 
   const activeUrl = activeItemUrl(section, pathname)

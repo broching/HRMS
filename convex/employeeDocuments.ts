@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { documentType } from "./lib/enums";
 import { requireOrg } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { writeAuditLog } from "./lib/audit";
 import { documentGroupRow } from "./lib/validators";
@@ -22,7 +22,7 @@ async function requireDocViewAccess(
     throw new Error("Employee not found.");
   }
   const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
-  if (isSelf || hasPermission(orgCtx.role, "employees:read:all")) {
+  if (isSelf || ctxHasPermission(orgCtx, "employees:read:all")) {
     return { orgCtx, employee, isSelf };
   }
   throw new Error("Not authorized to view these documents.");
@@ -39,7 +39,7 @@ async function requireDocManageAccess(
     throw new Error("Employee not found.");
   }
   const isSelf = !!employee.userId && employee.userId === orgCtx.userId;
-  if (isSelf || hasPermission(orgCtx.role, "employees:manage")) {
+  if (isSelf || ctxHasPermission(orgCtx, "employees:manage")) {
     return { orgCtx, employee, isSelf };
   }
   throw new Error("Not authorized to manage these documents.");

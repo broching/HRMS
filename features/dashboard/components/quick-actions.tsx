@@ -13,15 +13,15 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission } from "@/convex/lib/permissions"
+import { permitted } from "@/convex/lib/permissions"
 
 export function QuickActions() {
   const member = useCurrentMember()
-  const role = member?.role
+  const permissions = member?.permissions
 
-  const isApprover = role === "admin" || role === "hr" || role === "manager"
-  const canManage = role ? hasPermission(role, "employees:manage") : false
-  const canReadAll = role ? hasPermission(role, "employees:read:all") : false
+  const isApprover = permitted(permissions, "team:access")
+  const canManage = permitted(permissions, "employees:manage")
+  const canReadAll = permitted(permissions, "employees:read:all")
 
   const actions: { label: string; href: string; icon: Icon }[] = [
     { label: "Apply for leave", href: "/leave", icon: IconPlane },

@@ -39,7 +39,7 @@ export function ConfirmDialog({
         <div className="text-muted-foreground text-sm">{description}</div>
         <DialogFooter>
           <Button
-            variant="ghost"
+            variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >

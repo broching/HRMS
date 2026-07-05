@@ -8,7 +8,7 @@ import { useTheme } from "next-themes"
 import { IconMenu2, IconSettings } from "@tabler/icons-react"
 
 import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission } from "@/convex/lib/permissions"
+import { permitted } from "@/convex/lib/permissions"
 import type { HrmsRole } from "@/convex/lib/enums"
 import { cn } from "@/lib/utils"
 import {
@@ -27,10 +27,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-function canSee(item: NavLink | NavSection, role: HrmsRole | undefined): boolean {
+function canSee(
+  item: NavLink | NavSection,
+  role: HrmsRole | undefined,
+  permissions: readonly string[] | undefined,
+): boolean {
   if (!role) return false
   if (item.roles && !item.roles.includes(role)) return false
-  if (item.permission && !hasPermission(role, item.permission)) return false
+  if (item.permission && !permitted(permissions, item.permission)) return false
   return true
 }
 
@@ -39,10 +43,13 @@ export function TopNav() {
   const { theme } = useTheme()
   const member = useCurrentMember()
   const role = member?.role
+  const permissions = member?.permissions
 
   const active = resolveSection(pathname)
-  const sections = SECTIONS.filter((s) => canSee(s, role))
-  const settingsVisible = SETTINGS_SECTION.items.some((i) => canSee(i, role))
+  const sections = SECTIONS.filter((s) => canSee(s, role, permissions))
+  const settingsVisible = SETTINGS_SECTION.items.some((i) =>
+    canSee(i, role, permissions),
+  )
 
   return (
 <header className="sticky top-0 z-50 h-[65px] border-b border-border bg-background shadow-lg">

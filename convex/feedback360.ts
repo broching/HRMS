@@ -2,7 +2,7 @@ import { mutation, query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, OrgContext } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import {
   feedback360Relationship,
@@ -21,7 +21,7 @@ async function assertCanManageSubject(
   orgCtx: OrgContext,
   subjectEmployeeId: Id<"employees">,
 ) {
-  if (hasPermission(orgCtx.role, "performance:manage")) return;
+  if (ctxHasPermission(orgCtx, "performance:manage")) return;
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const subject = await ctx.db.get(subjectEmployeeId);
   if (own && subject && subject.managerId === own._id) return;

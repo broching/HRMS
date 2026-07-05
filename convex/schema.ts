@@ -102,13 +102,35 @@ export default defineSchema({
     orgId: v.id("organizations"),
     userId: v.id("users"),
     clerkMembershipId: v.string(),
+    // Legacy role enum — retained for Clerk seeding + as the permission
+    // resolution fallback when `roleId` is absent.
     role: hrmsRole,
+    // The data-driven role this member holds. When set, its `roles` document's
+    // permissions are authoritative; when absent, permissions fall back to the
+    // static matrix keyed by `role`.
+    roleId: v.optional(v.id("roles")),
     status: memberStatus,
   })
     .index("by_org", ["orgId"])
     .index("by_user", ["userId"])
     .index("by_org_and_user", ["orgId", "userId"])
-    .index("by_clerkMembershipId", ["clerkMembershipId"]),
+    .index("by_clerkMembershipId", ["clerkMembershipId"])
+    .index("by_role", ["roleId"]),
+
+  // Data-driven roles, one set per org. Seeded from ROLE_PRESETS (isPreset =
+  // true, `key` ties back to the legacy HrmsRole enum); admins may add custom
+  // roles and tune permissions. `permissions` holds Permission keys.
+  roles: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    description: v.optional(v.string()),
+    key: v.optional(hrmsRole), // set for preset roles only
+    isPreset: v.boolean(),
+    permissions: v.array(v.string()),
+    order: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_key", ["orgId", "key"]),
 
   // ─── Org structure ───────────────────────────────────────────────────────
 
@@ -530,6 +552,10 @@ export default defineSchema({
     sentToPayroll: v.optional(v.boolean()),
     // Audit trail of approver edits (append-only). Absent until first edited.
     edits: v.optional(v.array(claimEditEntry)),
+    // When this claim is a resubmission, the id of the original rejected claim
+    // it was duplicated from. The original stays on its own (rejected); this is
+    // a fresh, independently-editable copy. Absent on first-time claims.
+    resubmittedFromClaimId: v.optional(v.id("claims")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])

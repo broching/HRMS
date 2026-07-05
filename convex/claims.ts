@@ -1,8 +1,13 @@
 import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
-import { requireOrg, getOrgContext, requirePermission, OrgContext } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import {
+  requireOrg,
+  getOrgContext,
+  requirePermission,
+  ctxHasPermission,
+  OrgContext,
+} from "./auth";
 import { employeeByUserId } from "./employees";
 import {
   claimRow,
@@ -16,7 +21,13 @@ import {
 } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
 import type { ClaimStatus } from "./lib/enums";
-import { CLAIM_GROUP_HR, CLAIM_GROUP_FINANCE, claimExchangeMode } from "./lib/enums";
+import {
+  CLAIM_GROUP_HR,
+  CLAIM_GROUP_FINANCE,
+  claimExchangeMode,
+  claimStatus,
+  claimCategory,
+} from "./lib/enums";
 
 // Maximum receipts/attachments per claim.
 const MAX_RECEIPTS = 5;
@@ -115,7 +126,7 @@ async function requireClaimAccess(ctx: QueryCtx, claimId: Id<"claims">) {
   const orgCtx = await requireOrg(ctx);
   const claim = await ctx.db.get(claimId);
   if (!claim || claim.orgId !== orgCtx.orgId) throw new ConvexError("Claim not found.");
-  if (hasPermission(orgCtx.role, "claims:approve:finance")) {
+  if (ctxHasPermission(orgCtx, "claims:approve:finance")) {
     return { orgCtx, claim };
   }
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
@@ -138,7 +149,7 @@ async function assertManagerStage(
   orgCtx: OrgContext,
   claim: Doc<"claims">,
 ) {
-  if (hasPermission(orgCtx.role, "claims:approve:finance")) return;
+  if (ctxHasPermission(orgCtx, "claims:approve:finance")) return;
   if (claim.approvalChain && claim.approvalChain.length > 0) {
     const step = claim.approvalChain[claim.currentStepIndex ?? 0];
     if (step && stepEligible(step, orgCtx.userId)) return;
@@ -596,13 +607,14 @@ export const submitMonth = mutation({
   },
 });
 
-// Resubmit rejected claims: bundle the selected rejected claims (all owned by
-// the caller, from the same month) into a fresh claim group and route them back
-// through the approval workflow from the start. Their prior decision state is
-// cleared so the new chain resolves against current settings.
+// Resubmit rejected claims by DUPLICATING them: each selected rejected claim is
+// copied into a fresh draft owned by the caller, linked back to the original via
+// `resubmittedFromClaimId`. The originals stay untouched (rejected, on their
+// own), so the resubmission is a brand-new claim the owner can modify before
+// submitting it (via `submitMonth`) back through the approval workflow.
 export const resubmitClaims = mutation({
   args: { claimIds: v.array(v.id("claims")) },
-  returns: v.object({ submitted: v.number(), groupId: v.id("claimGroups") }),
+  returns: v.object({ duplicated: v.number() }),
   handler: async (ctx, { claimIds }) => {
     const { orgId, userId } = await requireOrg(ctx);
     const own = await employeeByUserId(ctx, orgId, userId);
@@ -610,8 +622,7 @@ export const resubmitClaims = mutation({
     if (claimIds.length === 0) {
       throw new ConvexError("Select at least one rejected claim to resubmit.");
     }
-    const claims: Doc<"claims">[] = [];
-    let month: string | null = null;
+    let duplicated = 0;
     for (const id of claimIds) {
       const c = await ctx.db.get(id);
       if (!c || c.orgId !== orgId || c.employeeId !== own._id) {
@@ -620,33 +631,42 @@ export const resubmitClaims = mutation({
       if (c.status !== "rejected") {
         throw new ConvexError("Only rejected claims can be resubmitted.");
       }
-      const m = c.incurredDate.slice(0, 7);
-      if (month === null) month = m;
-      else if (month !== m) {
-        throw new ConvexError("Resubmit claims from the same month together.");
-      }
-      claims.push(c);
-    }
-    const groupId = await createClaimGroup(ctx, orgId, own._id, month!);
-    for (const claim of claims) {
-      // Reset decision state back to a clean draft, then route fresh (rebuilds
-      // the approval chain from current settings).
-      await ctx.db.patch(claim._id, {
-        groupId,
+      // Fresh draft copy of the claim's field content. Decision/approval state
+      // is intentionally not carried over — the copy routes fresh on submit,
+      // against current settings. Receipt files are shared with the original
+      // (delete is guarded so removing one claim keeps the other's receipts).
+      const dupId = await ctx.db.insert("claims", {
+        orgId,
+        employeeId: own._id,
+        claimTypeId: c.claimTypeId,
+        amountCents: c.amountCents,
+        currency: c.currency,
+        taxAmountCents: c.taxAmountCents,
+        localAmountCents: c.localAmountCents,
+        localCurrency: c.localCurrency,
+        exchangeRate: c.exchangeRate,
+        exchangeMode: c.exchangeMode,
+        exchangeRateDate: c.exchangeRateDate,
+        exchangeProvider: c.exchangeProvider,
+        receiptNo: c.receiptNo,
+        remarks: c.remarks,
+        incurredDate: c.incurredDate,
+        description: c.description,
+        receiptStorageIds: c.receiptStorageIds,
         status: "draft",
-        decidedAt: undefined,
-        decisionNote: undefined,
-        rejectedStepIndex: undefined,
-        managerApproverUserId: undefined,
-        financeApproverUserId: undefined,
-        approvalChain: undefined,
-        currentStepIndex: undefined,
-        sentToPayroll: undefined,
+        resubmittedFromClaimId: c._id,
       });
-      const fresh = (await ctx.db.get(claim._id))!;
-      await routeDraftClaim(ctx, orgId, own, fresh);
+      await writeAuditLog(ctx, {
+        orgId,
+        actorUserId: userId,
+        action: "claim.resubmit_duplicate",
+        entity: "claims",
+        entityId: dupId,
+        after: { from: c._id },
+      });
+      duplicated++;
     }
-    return { submitted: claims.length, groupId };
+    return { duplicated };
   },
 });
 
@@ -693,7 +713,7 @@ async function advanceManagerStep(
 
   const step = chain[idx];
   const isApprover = !!step && stepEligible(step, orgCtx.userId);
-  if (!isApprover && !hasPermission(orgCtx.role, "claims:approve:finance")) {
+  if (!isApprover && !ctxHasPermission(orgCtx, "claims:approve:finance")) {
     throw new ConvexError("Not authorized to approve this step.");
   }
 
@@ -865,7 +885,7 @@ export const approveAllForEmployee = mutation({
     if (!employee || employee.orgId !== orgCtx.orgId) {
       throw new ConvexError("Employee not found.");
     }
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     const claims = await ctx.db
       .query("claims")
       .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
@@ -932,7 +952,7 @@ export const editClaim = mutation({
     // Editable while a draft (by the owner) or while pending (by an approver).
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isOwner = !!own && claim.employeeId === own._id;
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     if (claim.status === "draft") {
       if (!isOwner) throw new ConvexError("Only the owner can edit a draft.");
     } else if (
@@ -1053,7 +1073,7 @@ export const reject = mutation({
       await assertManagerStage(ctx, orgCtx, claim);
       rejectedStepIndex = claim.currentStepIndex ?? 0;
     } else if (claim.status === "pending_finance") {
-      if (!hasPermission(orgCtx.role, "claims:approve:finance")) {
+      if (!ctxHasPermission(orgCtx, "claims:approve:finance")) {
         throw new ConvexError("Not authorized to reject this claim.");
       }
       rejectedStepIndex = claim.approvalChain?.length ?? 0;
@@ -1102,7 +1122,7 @@ export const markReimbursed = mutation({
     }
     const own = await employeeByUserId(ctx, orgId, userId);
     const isOwner = own && claim.employeeId === own._id;
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     if (!isOwner && !isFinance) {
       throw new ConvexError("Not authorized to update this claim.");
     }
@@ -1148,7 +1168,7 @@ export const deleteClaim = mutation({
     if (!claim || claim.orgId !== orgCtx.orgId) throw new ConvexError("Claim not found.");
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isOwner = !!own && claim.employeeId === own._id;
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
 
     let allowed = false;
     if (claim.status === "draft" || claim.status === "rejected") {
@@ -1164,7 +1184,20 @@ export const deleteClaim = mutation({
     }
     if (!allowed) throw new ConvexError("This claim can't be deleted.");
 
+    // A resubmitted duplicate shares receipt files with the original claim (and
+    // vice versa). Only delete a receipt file when no *other* claim references
+    // it, so removing one claim never breaks another's receipts.
+    const others = await ctx.db
+      .query("claims")
+      .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+      .collect();
+    const stillReferenced = new Set<Id<"_storage">>();
+    for (const other of others) {
+      if (other._id === claimId) continue;
+      for (const sid of other.receiptStorageIds) stillReferenced.add(sid);
+    }
     for (const sid of claim.receiptStorageIds) {
+      if (stillReferenced.has(sid)) continue;
       try {
         await ctx.storage.delete(sid);
       } catch {
@@ -1199,7 +1232,7 @@ export const setRemarks = mutation({
     if (!claim || claim.orgId !== orgCtx.orgId) throw new ConvexError("Claim not found.");
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isOwner = !!own && claim.employeeId === own._id;
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     let allowed = false;
     if (claim.status === "draft") {
       allowed = isOwner;
@@ -1279,6 +1312,40 @@ export const mine = query({
   },
 });
 
+// The caller's own submission batches (claim groups), so My Claims can group
+// claims under the batch they were submitted in. Drafts (not yet submitted)
+// carry no group and are bucketed separately by the UI.
+export const myBatches = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("claimGroups"),
+      periodMonth: v.string(),
+      sequence: v.number(),
+      title: v.union(v.string(), v.null()),
+      submittedAt: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) return [];
+    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    if (!own) return [];
+    const groups = await ctx.db
+      .query("claimGroups")
+      .withIndex("by_employee", (q) => q.eq("employeeId", own._id))
+      .collect();
+    groups.sort((a, b) => b.submittedAt - a.submittedAt);
+    return groups.map((g) => ({
+      _id: g._id,
+      periodMonth: g.periodMonth,
+      sequence: g.sequence,
+      title: g.title ?? null,
+      submittedAt: g.submittedAt,
+    }));
+  },
+});
+
 export const get = query({
   args: { claimId: v.id("claims") },
   returns: claimDetail,
@@ -1286,7 +1353,7 @@ export const get = query({
     const { orgCtx, claim } = await requireClaimAccess(ctx, claimId);
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isMine = !!own && claim.employeeId === own._id;
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
 
     // Can the viewer act on the current pending stage?
     let canApprove = false;
@@ -1444,7 +1511,7 @@ async function claimsAwaitingCaller(
   orgCtx: OrgContext,
 ): Promise<Doc<"claims">[]> {
   const out: Doc<"claims">[] = [];
-  if (hasPermission(orgCtx.role, "claims:approve:finance")) {
+  if (ctxHasPermission(orgCtx, "claims:approve:finance")) {
     const finance = await ctx.db
       .query("claims")
       .withIndex("by_org_status", (q) =>
@@ -1666,7 +1733,7 @@ export const approvalClaimGroups = query({
   handler: async (ctx, filters) => {
     const orgCtx = await getOrgContext(ctx);
     if (!orgCtx) return [];
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
 
     let claims = (
@@ -1746,7 +1813,7 @@ export const approvalClaimsForGroup = query({
     if (!orgCtx) return [];
     const group = await ctx.db.get(groupId);
     if (!group || group.orgId !== orgCtx.orgId) return [];
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const claims = await ctx.db
       .query("claims")
@@ -1772,6 +1839,218 @@ export const approvalClaimsForGroup = query({
   },
 });
 
+// ─── All-headcount claims (HR Lounge oversight) ────────────────────────────
+
+// Every submission batch across the whole org, grouped by claim group — the HR
+// Lounge oversight view. Unlike the approver queue this is NOT scoped to the
+// caller's approval relationships; it requires `claims:read:all`. `pendingCount`
+// here means claims still undecided (pending_manager/pending_finance).
+export const allClaimGroups = query({
+  args: {
+    month: v.optional(v.string()),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+  },
+  returns: v.array(claimApprovalGroupRow),
+  handler: async (ctx, filters) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx || !orgCtx.permissions.has("claims:read:all")) return [];
+
+    let claims = (
+      await ctx.db
+        .query("claims")
+        .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+        .collect()
+    ).filter((c) => c.groupId != null);
+    claims = await applyApprovalFilters(ctx, claims, filters);
+
+    type Acc = {
+      pending: number;
+      visible: number;
+      approved: number;
+      rejected: number;
+      total: number;
+      currency: string;
+    };
+    const byGroup = new Map<Id<"claimGroups">, Acc>();
+    for (const c of claims) {
+      const acc = byGroup.get(c.groupId!) ?? {
+        pending: 0,
+        visible: 0,
+        approved: 0,
+        rejected: 0,
+        total: 0,
+        currency: c.currency,
+      };
+      acc.visible += 1;
+      acc.total += c.amountCents;
+      if (c.status === "pending_manager" || c.status === "pending_finance")
+        acc.pending += 1;
+      if (c.status === "approved" || c.status === "reimbursed") acc.approved += 1;
+      if (c.status === "rejected") acc.rejected += 1;
+      byGroup.set(c.groupId!, acc);
+    }
+
+    const rows = await Promise.all(
+      [...byGroup.entries()].map(async ([groupId, acc]) => {
+        const group = await ctx.db.get(groupId);
+        if (!group) return null;
+        const emp = await ctx.db.get(group.employeeId);
+        return {
+          groupId,
+          employeeId: group.employeeId,
+          employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
+          periodMonth: group.periodMonth,
+          sequence: group.sequence,
+          title: group.title ?? null,
+          submittedAt: group.submittedAt,
+          pendingCount: acc.pending,
+          visibleCount: acc.visible,
+          approvedCount: acc.approved,
+          rejectedCount: acc.rejected,
+          totalAmountCents: acc.total,
+          currency: acc.currency,
+          complete: acc.pending === 0,
+        };
+      }),
+    );
+    return rows
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => (b.submittedAt ?? 0) - (a.submittedAt ?? 0));
+  },
+});
+
+// Every claim in one group (HR Lounge oversight — requires `claims:read:all`),
+// with receipts resolved. `canAct` reflects whether the caller may act on it
+// now (they still need the relevant approval rights), so HR can approve/reject
+// where eligible while seeing the whole batch.
+export const allClaimsForGroup = query({
+  args: { groupId: v.id("claimGroups") },
+  returns: v.array(claimGroupApprovalItem),
+  handler: async (ctx, { groupId }) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx || !orgCtx.permissions.has("claims:read:all")) return [];
+    const group = await ctx.db.get(groupId);
+    if (!group || group.orgId !== orgCtx.orgId) return [];
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
+    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const claims = await ctx.db
+      .query("claims")
+      .withIndex("by_group", (q) => q.eq("groupId", groupId))
+      .collect();
+    const out: Array<
+      Awaited<ReturnType<typeof hydrateClaim>> & {
+        receipts: Awaited<ReturnType<typeof resolveReceipts>>;
+        canAct: boolean;
+      }
+    > = [];
+    for (const c of claims) {
+      const view = await approverClaimView(ctx, orgCtx, c, isFinance, own);
+      out.push({
+        ...(await hydrateClaim(ctx, c)),
+        receipts: await resolveReceipts(ctx, c.receiptStorageIds),
+        canAct: view === "awaiting",
+      });
+    }
+    out.sort((a, b) => (a.incurredDate < b.incurredDate ? 1 : -1));
+    return out;
+  },
+});
+
+// Flat claim rows for CSV/Excel export. `source: "all"` exports every submitted
+// claim org-wide (HR Lounge oversight — requires `claims:read:all`); `"mine"`
+// exports the claims visible to the caller as an approver. Optional `employeeId`
+// narrows to one claimant (an approver exporting a person's claims).
+export const exportRows = query({
+  args: {
+    source: v.union(v.literal("mine"), v.literal("all")),
+    month: v.optional(v.string()),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+    employeeId: v.optional(v.id("employees")),
+  },
+  returns: v.array(
+    v.object({
+      employeeName: v.string(),
+      periodMonth: v.string(),
+      sequence: v.number(),
+      title: v.union(v.string(), v.null()),
+      claimType: v.string(),
+      category: claimCategory,
+      amountCents: v.number(),
+      currency: v.string(),
+      incurredDate: v.string(),
+      status: claimStatus,
+      description: v.string(),
+      decisionNote: v.union(v.string(), v.null()),
+      receiptCount: v.number(),
+    }),
+  ),
+  handler: async (ctx, { source, employeeId, ...filters }) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) return [];
+    if (source === "all" && !orgCtx.permissions.has("claims:read:all")) {
+      return [];
+    }
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
+    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+
+    let claims = (
+      await ctx.db
+        .query("claims")
+        .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+        .collect()
+    ).filter((c) => c.groupId != null);
+    if (employeeId) claims = claims.filter((c) => c.employeeId === employeeId);
+    claims = await applyApprovalFilters(ctx, claims, filters);
+
+    // In the approver ("mine") scope, keep only claims the caller may see.
+    if (source === "mine") {
+      const visible: Doc<"claims">[] = [];
+      for (const c of claims) {
+        const view = await approverClaimView(ctx, orgCtx, c, isFinance, own);
+        if (view !== "hidden") visible.push(c);
+      }
+      claims = visible;
+    }
+
+    const groupCache = new Map<Id<"claimGroups">, Doc<"claimGroups"> | null>();
+    const rows = await Promise.all(
+      claims.map(async (c) => {
+        const base = await hydrateClaim(ctx, c);
+        let group = groupCache.get(c.groupId!);
+        if (group === undefined) {
+          group = await ctx.db.get(c.groupId!);
+          groupCache.set(c.groupId!, group);
+        }
+        return {
+          employeeName: base.employeeName,
+          periodMonth: group?.periodMonth ?? c.incurredDate.slice(0, 7),
+          sequence: group?.sequence ?? 1,
+          title: group?.title ?? null,
+          claimType: base.claimTypeName,
+          category: base.category,
+          amountCents: base.amountCents,
+          currency: base.currency,
+          incurredDate: base.incurredDate,
+          status: base.status,
+          description: base.description,
+          decisionNote: base.decisionNote ?? null,
+          receiptCount: base.receiptCount,
+        };
+      }),
+    );
+    rows.sort((a, b) =>
+      a.employeeName === b.employeeName
+        ? a.incurredDate < b.incurredDate
+          ? 1
+          : -1
+        : a.employeeName.localeCompare(b.employeeName),
+    );
+    return rows;
+  },
+});
+
 // Bulk-approve every claim in one group that awaits the caller (the group's
 // "approve all" action). Mirrors approveAllForEmployee but scoped to a group.
 export const approveAllForGroup = mutation({
@@ -1783,7 +2062,7 @@ export const approveAllForGroup = mutation({
     if (!group || group.orgId !== orgCtx.orgId) {
       throw new ConvexError("Claim group not found.");
     }
-    const isFinance = hasPermission(orgCtx.role, "claims:approve:finance");
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     const claims = await ctx.db
       .query("claims")
       .withIndex("by_group", (q) => q.eq("groupId", groupId))

@@ -68,6 +68,7 @@ import type * as reviewCompetencies from "../reviewCompetencies.js";
 import type * as reviewCycles from "../reviewCycles.js";
 import type * as reviewObjectives from "../reviewObjectives.js";
 import type * as reviews from "../reviews.js";
+import type * as roles from "../roles.js";
 import type * as schedules from "../schedules.js";
 import type * as seed from "../seed.js";
 import type * as shiftTemplates from "../shiftTemplates.js";
@@ -141,6 +142,7 @@ declare const fullApi: ApiFromModules<{
   reviewCycles: typeof reviewCycles;
   reviewObjectives: typeof reviewObjectives;
   reviews: typeof reviews;
+  roles: typeof roles;
   schedules: typeof schedules;
   seed: typeof seed;
   shiftTemplates: typeof shiftTemplates;

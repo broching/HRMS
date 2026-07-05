@@ -138,7 +138,7 @@ export function ClaimSettings() {
                     </TableCell>
                     <TableCell className="text-right">
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="icon"
                         className="size-7"
                         onClick={() => openEdit(t)}

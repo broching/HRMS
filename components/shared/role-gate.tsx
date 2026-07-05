@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission, type Permission } from "@/convex/lib/permissions"
+import { permitted, type Permission } from "@/convex/lib/permissions"
 import type { HrmsRole } from "@/convex/lib/enums"
 import { Skeleton } from "@/components/ui/skeleton"
 
@@ -28,7 +28,7 @@ export function RoleGate({
   const allowed =
     !!role &&
     (!roles || roles.includes(role)) &&
-    (!permission || hasPermission(role, permission))
+    (!permission || permitted(member?.permissions, permission))
 
   if (!allowed) {
     return (

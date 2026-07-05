@@ -2,7 +2,8 @@ import { query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { getOrgContext, OrgContext } from "./auth";
-import { hasPermission, Permission } from "./lib/permissions";
+import { Permission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 
 /**
  * HR Lounge → Reports → Report builder. A single generic `dataset` query that
@@ -470,7 +471,7 @@ export const dataset = query({
     const orgCtx = await getOrgContext(ctx);
     if (!orgCtx) return null;
     const perm = REPORT_PERMISSION[report];
-    if (!perm || !hasPermission(orgCtx.role, perm)) return null;
+    if (!perm || !ctxHasPermission(orgCtx, perm)) return null;
     return await buildReport(ctx, orgCtx, report);
   },
 });

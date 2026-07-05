@@ -7,7 +7,7 @@ import {
   requirePermission,
   OrgContext,
 } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import {
   attendanceRow,
@@ -103,7 +103,7 @@ async function assertCorrectionReviewer(
   orgCtx: OrgContext,
   correction: Doc<"attendanceCorrections">,
 ) {
-  if (hasPermission(orgCtx.role, "attendance:config")) return;
+  if (ctxHasPermission(orgCtx, "attendance:config")) return;
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const emp = await ctx.db.get(correction.employeeId);
   if (own && emp && emp.managerId === own._id) return;
@@ -508,7 +508,7 @@ export const teamToday = query({
     if (!orgCtx) return [];
 
     let open: Doc<"attendanceRecords">[] = [];
-    if (hasPermission(orgCtx.role, "employees:read:all")) {
+    if (ctxHasPermission(orgCtx, "employees:read:all")) {
       open = await ctx.db
         .query("attendanceRecords")
         .withIndex("by_org_status", (q) =>
@@ -566,7 +566,7 @@ export const correctionQueue = query({
     if (!orgCtx) return [];
 
     let pending: Doc<"attendanceCorrections">[] = [];
-    if (hasPermission(orgCtx.role, "attendance:config")) {
+    if (ctxHasPermission(orgCtx, "attendance:config")) {
       pending = await ctx.db
         .query("attendanceCorrections")
         .withIndex("by_org_status", (q) =>

@@ -16,7 +16,6 @@ import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission } from "@/convex/lib/permissions"
 import { getErrorMessage } from "@/lib/errors"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -70,8 +69,7 @@ function ClaimActions({
   const [rejectOpen, setRejectOpen] = React.useState(false)
   const [rejectNote, setRejectNote] = React.useState("")
 
-  const role = member?.role
-  const isFinance = role ? hasPermission(role, "claims:approve:finance") : false
+  const isFinance = !!member?.permissions?.includes("claims:approve:finance")
   // The claimant can confirm reimbursement themselves — unless it's already
   // queued for payroll, in which case reimbursement flows through the run and
   // only finance should close it out.
@@ -146,7 +144,7 @@ function ClaimActions({
               </div>
               <DialogFooter>
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   disabled={busy}
                   onClick={() => setRejectOpen(false)}
                 >

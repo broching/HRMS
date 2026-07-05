@@ -240,7 +240,7 @@ export function CurrencyConverter({
               </span>
               <Button
                 type="button"
-                variant="ghost"
+                variant="outline"
                 size="icon"
                 className="size-7"
                 onClick={() => fetchRate(foreignCurrency)}

@@ -7,10 +7,10 @@ export default function HrClaimsPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Expense Claims"
-        description="Claims awaiting finance approval and reimbursement."
+        description="Every employee's claims, grouped by submission — approve, reject and reimburse across the organization."
       />
       <ClaimsTabs />
-      <ClaimsApprovalQueue showOrgFilters />
+      <ClaimsApprovalQueue showOrgFilters source="all" />
     </div>
   )
 }

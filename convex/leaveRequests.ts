@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { halfDay } from "./lib/enums";
 import { requireOrg, getOrgContext, OrgContext } from "./auth";
-import { hasPermission } from "./lib/permissions";
+import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { ensureBalance } from "./leaveBalances";
 import { resolvePolicyForEmployee } from "./leavePolicies";
@@ -137,7 +137,7 @@ async function assertCanApprove(
   orgCtx: OrgContext,
   req: Doc<"leaveRequests">,
 ) {
-  if (hasPermission(orgCtx.role, "leave:approve:all")) return;
+  if (ctxHasPermission(orgCtx, "leave:approve:all")) return;
   const approverForStep =
     req.approvalStep === 2 ? req.secondApproverUserId : req.firstApproverUserId;
   if (approverForStep && approverForStep === orgCtx.userId) return;
@@ -555,7 +555,7 @@ export const cancel = mutation({
     }
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isOwner = own && req.employeeId === own._id;
-    if (!isOwner && !hasPermission(orgCtx.role, "leave:approve:all")) {
+    if (!isOwner && !ctxHasPermission(orgCtx, "leave:approve:all")) {
       throw new Error("Not authorized to cancel this request.");
     }
     await reverseBalance(ctx, orgCtx.orgId, req);
@@ -761,7 +761,7 @@ export const modify = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const orgCtx = await requireOrg(ctx);
-    if (!hasPermission(orgCtx.role, "leave:approve:all")) {
+    if (!ctxHasPermission(orgCtx, "leave:approve:all")) {
       throw new Error("Not authorized to modify leave.");
     }
     const req = await ctx.db.get(args.requestId);
@@ -848,7 +848,7 @@ export const deleteRequest = mutation({
   returns: v.null(),
   handler: async (ctx, { requestId }) => {
     const orgCtx = await requireOrg(ctx);
-    if (!hasPermission(orgCtx.role, "leave:approve:all")) {
+    if (!ctxHasPermission(orgCtx, "leave:approve:all")) {
       throw new Error("Not authorized to delete leave.");
     }
     const req = await ctx.db.get(requestId);
@@ -872,7 +872,7 @@ export const nudgeApprovers = mutation({
   returns: v.number(),
   handler: async (ctx) => {
     const orgCtx = await requireOrg(ctx);
-    if (!hasPermission(orgCtx.role, "leave:approve:all")) {
+    if (!ctxHasPermission(orgCtx, "leave:approve:all")) {
       throw new Error("Not authorized.");
     }
     const pending = await ctx.db
@@ -940,7 +940,7 @@ export const approvalQueue = query({
   handler: async (ctx) => {
     const orgCtx = await getOrgContext(ctx);
     if (!orgCtx) return [];
-    if (hasPermission(orgCtx.role, "leave:approve:all")) {
+    if (ctxHasPermission(orgCtx, "leave:approve:all")) {
       const reqs = await ctx.db
         .query("leaveRequests")
         .withIndex("by_org_status", (q) =>
@@ -999,7 +999,7 @@ export const get = query({
 
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isOwner = !!own && own._id === req.employeeId;
-    const canManage = hasPermission(orgCtx.role, "leave:approve:all");
+    const canManage = ctxHasPermission(orgCtx, "leave:approve:all");
     const isApprover =
       req.firstApproverUserId === orgCtx.userId ||
       req.secondApproverUserId === orgCtx.userId;

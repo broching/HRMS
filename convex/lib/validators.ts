@@ -589,13 +589,20 @@ export const claimSettingsValue = v.object({
 })
 
 // Pickers for the claim settings form (members for assignees/approvers,
-// offices for threshold rules).
+// offices for threshold rules). Each member carries enough role/permission
+// context for the HR/Finance assignee guardrail: whether they can already act
+// on claims as finance/HR, and whether their role is a custom one (which must
+// be edited in Org Structure rather than swapped for a preset).
 export const claimSettingsOptions = v.object({
   members: v.array(
     v.object({
       userId: v.id("users"),
+      memberId: v.id("members"),
       name: v.string(),
       role: hrmsRole,
+      roleName: v.string(),
+      isCustomRole: v.boolean(),
+      hasFinanceAccess: v.boolean(),
     }),
   ),
   offices: v.array(

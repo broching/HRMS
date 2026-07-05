@@ -54,6 +54,7 @@ const STATUSES: ClaimStatus[] = [
 export function MyClaims() {
   const [month, setMonth] = React.useState(currentMonth())
   const claims = useQuery(api.claims.mine)
+  const batches = useQuery(api.claims.myBatches) ?? []
   const claimTypes = useQuery(api.claimTypes.list, { includeInactive: true }) ?? []
   const del = useMutation(api.claims.deleteClaim)
   const submitMonth = useMutation(api.claims.submitMonth)
@@ -98,6 +99,39 @@ export function MyClaims() {
   const monthTotal = monthClaims.reduce((s, c) => s + c.amountCents, 0)
   const monthCurrency = monthClaims[0]?.currency ?? "SGD"
 
+  // Group the month's claims by the batch (claim group) they were submitted in,
+  // so the claimant sees their claims organised by submission. Drafts (no group)
+  // are bucketed on their own as "Not yet submitted" and shown first.
+  const batchById = new Map(batches.map((b) => [b._id, b]))
+  const DRAFT_BUCKET = "__drafts__"
+  const buckets = React.useMemo(() => {
+    const map = new Map<string, typeof monthClaims>()
+    for (const c of monthClaims) {
+      const key = c.groupId ?? DRAFT_BUCKET
+      const arr = map.get(key)
+      if (arr) arr.push(c)
+      else map.set(key, [c])
+    }
+    const entries = [...map.entries()]
+    // Drafts first, then batches by most-recent submission.
+    entries.sort(([ka], [kb]) => {
+      if (ka === DRAFT_BUCKET) return -1
+      if (kb === DRAFT_BUCKET) return 1
+      const sa = batchById.get(ka as Id<"claimGroups">)?.submittedAt ?? 0
+      const sb = batchById.get(kb as Id<"claimGroups">)?.submittedAt ?? 0
+      return sb - sa
+    })
+    return entries
+  }, [monthClaims, batchById])
+
+  function bucketLabel(key: string): string {
+    if (key === DRAFT_BUCKET) return "Not yet submitted"
+    const b = batchById.get(key as Id<"claimGroups">)
+    if (!b) return "Submitted"
+    const base = monthLabel(b.periodMonth)
+    return b.title ? `${base} · ${b.title}` : base
+  }
+
   // Rejected claims in the month can be bundled into a fresh submission group.
   function toggleSelected(id: Id<"claims">) {
     setSelected((prev) => {
@@ -140,9 +174,9 @@ export function MyClaims() {
   async function handleResubmit() {
     setBusy(true)
     try {
-      const { submitted } = await resubmit({ claimIds: [...selected] })
+      const { duplicated } = await resubmit({ claimIds: [...selected] })
       toast.success(
-        `Resubmitted ${submitted} claim${submitted === 1 ? "" : "s"} in a new batch`,
+        `Duplicated ${duplicated} claim${duplicated === 1 ? "" : "s"} as draft${duplicated === 1 ? "" : "s"}. Edit if needed, then submit.`,
       )
       setResubmitOpen(false)
       setSelected(new Set())
@@ -161,7 +195,7 @@ export function MyClaims() {
         <div className="flex items-center gap-2">
           {selected.size > 0 && (
             <Button variant="outline" onClick={() => setResubmitOpen(true)}>
-              Resubmit selected ({selected.size})
+              Duplicate to resubmit ({selected.size})
             </Button>
           )}
           {draftCount > 0 && (
@@ -241,76 +275,102 @@ export function MyClaims() {
                 </TableCell>
               </TableRow>
             ) : (
-              monthClaims.map((c) => (
-                <TableRow
-                  key={c._id}
-                  className="hover:bg-muted/50 cursor-pointer"
-                  onClick={() => setOpenId(c._id)}
-                >
-                  <TableCell
-                    className="w-10"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {c.status === "rejected" && (
-                      <input
-                        type="checkbox"
-                        className="size-4 cursor-pointer align-middle"
-                        aria-label="Select for resubmission"
-                        checked={selected.has(c._id)}
-                        onChange={() => toggleSelected(c._id)}
-                      />
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <span className="font-medium">{c.claimTypeName}</span>
-                    <div className="text-muted-foreground max-w-[280px] truncate text-xs">
-                      {c.description}
-                    </div>
-                  </TableCell>
-                  <TableCell className="tabular-nums">
-                    {formatMoney(c.amountCents, c.currency)}
-                  </TableCell>
-                  <TableCell className="text-sm">{c.incurredDate}</TableCell>
-                  <TableCell>
-                    <Badge variant={CLAIM_STATUS_BADGE[c.status]}>
-                      {CLAIM_STATUS_LABELS[c.status]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div
-                      className="flex justify-end gap-1"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {c.status === "draft" && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditId(c._id)}
-                        >
-                          Edit
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
+              buckets.map(([key, rows]) => {
+                const bucketTotal = rows.reduce((s, c) => s + c.amountCents, 0)
+                const bucketCurrency = rows[0]?.currency ?? monthCurrency
+                return (
+                  <React.Fragment key={key}>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableCell colSpan={6} className="py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium">
+                            {bucketLabel(key)}
+                            <span className="text-muted-foreground ml-2 font-normal">
+                              · {rows.length} claim{rows.length === 1 ? "" : "s"}
+                            </span>
+                          </span>
+                          <span className="text-muted-foreground text-xs tabular-nums">
+                            {formatMoney(bucketTotal, bucketCurrency)}
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                    {rows.map((c) => (
+                      <TableRow
+                        key={c._id}
+                        className="hover:bg-muted/50 cursor-pointer"
                         onClick={() => setOpenId(c._id)}
                       >
-                        View
-                      </Button>
-                      {(c.status === "draft" || c.status === "rejected") && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive"
-                          onClick={() => setDeleteId(c._id)}
+                        <TableCell
+                          className="w-10"
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          Delete
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
+                          {c.status === "rejected" && (
+                            <input
+                              type="checkbox"
+                              className="size-4 cursor-pointer align-middle"
+                              aria-label="Select for resubmission"
+                              checked={selected.has(c._id)}
+                              onChange={() => toggleSelected(c._id)}
+                            />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium">{c.claimTypeName}</span>
+                          <div className="text-muted-foreground max-w-[280px] truncate text-xs">
+                            {c.description}
+                          </div>
+                        </TableCell>
+                        <TableCell className="tabular-nums">
+                          {formatMoney(c.amountCents, c.currency)}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {c.incurredDate}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={CLAIM_STATUS_BADGE[c.status]}>
+                            {CLAIM_STATUS_LABELS[c.status]}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div
+                            className="flex justify-end gap-1"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {c.status === "draft" && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setEditId(c._id)}
+                              >
+                                Edit
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setOpenId(c._id)}
+                            >
+                              View
+                            </Button>
+                            {(c.status === "draft" ||
+                              c.status === "rejected") && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-destructive"
+                                onClick={() => setDeleteId(c._id)}
+                              >
+                                Delete
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </React.Fragment>
+                )
+              })
             )}
           </TableBody>
         </Table>
@@ -356,9 +416,9 @@ export function MyClaims() {
       <ConfirmDialog
         open={resubmitOpen}
         onOpenChange={setResubmitOpen}
-        title="Resubmit selected claims?"
-        description={`This bundles ${selected.size} rejected claim${selected.size === 1 ? "" : "s"} into a new submission batch and sends ${selected.size === 1 ? "it" : "them"} back through the approval workflow.`}
-        confirmLabel="Resubmit"
+        title="Duplicate for resubmission?"
+        description={`This creates ${selected.size === 1 ? "a fresh draft copy" : `${selected.size} fresh draft copies`} of the selected rejected claim${selected.size === 1 ? "" : "s"}. The original rejected claim${selected.size === 1 ? " stays" : "s stay"} on record; you can edit the ${selected.size === 1 ? "copy" : "copies"} before submitting ${selected.size === 1 ? "it" : "them"} again.`}
+        confirmLabel="Duplicate"
         busy={busy}
         onConfirm={handleResubmit}
       />

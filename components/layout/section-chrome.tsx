@@ -9,7 +9,7 @@ import {
 } from "@tabler/icons-react"
 
 import { useCurrentMember } from "@/hooks/use-current-member"
-import { hasPermission } from "@/convex/lib/permissions"
+import { permitted } from "@/convex/lib/permissions"
 import type { HrmsRole } from "@/convex/lib/enums"
 import { cn } from "@/lib/utils"
 import {
@@ -23,10 +23,11 @@ import { SubNav } from "@/components/layout/sub-nav"
 function canSee(
   item: Pick<NavLink, "roles" | "permission">,
   role: HrmsRole | undefined,
+  permissions: readonly string[] | undefined,
 ): boolean {
   if (!role) return false
   if (item.roles && !item.roles.includes(role)) return false
-  if (item.permission && !hasPermission(role, item.permission)) return false
+  if (item.permission && !permitted(permissions, item.permission)) return false
   return true
 }
 
@@ -38,14 +39,15 @@ export function SectionChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const member = useCurrentMember()
   const role = member?.role
+  const permissions = member?.permissions
 
   const section = resolveSection(pathname)
   // A section the caller isn't allowed into (e.g. a regular employee deep-
   // linking to /team) shows no chrome at all — the page's own guard renders the
   // message under just the top nav, mirroring HR Lounge.
-  const sectionVisible = !!section && canSee(section, role)
+  const sectionVisible = !!section && canSee(section, role, permissions)
   const items = sectionVisible
-    ? section!.items.filter((i) => canSee(i, role))
+    ? section!.items.filter((i) => canSee(i, role, permissions))
     : []
   const useSidebar =
     sectionVisible && section!.layout === "sidebar" && items.length >= 2
