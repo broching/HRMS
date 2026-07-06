@@ -77,9 +77,12 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
   const [description, setDescription] = React.useState("")
   const [remarks, setRemarks] = React.useState("")
   const [receipts, setReceipts] = React.useState<Attachment[]>([])
+  const [mileageDistanceKm, setMileageDistanceKm] = React.useState("")
+  const [mileageVehicleTypeId, setMileageVehicleTypeId] = React.useState("")
   const [submitting, setSubmitting] = React.useState(false)
 
   const selected = claimTypes?.find((t) => t._id === claimTypeId)
+  const isMileage = selected?.category === "mileage"
   const balance = useQuery(
     api.claims.typeBalance,
     claimTypeId ? { claimTypeId: claimTypeId as Id<"claimTypes"> } : "skip",
@@ -91,9 +94,31 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
   const baseCurrency = balance?.currency ?? myCurrency?.currency ?? "SGD"
 
   const conv = conversionResult(conversion, baseCurrency)
-  const amountCents = conversion.enabled
-    ? conv.baseAmountCents
-    : Math.round((Number(amount) || 0) * 100)
+  const mileage = balance?.mileage ?? null
+  const mileageDistanceKmNum = Number(mileageDistanceKm) || 0
+  const mileageRatePerKmCents = mileage?.vehicleRates.length
+    ? (mileage.vehicleRates.find((v) => v.id === mileageVehicleTypeId)
+        ?.ratePerKmCents ?? null)
+    : (mileage?.ratePerKmCents ?? null)
+  const mileageNotConfigured =
+    isMileage &&
+    mileage != null &&
+    mileage.ratePerKmCents == null &&
+    mileage.vehicleRates.length === 0
+  const mileageNeedsVehicle =
+    isMileage && (mileage?.vehicleRates.length ?? 0) > 0 && !mileageVehicleTypeId
+  const mileageOverMax =
+    isMileage &&
+    mileage?.maxDistanceKm != null &&
+    mileageDistanceKmNum > mileage.maxDistanceKm
+
+  const amountCents = isMileage
+    ? mileageRatePerKmCents != null
+      ? Math.round(mileageDistanceKmNum * mileageRatePerKmCents)
+      : 0
+    : conversion.enabled
+      ? conv.baseAmountCents
+      : Math.round((Number(amount) || 0) * 100)
 
   const perTxnLimit = balance?.perTransactionLimitCents ?? null
   const overPerTxn = perTxnLimit != null && amountCents > perTxnLimit
@@ -102,15 +127,24 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
 
   // Validate against the claim type's limits up front, so the same rules the
   // server enforces surface as a clear inline message instead of a raw error.
-  const amountError =
-    amountCents <= 0
+  const mileageError = mileageNotConfigured
+    ? "Mileage rates haven't been configured for your office yet. Contact HR."
+    : mileageOverMax
+      ? `Distance exceeds the ${mileage!.maxDistanceKm} km maximum for your office.`
+      : mileageNeedsVehicle
+        ? "Choose a vehicle type."
+        : null
+  const amountError = mileageError
+    ? null
+    : amountCents <= 0
       ? null
       : overPerTxn
         ? `Amount exceeds the ${formatMoney(perTxnLimit!, baseCurrency)} per-transaction limit for this claim type.`
         : overBalance
           ? `Amount exceeds the ${formatMoney(balance!.availableCents!, baseCurrency)} balance available for this claim type.`
           : null
-  const conversionError = conversion.enabled && !conv.valid ? conv.error : null
+  const conversionError =
+    !isMileage && conversion.enabled && !conv.valid ? conv.error : null
   const receiptMissing = !!selected?.requiresReceipt && receipts.length === 0
 
   function reset() {
@@ -123,6 +157,8 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
     setDescription("")
     setRemarks("")
     setReceipts([])
+    setMileageDistanceKm("")
+    setMileageVehicleTypeId("")
   }
 
   function handleOpenChange(o: boolean) {
@@ -132,9 +168,10 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
 
   async function handleSubmit() {
     if (!claimTypeId) return toast.error("Choose a claim type")
-    if (conversion.enabled && !conv.valid) {
+    if (!isMileage && conversion.enabled && !conv.valid) {
       return toast.error(conv.error ?? "Complete the currency conversion")
     }
+    if (mileageError) return toast.error(mileageError)
     if (amountCents <= 0) return toast.error("Enter a valid amount")
     if (receiptMissing)
       return toast.error("This claim type requires a receipt")
@@ -150,7 +187,13 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
         taxAmountCents: taxAmount ? Math.round(Number(taxAmount) * 100) : undefined,
         receiptNo: receiptNo.trim() || undefined,
         remarks: remarks.trim() || undefined,
-        ...(conversion.enabled
+        ...(isMileage
+          ? {
+              mileageDistanceKm: mileageDistanceKmNum,
+              mileageVehicleTypeId: mileageVehicleTypeId || undefined,
+            }
+          : {}),
+        ...(!isMileage && conversion.enabled
           ? {
               localAmountCents: conv.localAmountCents,
               localCurrency: conversion.foreignCurrency,
@@ -291,65 +334,130 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
             </div>
           )}
 
-          {/* Total amount — in the org base currency, unless a foreign currency
-              is used (then it's derived from the conversion below). */}
-          {!conversion.enabled && (
-            <div className="grid gap-2">
-              <Label>
-                Total amount ({baseCurrency}){" "}
-                <span className="text-destructive">*</span>
-              </Label>
-              <div className="relative">
-                <span className="text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm">
-                  {baseCurrency}
-                </span>
+          {/* Mileage claim types: distance + vehicle type drive a computed
+              amount, instead of a manual total. */}
+          {isMileage ? (
+            <div className="flex flex-col gap-3">
+              {mileage && mileage.vehicleRates.length > 0 && (
+                <div className="grid gap-2">
+                  <Label>
+                    Vehicle type <span className="text-destructive">*</span>
+                  </Label>
+                  <Select
+                    value={mileageVehicleTypeId}
+                    onValueChange={setMileageVehicleTypeId}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select vehicle type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {mileage.vehicleRates.map((v) => (
+                        <SelectItem key={v.id} value={v.id}>
+                          {v.label} ({formatMoney(v.ratePerKmCents, baseCurrency)}/km)
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="grid gap-2">
+                <Label>
+                  Distance (km) <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   type="number"
                   min="0"
-                  step="0.01"
-                  placeholder="0.00"
-                  className="pl-12"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  step="0.1"
+                  placeholder="0"
+                  value={mileageDistanceKm}
+                  onChange={(e) => setMileageDistanceKm(e.target.value)}
                 />
+                {mileage?.maxDistanceKm != null && (
+                  <p className="text-muted-foreground text-xs">
+                    Max {mileage.maxDistanceKm} km per claim.
+                  </p>
+                )}
               </div>
+              {mileageRatePerKmCents != null && (
+                <div className="bg-muted/50 flex items-center justify-between rounded-lg p-3 text-sm">
+                  <span className="text-muted-foreground">
+                    {formatMoney(mileageRatePerKmCents, baseCurrency)}/km ×{" "}
+                    {mileageDistanceKmNum || 0} km
+                  </span>
+                  <span className="font-semibold">
+                    {formatMoney(amountCents, baseCurrency)}
+                  </span>
+                </div>
+              )}
+              {mileageError && (
+                <p className="text-destructive text-xs">{mileageError}</p>
+              )}
             </div>
-          )}
+          ) : (
+            <>
+              {/* Total amount — in the org base currency, unless a foreign
+                  currency is used (then it's derived from the conversion below). */}
+              {!conversion.enabled && (
+                <div className="grid gap-2">
+                  <Label>
+                    Total amount ({baseCurrency}){" "}
+                    <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <span className="text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm">
+                      {baseCurrency}
+                    </span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      className="pl-12"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
 
-          {/* Foreign-currency toggle + converter */}
-          <label className="flex w-fit items-center gap-2 text-sm">
-            <Checkbox
-              checked={conversion.enabled}
-              onCheckedChange={(c) =>
-                setConversion({ ...emptyConversion(), enabled: c === true })
-              }
-            />
-            This expense was in another currency
-          </label>
-          <CurrencyConverter
-            baseCurrency={baseCurrency}
-            state={conversion}
-            onChange={setConversion}
-          />
-          {conversionError && (
-            <p className="text-destructive text-xs">{conversionError}</p>
+              {/* Foreign-currency toggle + converter */}
+              <label className="flex w-fit items-center gap-2 text-sm">
+                <Checkbox
+                  checked={conversion.enabled}
+                  onCheckedChange={(c) =>
+                    setConversion({ ...emptyConversion(), enabled: c === true })
+                  }
+                />
+                This expense was in another currency
+              </label>
+              <CurrencyConverter
+                baseCurrency={baseCurrency}
+                state={conversion}
+                onChange={setConversion}
+              />
+              {conversionError && (
+                <p className="text-destructive text-xs">{conversionError}</p>
+              )}
+            </>
           )}
           {amountError && (
             <p className="text-destructive text-xs">{amountError}</p>
           )}
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-2">
-              <Label>Tax amount</Label>
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={taxAmount}
-                onChange={(e) => setTaxAmount(e.target.value)}
-              />
-            </div>
+            {!isMileage && (
+              <div className="grid gap-2">
+                <Label>Tax amount</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={taxAmount}
+                  onChange={(e) => setTaxAmount(e.target.value)}
+                />
+              </div>
+            )}
             <div className="grid gap-2">
               <Label>Receipt No</Label>
               <Input
@@ -392,7 +500,11 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
           <Button
             onClick={handleSubmit}
             disabled={
-              submitting || !!amountError || !!conversionError || receiptMissing
+              submitting ||
+              !!amountError ||
+              !!conversionError ||
+              !!mileageError ||
+              receiptMissing
             }
           >
             {submitting ? "Saving…" : "Save draft"}

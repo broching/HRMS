@@ -286,6 +286,24 @@ function ClaimDetailsCard({
           label="Amount"
           value={formatMoney(claim.amountCents, claim.currency)}
         />
+        {claim.mileageDistanceKm != null && (
+          <Field
+            label="Mileage"
+            value={
+              <span>
+                {claim.mileageDistanceKm} km
+                {claim.mileageVehicleTypeLabel
+                  ? ` · ${claim.mileageVehicleTypeLabel}`
+                  : ""}
+                {claim.mileageRatePerKmCents != null && (
+                  <span className="text-muted-foreground block text-xs">
+                    {formatMoney(claim.mileageRatePerKmCents, claim.currency)}/km
+                  </span>
+                )}
+              </span>
+            }
+          />
+        )}
         {claim.localAmountCents !== null && claim.localCurrency && (
           <Field
             label="Original amount"

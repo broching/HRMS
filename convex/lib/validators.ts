@@ -34,6 +34,8 @@ import {
   claimAssigneeGroup,
   claimPayrollMode,
   claimExchangeMode,
+  officeMileageSettings,
+  mileageVehicleRate,
   attendanceMethod,
   attendanceStatus,
   correctionStatus,
@@ -106,6 +108,7 @@ export const officeDoc = v.object({
   isDefault: v.optional(v.boolean()),
   geo: v.optional(v.object({ lat: v.number(), lng: v.number() })),
   radiusMeters: v.optional(v.number()),
+  mileageSettings: v.optional(officeMileageSettings),
   qrEnabled: v.boolean(),
 });
 
@@ -440,6 +443,17 @@ export const claimTypeDoc = v.object({
   active: v.boolean(),
 });
 
+// An employee's resolved mileage-claim configuration (from their office),
+// used to drive the distance/vehicle-type inputs and enforce the rate/max
+// distance on the claim form. `null` fields mean "not configured" — the form
+// blocks submission until an admin sets up the office's mileage settings.
+export const mileageClaimSettings = v.object({
+  currency: v.string(),
+  ratePerKmCents: v.union(v.number(), v.null()),
+  vehicleRates: v.array(mileageVehicleRate),
+  maxDistanceKm: v.union(v.number(), v.null()),
+});
+
 // Live per-employee spend vs. a claim type's configured limits, for the
 // "Balance available to claim" card in the submit form. Limits are null when
 // unconfigured ("No limit").
@@ -453,6 +467,8 @@ export const claimTypeBalance = v.object({
   yearlyUsedCents: v.number(),
   monthlyUsedCents: v.number(),
   availableCents: v.union(v.number(), v.null()),
+  // Present (non-null) only when the claim type's category is "mileage".
+  mileage: v.union(mileageClaimSettings, v.null()),
 });
 
 const claimRowFields = {
@@ -471,6 +487,10 @@ const claimRowFields = {
   status: claimStatus,
   receiptCount: v.number(),
   decisionNote: v.optional(v.string()),
+  mileageDistanceKm: v.optional(v.number()),
+  mileageVehicleTypeId: v.optional(v.string()),
+  mileageVehicleTypeLabel: v.optional(v.string()),
+  mileageRatePerKmCents: v.optional(v.number()),
 };
 
 export const claimRow = v.object(claimRowFields);

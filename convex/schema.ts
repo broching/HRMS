@@ -41,6 +41,7 @@ import {
   claimChainStep,
   claimExchangeMode,
   claimEditEntry,
+  officeMileageSettings,
   jobStatus,
   candidateStage,
   candidateSource,
@@ -174,6 +175,9 @@ export default defineSchema({
     isDefault: v.optional(v.boolean()),
     geo: v.optional(v.object({ lat: v.number(), lng: v.number() })),
     radiusMeters: v.optional(v.number()),
+    // Mileage-claim rates for employees assigned to this office. Absent = not
+    // configured yet — mileage claims are blocked until an admin sets it up.
+    mileageSettings: v.optional(officeMileageSettings),
     qrEnabled: v.boolean(),
     // HMAC secret backing this office's rotating clock-in QR codes. Never
     // returned to clients; set when QR attendance is first enabled.
@@ -534,6 +538,13 @@ export default defineSchema({
     exchangeRateDate: v.optional(v.string()), // ISO date
     exchangeProvider: v.optional(v.string()), // e.g. "frankfurter" | "manual"
     receiptNo: v.optional(v.string()),
+    // Mileage claims only: distance travelled + the vehicle-type rate applied,
+    // snapshotted at submit/edit time from the employee's office mileage
+    // settings so a later rate change never retags past claims.
+    mileageDistanceKm: v.optional(v.number()),
+    mileageVehicleTypeId: v.optional(v.string()),
+    mileageVehicleTypeLabel: v.optional(v.string()),
+    mileageRatePerKmCents: v.optional(v.number()),
     incurredDate: v.string(), // ISO date
     description: v.string(),
     // Free-text remarks about the claim (set by the submitter and/or approvers).

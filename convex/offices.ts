@@ -1,8 +1,9 @@
 import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { requireOrg, requirePermission } from "./auth";
 import { writeAuditLog } from "./lib/audit";
 import { officeDoc } from "./lib/validators";
+import { officeMileageSettings } from "./lib/enums";
 
 const geo = v.object({ lat: v.number(), lng: v.number() });
 
@@ -26,6 +27,7 @@ export const create = mutation({
     defaultCurrency: v.optional(v.string()),
     geo: v.optional(geo),
     radiusMeters: v.optional(v.number()),
+    mileageSettings: v.optional(officeMileageSettings),
   },
   returns: v.id("offices"),
   handler: async (ctx, args) => {
@@ -56,6 +58,7 @@ export const update = mutation({
     defaultCurrency: v.optional(v.string()),
     geo: v.optional(geo),
     radiusMeters: v.optional(v.number()),
+    mileageSettings: v.optional(officeMileageSettings),
     qrEnabled: v.optional(v.boolean()),
   },
   returns: v.null(),
@@ -94,6 +97,67 @@ export const ensureDefault = mutation({
   },
 });
 
+// Employees currently assigned to an office — used by the delete-office flow
+// to block deletion (and let the admin reassign them) while any remain.
+export const membersOf = query({
+  args: { id: v.id("offices") },
+  returns: v.array(
+    v.object({
+      _id: v.id("employees"),
+      name: v.string(),
+      employeeNumber: v.string(),
+    }),
+  ),
+  handler: async (ctx, { id }) => {
+    const { orgId } = await requirePermission(ctx, "attendance:config");
+    const office = await ctx.db.get(id);
+    if (!office || office.orgId !== orgId)
+      throw new Error("Office not found.");
+    const employees = await ctx.db
+      .query("employees")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    return employees
+      .filter((e) => e.officeId === id)
+      .map((e) => ({
+        _id: e._id,
+        name: `${e.firstName} ${e.lastName}`,
+        employeeNumber: e.employeeNumber,
+      }));
+  },
+});
+
+// Bulk-move employees to another office — used by the delete-office dialog to
+// clear out an office's members before deleting it.
+export const reassignMembers = mutation({
+  args: {
+    employeeIds: v.array(v.id("employees")),
+    toOfficeId: v.id("offices"),
+  },
+  returns: v.null(),
+  handler: async (ctx, { employeeIds, toOfficeId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "attendance:config");
+    const toOffice = await ctx.db.get(toOfficeId);
+    if (!toOffice || toOffice.orgId !== orgId) {
+      throw new ConvexError("Office not found.");
+    }
+    for (const employeeId of employeeIds) {
+      const employee = await ctx.db.get(employeeId);
+      if (!employee || employee.orgId !== orgId) continue;
+      await ctx.db.patch(employeeId, { officeId: toOfficeId });
+    }
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "office.reassignMembers",
+      entity: "offices",
+      entityId: toOfficeId,
+      after: { employeeIds, toOfficeId },
+    });
+    return null;
+  },
+});
+
 export const remove = mutation({
   args: { id: v.id("offices") },
   returns: v.null(),
@@ -104,6 +168,15 @@ export const remove = mutation({
       throw new Error("Office not found.");
     if (existing.isDefault) {
       throw new Error("The default office can't be deleted.");
+    }
+    const remainingMembers = await ctx.db
+      .query("employees")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    if (remainingMembers.some((e) => e.officeId === id)) {
+      throw new ConvexError(
+        "This office still has members assigned. Reassign them to another office first.",
+      );
     }
     await ctx.db.delete(id);
     await writeAuditLog(ctx, {

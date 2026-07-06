@@ -307,6 +307,34 @@ export type ClaimCategory =
   | "entertainment"
   | "custom";
 
+// One vehicle-type rate for an office's mileage settings — e.g. "Car" at
+// S$0.60/km, "Motorcycle" at S$0.30/km. `id` is a client-generated stable key
+// referenced by claims so a later rate/label edit doesn't retag old claims.
+export const mileageVehicleRate = v.object({
+  id: v.string(),
+  label: v.string(),
+  ratePerKmCents: v.number(),
+});
+export type MileageVehicleRate = {
+  id: string;
+  label: string;
+  ratePerKmCents: number;
+};
+
+// An office's mileage-claim configuration. When `vehicleRates` is non-empty,
+// claimants must pick one of those rates; otherwise `ratePerKmCents` (a flat
+// rate) applies. `maxDistanceKm` optionally caps the distance per claim.
+export const officeMileageSettings = v.object({
+  ratePerKmCents: v.optional(v.number()),
+  vehicleRates: v.optional(v.array(mileageVehicleRate)),
+  maxDistanceKm: v.optional(v.number()),
+});
+export type OfficeMileageSettings = {
+  ratePerKmCents?: number;
+  vehicleRates?: MileageVehicleRate[];
+  maxDistanceKm?: number;
+};
+
 // Workflow: draft (owner is still preparing the month's batch; not visible to
 // approvers) → pending_manager → (pending_finance, only when finance approvers
 // are configured) → approved → reimbursed. The finance stage is skipped entirely

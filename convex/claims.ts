@@ -18,6 +18,7 @@ import {
   claimApprovalItem,
   claimApprovalGroupRow,
   claimGroupApprovalItem,
+  mileageClaimSettings,
 } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
 import type { ClaimStatus } from "./lib/enums";
@@ -95,6 +96,85 @@ async function employeeBaseCurrency(
   return org.settings.currency;
 }
 
+// An employee's resolved mileage-claim configuration, from their office's
+// `mileageSettings`. All fields null/empty when unconfigured — callers should
+// treat that as "mileage claims aren't set up for this employee's office yet".
+async function resolveMileageSettings(
+  ctx: QueryCtx,
+  org: Doc<"organizations">,
+  employee: Doc<"employees"> | null,
+): Promise<{
+  currency: string;
+  ratePerKmCents: number | null;
+  vehicleRates: { id: string; label: string; ratePerKmCents: number }[];
+  maxDistanceKm: number | null;
+}> {
+  const currency = await employeeBaseCurrency(ctx, org, employee);
+  const office = employee?.officeId ? await ctx.db.get(employee.officeId) : null;
+  const settings = office?.mileageSettings;
+  return {
+    currency,
+    ratePerKmCents: settings?.ratePerKmCents ?? null,
+    vehicleRates: settings?.vehicleRates ?? [],
+    maxDistanceKm: settings?.maxDistanceKm ?? null,
+  };
+}
+
+// Resolves the rate to apply for a mileage claim and validates the requested
+// distance/vehicle type against the employee's office settings. Throws a
+// ConvexError with a user-facing message on any invalid/unconfigured state.
+async function resolveMileageClaim(
+  ctx: QueryCtx,
+  org: Doc<"organizations">,
+  employee: Doc<"employees">,
+  distanceKm: number | undefined,
+  vehicleTypeId: string | undefined,
+): Promise<{
+  amountCents: number;
+  currency: string;
+  mileageDistanceKm: number;
+  mileageVehicleTypeId: string | undefined;
+  mileageVehicleTypeLabel: string | undefined;
+  mileageRatePerKmCents: number;
+}> {
+  if (!distanceKm || distanceKm <= 0) {
+    throw new ConvexError("Enter the distance travelled (km).");
+  }
+  const settings = await resolveMileageSettings(ctx, org, employee);
+  let ratePerKmCents: number | null;
+  let vehicleTypeLabel: string | undefined;
+  if (settings.vehicleRates.length > 0) {
+    if (!vehicleTypeId) throw new ConvexError("Choose a vehicle type.");
+    const match = settings.vehicleRates.find((r) => r.id === vehicleTypeId);
+    if (!match) {
+      throw new ConvexError("Selected vehicle type is no longer available.");
+    }
+    ratePerKmCents = match.ratePerKmCents;
+    vehicleTypeLabel = match.label;
+  } else {
+    ratePerKmCents = settings.ratePerKmCents;
+    vehicleTypeId = undefined;
+  }
+  if (!ratePerKmCents) {
+    throw new ConvexError(
+      "Mileage rates haven't been configured for your office yet. Contact HR.",
+    );
+  }
+  if (settings.maxDistanceKm != null && distanceKm > settings.maxDistanceKm) {
+    throw new ConvexError(
+      `Distance exceeds the ${settings.maxDistanceKm} km maximum for your office.`,
+    );
+  }
+  return {
+    amountCents: Math.round(distanceKm * ratePerKmCents),
+    currency: settings.currency,
+    mileageDistanceKm: distanceKm,
+    mileageVehicleTypeId: vehicleTypeId,
+    mileageVehicleTypeLabel: vehicleTypeLabel,
+    mileageRatePerKmCents: ratePerKmCents,
+  };
+}
+
 async function hydrateClaim(ctx: QueryCtx, claim: Doc<"claims">) {
   const [emp, ct] = await Promise.all([
     ctx.db.get(claim.employeeId),
@@ -116,6 +196,10 @@ async function hydrateClaim(ctx: QueryCtx, claim: Doc<"claims">) {
     status: claim.status,
     receiptCount: claim.receiptStorageIds.length,
     decisionNote: claim.decisionNote,
+    mileageDistanceKm: claim.mileageDistanceKm,
+    mileageVehicleTypeId: claim.mileageVehicleTypeId,
+    mileageVehicleTypeLabel: claim.mileageVehicleTypeLabel,
+    mileageRatePerKmCents: claim.mileageRatePerKmCents,
   };
 }
 
@@ -585,6 +669,10 @@ export const submit = mutation({
     incurredDate: v.string(),
     description: v.string(),
     receiptStorageIds: v.array(v.id("_storage")),
+    // Mileage claim types only — the server recomputes amountCents/currency
+    // from the employee's office mileage settings, ignoring any client value.
+    mileageDistanceKm: v.optional(v.number()),
+    mileageVehicleTypeId: v.optional(v.string()),
   },
   returns: v.id("claims"),
   handler: async (ctx, args) => {
@@ -596,14 +684,30 @@ export const submit = mutation({
     if (!claimType || claimType.orgId !== orgId || !claimType.active) {
       throw new ConvexError("Claim type not found.");
     }
-    if (args.amountCents <= 0) throw new ConvexError("Amount must be positive.");
+
+    const isMileage = claimType.category === "mileage";
+    const mileage = isMileage
+      ? await resolveMileageClaim(
+          ctx,
+          org,
+          own,
+          args.mileageDistanceKm,
+          args.mileageVehicleTypeId,
+        )
+      : null;
+    const amountCents = mileage ? mileage.amountCents : args.amountCents;
+    const currency = mileage
+      ? mileage.currency
+      : (args.currency ?? (await employeeBaseCurrency(ctx, org, own)));
+
+    if (amountCents <= 0) throw new ConvexError("Amount must be positive.");
     if (args.receiptStorageIds.length > MAX_RECEIPTS) {
       throw new ConvexError(`A claim can have at most ${MAX_RECEIPTS} attachments.`);
     }
     if (claimType.requiresReceipt && args.receiptStorageIds.length === 0) {
       throw new ConvexError("This claim type requires a receipt.");
     }
-    if (claimType.maxAmountCents && args.amountCents > claimType.maxAmountCents) {
+    if (claimType.maxAmountCents && amountCents > claimType.maxAmountCents) {
       throw new ConvexError("Amount exceeds the per-transaction limit for this claim type.");
     }
 
@@ -611,17 +715,21 @@ export const submit = mutation({
       orgId,
       employeeId: own._id,
       claimTypeId: args.claimTypeId,
-      amountCents: args.amountCents,
-      currency: args.currency ?? (await employeeBaseCurrency(ctx, org, own)),
-      taxAmountCents: args.taxAmountCents,
-      localAmountCents: args.localAmountCents,
-      localCurrency: args.localCurrency,
-      exchangeRate: args.exchangeRate,
-      exchangeMode: args.exchangeMode,
-      exchangeRateDate: args.exchangeRateDate,
-      exchangeProvider: args.exchangeProvider,
+      amountCents,
+      currency,
+      taxAmountCents: mileage ? undefined : args.taxAmountCents,
+      localAmountCents: mileage ? undefined : args.localAmountCents,
+      localCurrency: mileage ? undefined : args.localCurrency,
+      exchangeRate: mileage ? undefined : args.exchangeRate,
+      exchangeMode: mileage ? undefined : args.exchangeMode,
+      exchangeRateDate: mileage ? undefined : args.exchangeRateDate,
+      exchangeProvider: mileage ? undefined : args.exchangeProvider,
       receiptNo: args.receiptNo,
       remarks: args.remarks,
+      mileageDistanceKm: mileage?.mileageDistanceKm,
+      mileageVehicleTypeId: mileage?.mileageVehicleTypeId,
+      mileageVehicleTypeLabel: mileage?.mileageVehicleTypeLabel,
+      mileageRatePerKmCents: mileage?.mileageRatePerKmCents,
       incurredDate: args.incurredDate,
       description: args.description,
       receiptStorageIds: args.receiptStorageIds,
@@ -633,7 +741,7 @@ export const submit = mutation({
       action: "claim.draft",
       entity: "claims",
       entityId: id,
-      after: { amountCents: args.amountCents },
+      after: { amountCents },
     });
     return id;
   },
@@ -1120,6 +1228,10 @@ export const editClaim = mutation({
     receiptNo: v.optional(v.string()),
     remarks: v.optional(v.string()),
     receiptStorageIds: v.array(v.id("_storage")),
+    // Mileage claim types only — recomputed server-side from the claim
+    // owner's office mileage settings, same as `submit`.
+    mileageDistanceKm: v.optional(v.number()),
+    mileageVehicleTypeId: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -1147,15 +1259,24 @@ export const editClaim = mutation({
       throw new ConvexError("This claim can no longer be edited.");
     }
 
-    if (args.amountCents <= 0) throw new ConvexError("Amount must be positive.");
+    const claimType = await ctx.db.get(claim.claimTypeId);
+    const isMileage = claimType?.category === "mileage";
+    const mileage = isMileage
+      ? await resolveMileageClaim(
+          ctx,
+          orgCtx.org,
+          (await ctx.db.get(claim.employeeId))!,
+          args.mileageDistanceKm ?? claim.mileageDistanceKm,
+          args.mileageVehicleTypeId ?? claim.mileageVehicleTypeId,
+        )
+      : null;
+    const amountCents = mileage ? mileage.amountCents : args.amountCents;
+
+    if (amountCents <= 0) throw new ConvexError("Amount must be positive.");
     if (args.receiptStorageIds.length > MAX_RECEIPTS) {
       throw new ConvexError(`A claim can have at most ${MAX_RECEIPTS} attachments.`);
     }
-    const claimType = await ctx.db.get(claim.claimTypeId);
-    if (
-      claimType?.maxAmountCents &&
-      args.amountCents > claimType.maxAmountCents
-    ) {
+    if (claimType?.maxAmountCents && amountCents > claimType.maxAmountCents) {
       throw new ConvexError(
         "Amount exceeds the per-transaction limit for this claim type.",
       );
@@ -1165,26 +1286,27 @@ export const editClaim = mutation({
     }
 
     // Build a human-readable diff for the audit trail.
-    const cur = claim.currency;
+    const cur = mileage ? mileage.currency : claim.currency;
     const money = (c?: number | null) =>
       c == null ? "—" : formatMoneyCents(c, cur);
     const changes: string[] = [];
-    if (args.amountCents !== claim.amountCents) {
+    if (amountCents !== claim.amountCents) {
       changes.push(
-        `Amount ${money(claim.amountCents)} → ${money(args.amountCents)}`,
+        `Amount ${money(claim.amountCents)} → ${money(amountCents)}`,
       );
     }
     if (args.description !== claim.description) changes.push("Description");
     if (args.incurredDate !== claim.incurredDate) {
       changes.push(`Date ${claim.incurredDate} → ${args.incurredDate}`);
     }
-    if ((args.taxAmountCents ?? null) !== (claim.taxAmountCents ?? null)) {
+    if (!mileage && (args.taxAmountCents ?? null) !== (claim.taxAmountCents ?? null)) {
       changes.push("Tax amount");
     }
     if (
-      (args.localAmountCents ?? null) !== (claim.localAmountCents ?? null) ||
-      (args.localCurrency ?? null) !== (claim.localCurrency ?? null) ||
-      (args.exchangeRate ?? null) !== (claim.exchangeRate ?? null)
+      !mileage &&
+      ((args.localAmountCents ?? null) !== (claim.localAmountCents ?? null) ||
+        (args.localCurrency ?? null) !== (claim.localCurrency ?? null) ||
+        (args.exchangeRate ?? null) !== (claim.exchangeRate ?? null))
     ) {
       changes.push("Foreign currency / exchange");
     }
@@ -1210,18 +1332,23 @@ export const editClaim = mutation({
           ];
 
     await ctx.db.patch(args.claimId, {
-      amountCents: args.amountCents,
+      amountCents,
+      currency: cur,
       description: args.description,
       incurredDate: args.incurredDate,
-      taxAmountCents: args.taxAmountCents,
-      localAmountCents: args.localAmountCents,
-      localCurrency: args.localCurrency,
-      exchangeRate: args.exchangeRate,
-      exchangeMode: args.exchangeMode,
-      exchangeRateDate: args.exchangeRateDate,
-      exchangeProvider: args.exchangeProvider,
+      taxAmountCents: mileage ? undefined : args.taxAmountCents,
+      localAmountCents: mileage ? undefined : args.localAmountCents,
+      localCurrency: mileage ? undefined : args.localCurrency,
+      exchangeRate: mileage ? undefined : args.exchangeRate,
+      exchangeMode: mileage ? undefined : args.exchangeMode,
+      exchangeRateDate: mileage ? undefined : args.exchangeRateDate,
+      exchangeProvider: mileage ? undefined : args.exchangeProvider,
       receiptNo: args.receiptNo,
       remarks: args.remarks,
+      mileageDistanceKm: mileage?.mileageDistanceKm,
+      mileageVehicleTypeId: mileage?.mileageVehicleTypeId,
+      mileageVehicleTypeLabel: mileage?.mileageVehicleTypeLabel,
+      mileageRatePerKmCents: mileage?.mileageRatePerKmCents,
       receiptStorageIds: args.receiptStorageIds,
       edits,
     });
@@ -1666,9 +1793,14 @@ export const typeBalance = query({
     if (yearly !== null) remainders.push(Math.max(0, yearly - yearlyUsedCents));
     if (monthly !== null) remainders.push(Math.max(0, monthly - monthlyUsedCents));
 
+    const mileage =
+      claimType.category === "mileage"
+        ? await resolveMileageSettings(ctx, org, own)
+        : null;
+
     return {
       claimTypeId,
-      currency: await employeeBaseCurrency(ctx, org, own),
+      currency: mileage?.currency ?? (await employeeBaseCurrency(ctx, org, own)),
       guidelines: claimType.guidelines ?? null,
       yearlyLimitCents: yearly,
       monthlyLimitCents: monthly,
@@ -1676,7 +1808,23 @@ export const typeBalance = query({
       yearlyUsedCents,
       monthlyUsedCents,
       availableCents: remainders.length ? Math.min(...remainders) : null,
+      mileage,
     };
+  },
+});
+
+// Resolves the claim owner's mileage settings for the approver edit dialog —
+// unlike `typeBalance` (which resolves the caller's own office), this always
+// resolves the claim's employee's office, since the editor may be an approver.
+export const mileageSettingsForClaim = query({
+  args: { claimId: v.id("claims") },
+  returns: v.union(mileageClaimSettings, v.null()),
+  handler: async (ctx, { claimId }) => {
+    const { orgCtx, claim } = await requireClaimAccess(ctx, claimId);
+    const claimType = await ctx.db.get(claim.claimTypeId);
+    if (claimType?.category !== "mileage") return null;
+    const employee = await ctx.db.get(claim.employeeId);
+    return await resolveMileageSettings(ctx, orgCtx.org, employee);
   },
 });
 
