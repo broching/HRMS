@@ -23,8 +23,13 @@ const fontMono = Fira_Code({
 });
 
 export const metadata: Metadata = {
-  title: "HRMS",
-  description: "Human Resource Management System",
+  title: "Lead Mighty HR",
+  description: "Lead Mighty Human Resource Management System",
+  icons: {
+    icon: "/LeadMightylogo.png", // or .ico
+    shortcut: "/LeadMightylogo.png",
+    apple: "/LeadMightylogo.png",
+  },
 };
 
 export default function RootLayout({

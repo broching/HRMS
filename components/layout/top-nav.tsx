@@ -6,7 +6,7 @@ import { OrganizationSwitcher } from "@clerk/nextjs"
 import { dark } from "@clerk/themes"
 import { useTheme } from "next-themes"
 import { IconMenu2, IconSettings } from "@tabler/icons-react"
-
+import Image from "next/image";
 import { useCurrentMember } from "@/hooks/use-current-member"
 import { permitted } from "@/convex/lib/permissions"
 import type { HrmsRole } from "@/convex/lib/enums"
@@ -52,52 +52,63 @@ export function TopNav() {
   )
 
   return (
-<header className="sticky top-0 z-50 h-[65px] border-b border-border bg-background shadow-lg">
-  <div className="flex h-full overflow-hidden">
-    
+    <header className="sticky top-0 z-50 h-[65px] border-b border-border bg-background shadow-lg">
+      <div className="flex h-full overflow-hidden">
 
-    {/* ---------------------------------------------------------------- */}
-    {/* LEFT PANEL */}
-    {/* ---------------------------------------------------------------- */}
 
-    <div className="relative flex w-[288px] shrink-0 items-center bg-background px-4">
-      <Link
-        href="/dashboard"
-        className="text-2xl font-extrabold tracking-tight text-foreground"
-      >
-        Wiz<span className="text-sky-600 dark:text-sky-400">HR</span>
-      </Link>
+        {/* ---------------------------------------------------------------- */}
+        {/* LEFT PANEL */}
+        {/* ---------------------------------------------------------------- */}
 
-      <div className="mx-3 h-8 w-px bg-border" />
+        <div className="relative flex w-[320px] shrink-0 items-center bg-background px-2">
+          <Link
+            href="/dashboard"
+            className="flex items-center gap-0 text-2xl font-extrabold tracking-tight text-foreground"
+          >
+            <Image
+              src="/LeadMightylogo.png"
+              alt="LeadMighty Logo"
+              width={56}
+              height={56}
+              className="h-14 w-14"
+              priority
+            />
 
-      <OrganizationSwitcher
-        hidePersonal
-        afterSelectOrganizationUrl="/dashboard"
-        afterCreateOrganizationUrl="/dashboard"
-        appearance={{
-          baseTheme: theme === "dark" ? dark : undefined,
-          elements: {
-            rootBox: "ml-0",
+            <span className="text-sky-500 dark:text-sky-400">
+              HR
+            </span>
+          </Link>
 
-            organizationSwitcherTrigger:
-              "rounded-xl px-3 py-2 transition hover:bg-accent",
+          <div className="mx-3 h-8 w-px bg-border" />
 
-            organizationPreviewMainIdentifier:
-              "font-semibold text-foreground",
+          <OrganizationSwitcher
+            hidePersonal
+            afterSelectOrganizationUrl="/dashboard"
+            afterCreateOrganizationUrl="/dashboard"
+            appearance={{
+              baseTheme: theme === "dark" ? dark : undefined,
+              elements: {
+                rootBox: "ml-0",
 
-            organizationPreviewTextContainer:
-              "text-foreground",
+                organizationSwitcherTrigger:
+                  "rounded-xl px-3 py-2 transition hover:bg-accent",
 
-            organizationSwitcherTriggerIcon:
-              "text-muted-foreground",
-          },
-        }}
-      />
+                organizationPreviewMainIdentifier:
+                  "font-semibold text-foreground",
 
-      {/* Diagonal transition */}
+                organizationPreviewTextContainer:
+                  "text-foreground",
 
-      <div
-        className="
+                organizationSwitcherTriggerIcon:
+                  "text-muted-foreground",
+              },
+            }}
+          />
+
+          {/* Diagonal transition */}
+
+          <div
+            className="
           absolute
           -right-8
           top-0
@@ -109,16 +120,16 @@ export function TopNav() {
           border-border
           z-10
         "
-      />
-    </div>
+          />
+        </div>
 
-    {/* ---------------------------------------------------------------- */}
-    {/* BLUE PANEL */}
-    {/* ---------------------------------------------------------------- */}
-    
+        {/* ---------------------------------------------------------------- */}
+        {/* BLUE PANEL */}
+        {/* ---------------------------------------------------------------- */}
 
-    <div
-      className="
+
+        <div
+          className="
         flex
         flex-1
         items-center
@@ -134,79 +145,79 @@ export function TopNav() {
         dark:via-blue-950
         dark:to-slate-900
       "
-    >
-      {/* Center Nav */}
+        >
+          {/* Center Nav */}
 
-      <nav className="hidden flex-1 justify-center gap-2 md:flex">
-        {sections.map((section) => {
-          const isActive = active?.key === section.key
+          <nav className="hidden flex-1 justify-center gap-2 md:flex">
+            {sections.map((section) => {
+              const isActive = active?.key === section.key
 
-          return (
-            <Link
-              key={section.key}
-              href={section.url}
-              className={cn(
-                "rounded-2xl px-5 py-2 text-sm font-semibold transition-all duration-300",
-
-                isActive
-                  ? "bg-white text-blue-700 shadow-xl ring-1 ring-white/40"
-                  : "text-white/90 hover:bg-white/10 hover:text-white hover:scale-105"
-              )}
-            >
-              {section.title}
-            </Link>
-          )
-        })}
-      </nav>
-
-      {/* Right */}
-
-      <div className="ml-auto flex items-center gap-2">
-        <div className="rounded-xl border border-white/20 bg-white/10 p-1 backdrop-blur-md">
-          <NotificationCenter />
-        </div>
-
-        {settingsVisible && (
-          <Link
-            href={SETTINGS_SECTION.url}
-            className={cn(
-              "rounded-xl p-2 transition-all duration-300",
-
-              active?.key === "settings"
-                ? "bg-white/20 text-white"
-                : "text-white/90 hover:bg-white/10 hover:scale-110"
-            )}
-          >
-            <IconSettings className="size-5" />
-          </Link>
-        )}
-
-        <div className="rounded-xl p-1 transition-all duration-300 hover:bg-white/10 hover:scale-105">
-          <NavUserMenu />
-        </div>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger className="rounded-xl p-2 text-white hover:bg-white/10 md:hidden">
-            <IconMenu2 className="size-5" />
-          </DropdownMenuTrigger>
-
-          <DropdownMenuContent align="end" className="w-52">
-            {sections.map((section) => (
-              <DropdownMenuItem key={section.key} asChild>
+              return (
                 <Link
+                  key={section.key}
                   href={section.url}
-                  className="flex items-center gap-2"
+                  className={cn(
+                    "rounded-2xl px-5 py-2 text-sm font-semibold transition-all duration-300",
+
+                    isActive
+                      ? "bg-white text-blue-700 shadow-xl ring-1 ring-white/40"
+                      : "text-white/90 hover:bg-white/10 hover:text-white hover:scale-105"
+                  )}
                 >
-                  <section.icon className="size-4" />
                   {section.title}
                 </Link>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              )
+            })}
+          </nav>
+
+          {/* Right */}
+
+          <div className="ml-auto flex items-center gap-2">
+            <div className="rounded-xl border border-white/20 bg-white/10 p-1 backdrop-blur-md">
+              <NotificationCenter />
+            </div>
+
+            {settingsVisible && (
+              <Link
+                href={SETTINGS_SECTION.url}
+                className={cn(
+                  "rounded-xl p-2 transition-all duration-300",
+
+                  active?.key === "settings"
+                    ? "bg-white/20 text-white"
+                    : "text-white/90 hover:bg-white/10 hover:scale-110"
+                )}
+              >
+                <IconSettings className="size-5" />
+              </Link>
+            )}
+
+            <div className="rounded-xl p-1 transition-all duration-300 hover:bg-white/10 hover:scale-105">
+              <NavUserMenu />
+            </div>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger className="rounded-xl p-2 text-white hover:bg-white/10 md:hidden">
+                <IconMenu2 className="size-5" />
+              </DropdownMenuTrigger>
+
+              <DropdownMenuContent align="end" className="w-52">
+                {sections.map((section) => (
+                  <DropdownMenuItem key={section.key} asChild>
+                    <Link
+                      href={section.url}
+                      className="flex items-center gap-2"
+                    >
+                      <section.icon className="size-4" />
+                      {section.title}
+                    </Link>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
-</header>
+    </header>
   )
 }
