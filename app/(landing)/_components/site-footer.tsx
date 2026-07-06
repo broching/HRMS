@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { PrismMark, Wordmark } from "./prism-mark";
 import { PRODUCTS, STATUS_LABEL } from "./products";
+import Image from "next/image";
 
 export function SiteFooter() {
   return (
@@ -9,7 +10,14 @@ export function SiteFooter() {
         <div className="grid gap-12 md:grid-cols-[1.4fr_1fr_1fr]">
           <div>
             <Link href="/" className="flex items-center gap-2">
-              <PrismMark className="h-7 w-7" />
+              <Image
+                src="/LeadMightylogo.png"
+                alt="LeadMighty Logo"
+                width={56}
+                height={56}
+                className="h-12 w-12"
+                priority
+              />
               <Wordmark />
             </Link>
             <p className="mt-4 max-w-xs text-sm leading-relaxed" style={{ color: "var(--lm-muted)" }}>

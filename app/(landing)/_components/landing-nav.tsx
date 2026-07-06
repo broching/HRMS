@@ -6,6 +6,7 @@ import { Menu, X } from "lucide-react";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 import { PrismMark, Wordmark } from "./prism-mark";
+import Image from "next/image";
 
 const LINKS = [
   { name: "Platform", href: "/#platform" },
@@ -39,7 +40,14 @@ export function LandingNav() {
         }}
       >
         <Link href="/" aria-label="LeadMighty home" className="flex items-center gap-2">
-          <PrismMark className="h-7 w-7" />
+          <Image
+            src="/LeadMightylogo.png"
+            alt="LeadMighty Logo"
+            width={56}
+            height={56}
+            className="h-13 w-13"
+            priority
+          />
           <Wordmark />
         </Link>
 
