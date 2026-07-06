@@ -3,6 +3,7 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ClaimSettingsGeneral } from "./claim-settings-general"
 import { ClaimSettings } from "./claim-settings"
+import { ClaimGroupsSettings } from "./claim-groups-settings"
 
 function ComingSoon({ label }: { label: string }) {
   return (
@@ -31,9 +32,7 @@ export function ClaimSettingsShell() {
         <ClaimSettings />
       </TabsContent>
       <TabsContent value="groups">
-        <div className="px-4 lg:px-6">
-          <ComingSoon label="Claim groups" />
-        </div>
+        <ClaimGroupsSettings />
       </TabsContent>
       <TabsContent value="custom">
         <div className="px-4 lg:px-6">

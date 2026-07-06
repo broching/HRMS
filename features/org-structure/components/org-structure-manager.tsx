@@ -13,6 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { OfficesManager } from "@/features/org-structure/components/offices-manager"
 
 type Item = { id: string; label: string }
 
@@ -102,7 +103,6 @@ export function OrgStructureManager() {
   const departments = useQuery(api.departments.list)
   const teams = useQuery(api.teams.list)
   const positions = useQuery(api.positions.list)
-  const offices = useQuery(api.offices.list)
 
   const createDept = useMutation(api.departments.create)
   const removeDept = useMutation(api.departments.remove)
@@ -110,8 +110,6 @@ export function OrgStructureManager() {
   const removeTeam = useMutation(api.teams.remove)
   const createPos = useMutation(api.positions.create)
   const removePos = useMutation(api.positions.remove)
-  const createOffice = useMutation(api.offices.create)
-  const removeOffice = useMutation(api.offices.remove)
 
   return (
     <div className="grid gap-4 px-4 lg:grid-cols-2 lg:px-6">
@@ -148,17 +146,7 @@ export function OrgStructureManager() {
           await removePos({ id: id as never })
         }}
       />
-      <CrudSection
-        title="Offices"
-        placeholder="e.g. Singapore HQ"
-        items={offices?.map((o) => ({ id: o._id, label: o.name }))}
-        onAdd={async (name) => {
-          await createOffice({ name, timezone: "Asia/Singapore" })
-        }}
-        onRemove={async (id) => {
-          await removeOffice({ id: id as never })
-        }}
-      />
+      <OfficesManager />
     </div>
   )
 }

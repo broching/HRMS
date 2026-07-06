@@ -200,7 +200,7 @@ export function MyClaims() {
           )}
           {draftCount > 0 && (
             <Button variant="outline" onClick={() => setSubmitAllOpen(true)}>
-              Submit all ({draftCount})
+              Submit all · {monthLabel(month)} ({draftCount})
             </Button>
           )}
           <SubmitClaimDialog month={month} />
@@ -347,14 +347,12 @@ export function MyClaims() {
                               </Button>
                             )}
                             <Button
-                              variant="outline"
                               size="sm"
                               onClick={() => setOpenId(c._id)}
                             >
                               View
                             </Button>
-                            {(c.status === "draft" ||
-                              c.status === "rejected") && (
+                            {c.status === "draft" && (
                               <Button
                                 variant="outline"
                                 size="sm"

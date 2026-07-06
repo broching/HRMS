@@ -35,6 +35,7 @@ import {
   claimCategory,
   claimStatus,
   claimApproverStep,
+  claimApprovalFlow,
   claimAssigneeGroup,
   claimPayrollMode,
   claimChainStep,
@@ -165,6 +166,12 @@ export default defineSchema({
     name: v.string(),
     address: v.optional(v.string()),
     timezone: v.string(),
+    // Base currency for this office — claims by employees assigned here are
+    // denominated in it (falls back to the org currency when unset).
+    defaultCurrency: v.optional(v.string()),
+    // The org's protected default office (seeded as "Singapore"). Can't be
+    // deleted, so there's always at least one office to assign employees to.
+    isDefault: v.optional(v.boolean()),
     geo: v.optional(v.object({ lat: v.number(), lng: v.number() })),
     radiusMeters: v.optional(v.number()),
     qrEnabled: v.boolean(),
@@ -495,6 +502,14 @@ export default defineSchema({
     // workflow steps can target by id. Absent on orgs configured before groups.
     assigneeGroups: v.optional(v.array(claimAssigneeGroup)),
     approvalWorkflow: v.array(claimApproverStep),
+    // Per-claimant approval flows (role- or person-matched, plus a "default"
+    // flow). Absent on orgs configured before flows existed — those fall back to
+    // a single default flow synthesized from `approvalWorkflow`, which stays
+    // mirrored to the default flow's steps for backward compatibility.
+    approvalFlows: v.optional(v.array(claimApprovalFlow)),
+    // Max claim groups (monthly submissions incl. resubmissions) one employee
+    // may create per period. Undefined = no limit.
+    maxGroupsPerPeriod: v.optional(v.number()),
     payrollMode: claimPayrollMode,
     payrollItem: v.optional(v.string()),
   }).index("by_org", ["orgId"]),

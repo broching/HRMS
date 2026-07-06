@@ -42,6 +42,15 @@ export const seedOrganization = internalMutation({
     for (const ct of CLAIM_TYPE_DEFAULTS) {
       await ctx.db.insert("claimTypes", { orgId, ...ct });
     }
+    // Protected default office so there's always somewhere to assign employees.
+    await ctx.db.insert("offices", {
+      orgId,
+      name: "Singapore",
+      timezone: "Asia/Singapore",
+      defaultCurrency: "SGD",
+      isDefault: true,
+      qrEnabled: false,
+    });
     await ensureDefaultCompetencies(ctx, orgId);
     return null;
   },

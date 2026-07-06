@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import {
   IconTrash,
   IconChevronDown,
+  IconChevronRight,
   IconGripVertical,
 } from "@tabler/icons-react"
 import {
@@ -146,13 +147,22 @@ type StepForm = {
   rules: RuleForm[]
 }
 type GroupForm = { id: string; name: string; userIds: Id<"users">[] }
+type FlowForm = {
+  key: string // stable React key
+  id: string // persisted flow id
+  name: string
+  matchType: "default" | "role" | "person"
+  roleId?: Id<"roles">
+  userId?: Id<"users">
+  workflow: StepForm[]
+}
 type FormState = {
   cutoffDay: number
   validityMonths: number | null
   hrApproverUserIds: Id<"users">[]
   financeApproverUserIds: Id<"users">[]
   assigneeGroups: GroupForm[]
-  workflow: StepForm[]
+  flows: FlowForm[]
   payrollMode: "manual" | "automatic"
   payrollItem: string
 }
@@ -259,6 +269,295 @@ function SortableStep({
   )
 }
 
+// ─── Approval workflow editor (one drag-sortable approver step list) ─────────
+//
+// Extracted so each approval flow owns an independent step editor. Operates on a
+// `steps` array via `onChange`; `SortableStep` provides the drag handle.
+function WorkflowEditor({
+  steps,
+  onChange,
+  groupOpts,
+  memberOpts,
+  officeOpts,
+}: {
+  steps: StepForm[]
+  onChange: (next: StepForm[]) => void
+  groupOpts: { value: string; label: string }[]
+  memberOpts: { value: string; label: string }[]
+  officeOpts: { value: string; label: string }[]
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  )
+  function patchStep(i: number, p: Partial<StepForm>) {
+    onChange(steps.map((s, j) => (j === i ? { ...s, ...p } : s)))
+  }
+  function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    const from = steps.findIndex((s) => s.key === active.id)
+    const to = steps.findIndex((s) => s.key === over.id)
+    if (from < 0 || to < 0) return
+    onChange(arrayMove(steps, from, to))
+  }
+  const positionLabel = (s: StepForm) =>
+    s.approverType === "position"
+      ? "Position"
+      : s.approverType === "group"
+        ? "Assignee group"
+        : "Specific person"
+
+  return (
+    <div className="flex flex-col gap-5">
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+        onDragEnd={onDragEnd}
+      >
+        <SortableContext
+          items={steps.map((s) => s.key)}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className="flex flex-col gap-5">
+            {steps.map((step, i) => (
+              <SortableStep key={step.key} id={step.key}>
+                {(handle) => (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {handle}
+                      <span className="text-muted-foreground w-20 text-sm">
+                        {i === 0
+                          ? "1st"
+                          : i === 1
+                            ? "2nd"
+                            : i === 2
+                              ? "3rd"
+                              : `${i + 1}th`}{" "}
+                        Approver
+                      </span>
+                      <Select
+                        value={step.approverType}
+                        onValueChange={(v) =>
+                          patchStep(i, {
+                            approverType: v as StepForm["approverType"],
+                            value:
+                              v === "position"
+                                ? "manager"
+                                : v === "group"
+                                  ? GROUP_HR
+                                  : "",
+                          })
+                        }
+                      >
+                        <SelectTrigger className="w-40">
+                          <SelectValue>{positionLabel(step)}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="position">Position</SelectItem>
+                          <SelectItem value="group">Assignee group</SelectItem>
+                          <SelectItem value="specific">
+                            Specific person
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {step.approverType === "position" ? (
+                        <Select
+                          value={step.value || "manager"}
+                          onValueChange={(v) => patchStep(i, { value: v })}
+                        >
+                          <SelectTrigger className="w-44">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="manager">Manager</SelectItem>
+                            <SelectItem value="department_head">
+                              Department head
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : step.approverType === "group" ? (
+                        <Select
+                          value={step.value}
+                          onValueChange={(v) => patchStep(i, { value: v })}
+                        >
+                          <SelectTrigger className="w-44">
+                            <SelectValue placeholder="Choose group" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {groupOpts.map((g) => (
+                              <SelectItem key={g.value} value={g.value}>
+                                {g.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Select
+                          value={step.value}
+                          onValueChange={(v) => patchStep(i, { value: v })}
+                        >
+                          <SelectTrigger className="w-44">
+                            <SelectValue placeholder="Choose person" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {memberOpts.map((m) => (
+                              <SelectItem key={m.value} value={m.value}>
+                                {m.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      {steps.length > 1 && (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="size-8 text-destructive"
+                          onClick={() =>
+                            onChange(steps.filter((_, j) => j !== i))
+                          }
+                        >
+                          <IconTrash className="size-4" />
+                        </Button>
+                      )}
+                    </div>
+
+                    <label className="ml-28 flex w-fit items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={step.thresholdEnabled}
+                        onCheckedChange={(c) =>
+                          patchStep(i, {
+                            thresholdEnabled: c === true,
+                            rules:
+                              c === true && step.rules.length === 0
+                                ? [{ amount: "", officeIds: [] }]
+                                : step.rules,
+                          })
+                        }
+                      />
+                      Enable threshold
+                    </label>
+
+                    {step.thresholdEnabled && (
+                      <div className="border-primary/40 ml-28 flex flex-col gap-3 border-l-2 bg-muted/40 p-3 text-sm">
+                        <p className="text-muted-foreground">
+                          This approver applies only once a claim exceeds the
+                          threshold below.
+                        </p>
+                        {step.rules.map((rule, ri) => (
+                          <div
+                            key={ri}
+                            className="flex flex-wrap items-end gap-3"
+                          >
+                            <div className="flex flex-col gap-1">
+                              <Label className="text-xs">
+                                Amount is more than
+                              </Label>
+                              <Input
+                                className="w-40"
+                                inputMode="decimal"
+                                placeholder="e.g. 400"
+                                value={rule.amount}
+                                onChange={(e) =>
+                                  patchStep(i, {
+                                    rules: step.rules.map((r, j) =>
+                                      j === ri
+                                        ? { ...r, amount: e.target.value }
+                                        : r,
+                                    ),
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <Label className="text-xs">
+                                Offices (empty = all)
+                              </Label>
+                              <div className="w-56">
+                                <MultiSelect
+                                  options={officeOpts}
+                                  selected={rule.officeIds as string[]}
+                                  onChange={(v) =>
+                                    patchStep(i, {
+                                      rules: step.rules.map((r, j) =>
+                                        j === ri
+                                          ? {
+                                              ...r,
+                                              officeIds: v as Id<"offices">[],
+                                            }
+                                          : r,
+                                      ),
+                                    })
+                                  }
+                                  placeholder="All offices"
+                                />
+                              </div>
+                            </div>
+                            {step.rules.length > 1 && (
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="size-8 text-destructive"
+                                onClick={() =>
+                                  patchStep(i, {
+                                    rules: step.rules.filter((_, j) => j !== ri),
+                                  })
+                                }
+                              >
+                                <IconTrash className="size-4" />
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          className="text-primary w-fit text-sm font-medium"
+                          onClick={() =>
+                            patchStep(i, {
+                              rules: [
+                                ...step.rules,
+                                { amount: "", officeIds: [] },
+                              ],
+                            })
+                          }
+                        >
+                          + Add rule
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </SortableStep>
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+      <button
+        type="button"
+        className="text-primary w-fit text-sm font-medium"
+        onClick={() =>
+          onChange([
+            ...steps,
+            {
+              key: newId(),
+              approverType: "position",
+              value: "manager",
+              thresholdEnabled: false,
+              rules: [],
+            },
+          ])
+        }
+      >
+        + Add approver
+      </button>
+    </div>
+  )
+}
+
 // One flagged assignee in the HR/Finance guardrail: someone added as an
 // approver who can't actually act on claims yet.
 type GuardUser = {
@@ -279,18 +578,25 @@ export function ClaimSettingsGeneral() {
   const [form, setForm] = React.useState<FormState | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
+  // Approval-flow cards start collapsed so the list stays compact; expanding a
+  // card reveals its step editor. Keyed by the flow's stable `key`.
+  const [expandedFlows, setExpandedFlows] = React.useState<Set<string>>(
+    new Set(),
+  )
+  function toggleFlow(key: string) {
+    setExpandedFlows((s) => {
+      const next = new Set(s)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
   // Guardrail dialog: flagged approvers for the HR or Finance group.
   const [guard, setGuard] = React.useState<{
     group: "HR" | "Finance"
     presetKey: "hr" | "finance"
     users: GuardUser[]
   } | null>(null)
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  )
 
   React.useEffect(() => {
     if (data && form === null) {
@@ -304,16 +610,31 @@ export function ClaimSettingsGeneral() {
           name: g.name,
           userIds: g.userIds,
         })),
-        workflow: data.approvalWorkflow.map((s) => ({
-          key: newId(),
-          approverType: s.approverType,
-          value: s.value,
-          thresholdEnabled: s.thresholdEnabled,
-          rules: s.rules.map((r) => ({
-            amount: centsToInput(r.amountMoreThanCents),
-            officeIds: r.officeIds,
+        // Default flow first for stable display; each flow seeds its own steps.
+        flows: [...data.approvalFlows]
+          .sort(
+            (a, b) =>
+              (a.match.type === "default" ? -1 : 1) -
+              (b.match.type === "default" ? -1 : 1),
+          )
+          .map((f) => ({
+            key: newId(),
+            id: f.id,
+            name: f.name,
+            matchType: f.match.type,
+            roleId: f.match.roleId,
+            userId: f.match.userId,
+            workflow: f.workflow.map((s) => ({
+              key: newId(),
+              approverType: s.approverType,
+              value: s.value,
+              thresholdEnabled: s.thresholdEnabled,
+              rules: s.rules.map((r) => ({
+                amount: centsToInput(r.amountMoreThanCents),
+                officeIds: r.officeIds,
+              })),
+            })),
           })),
-        })),
         payrollMode: data.payrollMode,
         payrollItem: data.payrollItem ?? "Expense Claims",
       })
@@ -412,13 +733,6 @@ export function ClaimSettingsGeneral() {
       toast.error(getErrorMessage(e, "Couldn't assign role"))
     }
   }
-  function patchStep(i: number, p: Partial<StepForm>) {
-    setForm((f) =>
-      f
-        ? { ...f, workflow: f.workflow.map((s, j) => (j === i ? { ...s, ...p } : s)) }
-        : f,
-    )
-  }
   function patchGroup(i: number, p: Partial<GroupForm>) {
     setForm((f) =>
       f
@@ -428,6 +742,13 @@ export function ClaimSettingsGeneral() {
               j === i ? { ...g, ...p } : g,
             ),
           }
+        : f,
+    )
+  }
+  function patchFlow(i: number, p: Partial<FlowForm>) {
+    setForm((f) =>
+      f
+        ? { ...f, flows: f.flows.map((fl, j) => (j === i ? { ...fl, ...p } : fl)) }
         : f,
     )
   }
@@ -442,18 +763,10 @@ export function ClaimSettingsGeneral() {
       label: g.name.trim() || "Untitled group",
     })),
   ]
-
-  function onDragEnd(e: DragEndEvent) {
-    const { active, over } = e
-    if (!over || active.id === over.id) return
-    setForm((f) => {
-      if (!f) return f
-      const from = f.workflow.findIndex((s) => s.key === active.id)
-      const to = f.workflow.findIndex((s) => s.key === over.id)
-      if (from < 0 || to < 0) return f
-      return { ...f, workflow: arrayMove(f.workflow, from, to) }
-    })
-  }
+  const roleOpts = options.roles.map((r) => ({
+    value: r._id as string,
+    label: r.name,
+  }))
 
   // Validate, then confirm — approval-chain changes only affect future claims.
   function onSave() {
@@ -462,13 +775,27 @@ export function ClaimSettingsGeneral() {
       toast.error("Every assignee group needs a name.")
       return
     }
-    if (form.workflow.some((s) => s.approverType === "group" && !s.value)) {
-      toast.error("Pick a group for each group approver step.")
-      return
-    }
-    if (form.workflow.some((s) => s.approverType === "specific" && !s.value)) {
-      toast.error("Pick a person for each specific approver step.")
-      return
+    for (const flow of form.flows) {
+      if (flow.matchType !== "default" && !flow.name.trim()) {
+        toast.error("Every flow needs a name.")
+        return
+      }
+      if (flow.matchType === "role" && !flow.roleId) {
+        toast.error("Pick a role for each role flow.")
+        return
+      }
+      if (flow.matchType === "person" && !flow.userId) {
+        toast.error("Pick a person for each specific-person flow.")
+        return
+      }
+      if (flow.workflow.some((s) => s.approverType === "group" && !s.value)) {
+        toast.error("Pick a group for each group approver step.")
+        return
+      }
+      if (flow.workflow.some((s) => s.approverType === "specific" && !s.value)) {
+        toast.error("Pick a person for each specific approver step.")
+        return
+      }
     }
     setConfirmOpen(true)
   }
@@ -487,13 +814,23 @@ export function ClaimSettingsGeneral() {
           name: g.name.trim(),
           userIds: g.userIds,
         })),
-        approvalWorkflow: form.workflow.map((s) => ({
-          approverType: s.approverType,
-          value: s.value,
-          thresholdEnabled: s.thresholdEnabled,
-          rules: s.rules.map((r) => ({
-            amountMoreThanCents: dollarsToCents(r.amount) ?? 0,
-            officeIds: r.officeIds,
+        approvalFlows: form.flows.map((flow) => ({
+          id: flow.id,
+          name: flow.matchType === "default" ? "Default" : flow.name.trim(),
+          match:
+            flow.matchType === "default"
+              ? { type: "default" as const }
+              : flow.matchType === "role"
+                ? { type: "role" as const, roleId: flow.roleId }
+                : { type: "person" as const, userId: flow.userId },
+          workflow: flow.workflow.map((s) => ({
+            approverType: s.approverType,
+            value: s.value,
+            thresholdEnabled: s.thresholdEnabled,
+            rules: s.rules.map((r) => ({
+              amountMoreThanCents: dollarsToCents(r.amount) ?? 0,
+              officeIds: r.officeIds,
+            })),
           })),
         })),
         payrollMode: form.payrollMode,
@@ -507,13 +844,6 @@ export function ClaimSettingsGeneral() {
       setBusy(false)
     }
   }
-
-  const positionLabel = (s: StepForm) =>
-    s.approverType === "position"
-      ? "Position"
-      : s.approverType === "group"
-        ? "Assignee group"
-        : "Specific person"
 
   return (
     <div className="px-4 lg:px-6">
@@ -655,264 +985,178 @@ export function ClaimSettingsGeneral() {
           </div>
         </Section>
 
-        {/* Approval workflow */}
+        {/* Approval flows */}
         <Section
-          title="Approval workflow"
-          description="Set the approval chain for employees' claim reports. Drag to reorder. Higher tiers can apply only above a threshold."
+          title="Approval flows"
+          description="Set approval chains for employees' claim reports. The Default flow applies to everyone; add flows to give a specific role or person their own chain. Drag steps to reorder; higher tiers can apply only above a threshold."
         >
-          <div className="flex flex-col gap-5">
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              modifiers={[restrictToVerticalAxis, restrictToParentElement]}
-              onDragEnd={onDragEnd}
-            >
-              <SortableContext
-                items={form.workflow.map((s) => s.key)}
-                strategy={verticalListSortingStrategy}
+          <div className="flex flex-col gap-4">
+            {form.flows.map((flow, fi) => (
+              <div
+                key={flow.key}
+                className="flex flex-col gap-3 rounded-lg border p-4"
               >
-                <div className="flex flex-col gap-5">
-                  {form.workflow.map((step, i) => (
-                    <SortableStep key={step.key} id={step.key}>
-                      {(handle) => (
-                        <div className="flex flex-col gap-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            {handle}
-                            <span className="text-muted-foreground w-20 text-sm">
-                              {i === 0
-                                ? "1st"
-                                : i === 1
-                                  ? "2nd"
-                                  : i === 2
-                                    ? "3rd"
-                                    : `${i + 1}th`}{" "}
-                              Approver
-                            </span>
-                            <Select
-                              value={step.approverType}
-                              onValueChange={(v) =>
-                                patchStep(i, {
-                                  approverType: v as StepForm["approverType"],
-                                  value:
-                                    v === "position"
-                                      ? "manager"
-                                      : v === "group"
-                                        ? GROUP_HR
-                                        : "",
-                                })
-                              }
-                            >
-                              <SelectTrigger className="w-40">
-                                <SelectValue>{positionLabel(step)}</SelectValue>
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="position">Position</SelectItem>
-                                <SelectItem value="group">
-                                  Assignee group
-                                </SelectItem>
-                                <SelectItem value="specific">
-                                  Specific person
-                                </SelectItem>
-                              </SelectContent>
-                            </Select>
-                            {step.approverType === "position" ? (
-                              <Select
-                                value={step.value || "manager"}
-                                onValueChange={(v) => patchStep(i, { value: v })}
-                              >
-                                <SelectTrigger className="w-44">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="manager">Manager</SelectItem>
-                                  <SelectItem value="department_head">
-                                    Department head
-                                  </SelectItem>
-                                </SelectContent>
-                              </Select>
-                            ) : step.approverType === "group" ? (
-                              <Select
-                                value={step.value}
-                                onValueChange={(v) => patchStep(i, { value: v })}
-                              >
-                                <SelectTrigger className="w-44">
-                                  <SelectValue placeholder="Choose group" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {groupOpts.map((g) => (
-                                    <SelectItem key={g.value} value={g.value}>
-                                      {g.label}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <Select
-                                value={step.value}
-                                onValueChange={(v) => patchStep(i, { value: v })}
-                              >
-                                <SelectTrigger className="w-44">
-                                  <SelectValue placeholder="Choose person" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {options.members.map((m) => (
-                                    <SelectItem key={m.userId} value={m.userId}>
-                                      {m.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            )}
-                            {form.workflow.length > 1 && (
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="size-8 text-destructive"
-                                onClick={() =>
-                                  patch({
-                                    workflow: form.workflow.filter(
-                                      (_, j) => j !== i,
-                                    ),
-                                  })
-                                }
-                              >
-                                <IconTrash className="size-4" />
-                              </Button>
-                            )}
-                          </div>
-
-                          <label className="ml-28 flex w-fit items-center gap-2 text-sm">
-                            <Checkbox
-                              checked={step.thresholdEnabled}
-                              onCheckedChange={(c) =>
-                                patchStep(i, {
-                                  thresholdEnabled: c === true,
-                                  rules:
-                                    c === true && step.rules.length === 0
-                                      ? [{ amount: "", officeIds: [] }]
-                                      : step.rules,
-                                })
-                              }
-                            />
-                            Enable threshold
-                          </label>
-
-                          {step.thresholdEnabled && (
-                            <div className="border-primary/40 ml-28 flex flex-col gap-3 border-l-2 bg-muted/40 p-3 text-sm">
-                              <p className="text-muted-foreground">
-                                This approver applies only once a claim exceeds the
-                                threshold below.
-                              </p>
-                              {step.rules.map((rule, ri) => (
-                                <div
-                                  key={ri}
-                                  className="flex flex-wrap items-end gap-3"
-                                >
-                                  <div className="flex flex-col gap-1">
-                                    <Label className="text-xs">
-                                      Amount is more than
-                                    </Label>
-                                    <Input
-                                      className="w-40"
-                                      inputMode="decimal"
-                                      placeholder="e.g. 400"
-                                      value={rule.amount}
-                                      onChange={(e) =>
-                                        patchStep(i, {
-                                          rules: step.rules.map((r, j) =>
-                                            j === ri
-                                              ? { ...r, amount: e.target.value }
-                                              : r,
-                                          ),
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                  <div className="flex flex-col gap-1">
-                                    <Label className="text-xs">
-                                      Offices (empty = all)
-                                    </Label>
-                                    <div className="w-56">
-                                      <MultiSelect
-                                        options={officeOpts}
-                                        selected={rule.officeIds as string[]}
-                                        onChange={(v) =>
-                                          patchStep(i, {
-                                            rules: step.rules.map((r, j) =>
-                                              j === ri
-                                                ? {
-                                                    ...r,
-                                                    officeIds:
-                                                      v as Id<"offices">[],
-                                                  }
-                                                : r,
-                                            ),
-                                          })
-                                        }
-                                        placeholder="All offices"
-                                      />
-                                    </div>
-                                  </div>
-                                  {step.rules.length > 1 && (
-                                    <Button
-                                      variant="outline"
-                                      size="icon"
-                                      className="size-8 text-destructive"
-                                      onClick={() =>
-                                        patchStep(i, {
-                                          rules: step.rules.filter(
-                                            (_, j) => j !== ri,
-                                          ),
-                                        })
-                                      }
-                                    >
-                                      <IconTrash className="size-4" />
-                                    </Button>
-                                  )}
-                                </div>
-                              ))}
-                              <button
-                                type="button"
-                                className="text-primary w-fit text-sm font-medium"
-                                onClick={() =>
-                                  patchStep(i, {
-                                    rules: [
-                                      ...step.rules,
-                                      { amount: "", officeIds: [] },
-                                    ],
-                                  })
-                                }
-                              >
-                                + Add rule
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => toggleFlow(flow.key)}
+                    aria-label={
+                      expandedFlows.has(flow.key)
+                        ? "Collapse flow"
+                        : "Expand flow"
+                    }
+                    className="text-muted-foreground hover:text-foreground -ml-1 shrink-0"
+                  >
+                    {expandedFlows.has(flow.key) ? (
+                      <IconChevronDown className="size-4" />
+                    ) : (
+                      <IconChevronRight className="size-4" />
+                    )}
+                  </button>
+                  {flow.matchType === "default" ? (
+                    <>
+                      <span className="font-medium">Default</span>
+                      <Badge variant="secondary">Everyone else</Badge>
+                    </>
+                  ) : (
+                    <>
+                      <Input
+                        className="h-8 max-w-[200px] font-medium"
+                        placeholder="Flow name (e.g. CEO)"
+                        value={flow.name}
+                        onChange={(e) => patchFlow(fi, { name: e.target.value })}
+                      />
+                      <span className="text-muted-foreground text-sm">
+                        applies to
+                      </span>
+                      <Select
+                        value={flow.matchType}
+                        onValueChange={(v) =>
+                          patchFlow(fi, {
+                            matchType: v as FlowForm["matchType"],
+                            roleId: undefined,
+                            userId: undefined,
+                          })
+                        }
+                      >
+                        <SelectTrigger className="w-36">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="role">Role</SelectItem>
+                          <SelectItem value="person">Specific person</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {flow.matchType === "role" ? (
+                        <Select
+                          value={(flow.roleId as string) ?? ""}
+                          onValueChange={(v) =>
+                            patchFlow(fi, { roleId: v as Id<"roles"> })
+                          }
+                        >
+                          <SelectTrigger className="w-44">
+                            <SelectValue placeholder="Choose role" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {roleOpts.map((r) => (
+                              <SelectItem key={r.value} value={r.value}>
+                                {r.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Select
+                          value={(flow.userId as string) ?? ""}
+                          onValueChange={(v) =>
+                            patchFlow(fi, { userId: v as Id<"users"> })
+                          }
+                        >
+                          <SelectTrigger className="w-44">
+                            <SelectValue placeholder="Choose person" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {options.members.map((m) => (
+                              <SelectItem key={m.userId} value={m.userId}>
+                                {m.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       )}
-                    </SortableStep>
-                  ))}
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="ml-auto size-8 text-destructive"
+                        onClick={() =>
+                          patch({
+                            flows: form.flows.filter((_, j) => j !== fi),
+                          })
+                        }
+                      >
+                        <IconTrash className="size-4" />
+                      </Button>
+                    </>
+                  )}
+                  {!expandedFlows.has(flow.key) && (
+                    <button
+                      type="button"
+                      onClick={() => toggleFlow(flow.key)}
+                      className={cn(
+                        "text-muted-foreground text-xs",
+                        flow.matchType === "default" && "ml-auto",
+                      )}
+                    >
+                      {flow.workflow.length} approver
+                      {flow.workflow.length === 1 ? "" : "s"}
+                    </button>
+                  )}
                 </div>
-              </SortableContext>
-            </DndContext>
+                {expandedFlows.has(flow.key) && (
+                  <>
+                    <Separator />
+                    <WorkflowEditor
+                      steps={flow.workflow}
+                      onChange={(w) => patchFlow(fi, { workflow: w })}
+                      groupOpts={groupOpts}
+                      memberOpts={memberOpts}
+                      officeOpts={officeOpts}
+                    />
+                  </>
+                )}
+              </div>
+            ))}
             <button
               type="button"
               className="text-primary w-fit text-sm font-medium"
-              onClick={() =>
+              onClick={() => {
+                const key = newId()
                 patch({
-                  workflow: [
-                    ...form.workflow,
+                  flows: [
+                    ...form.flows,
                     {
-                      key: newId(),
-                      approverType: "position",
-                      value: "manager",
-                      thresholdEnabled: false,
-                      rules: [],
+                      key,
+                      id: newId(),
+                      name: "",
+                      matchType: "role",
+                      roleId: undefined,
+                      userId: undefined,
+                      workflow: [
+                        {
+                          key: newId(),
+                          approverType: "position",
+                          value: "manager",
+                          thresholdEnabled: false,
+                          rules: [],
+                        },
+                      ],
                     },
                   ],
                 })
-              }
+                setExpandedFlows((s) => new Set(s).add(key))
+              }}
             >
-              + Add approver
+              + Add flow
             </button>
           </div>
         </Section>
@@ -1010,7 +1254,7 @@ export function ClaimSettingsGeneral() {
                     className="shrink-0"
                     onClick={() => {
                       setGuard(null)
-                      router.push("/settings/org-structure")
+                      router.push("/hr-lounge/org-structure")
                     }}
                   >
                     Edit role

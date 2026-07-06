@@ -30,6 +30,7 @@ import {
   claimCategory,
   claimStatus,
   claimApproverStep,
+  claimApprovalFlow,
   claimAssigneeGroup,
   claimPayrollMode,
   claimExchangeMode,
@@ -101,6 +102,8 @@ export const officeDoc = v.object({
   name: v.string(),
   address: v.optional(v.string()),
   timezone: v.string(),
+  defaultCurrency: v.optional(v.string()),
+  isDefault: v.optional(v.boolean()),
   geo: v.optional(v.object({ lat: v.number(), lng: v.number() })),
   radiusMeters: v.optional(v.number()),
   qrEnabled: v.boolean(),
@@ -584,6 +587,8 @@ export const claimSettingsValue = v.object({
   financeApproverUserIds: v.array(v.id("users")),
   assigneeGroups: v.array(claimAssigneeGroup),
   approvalWorkflow: v.array(claimApproverStep),
+  approvalFlows: v.array(claimApprovalFlow),
+  maxGroupsPerPeriod: v.union(v.number(), v.null()),
   payrollMode: claimPayrollMode,
   payrollItem: v.union(v.string(), v.null()),
 })
@@ -607,6 +612,10 @@ export const claimSettingsOptions = v.object({
   ),
   offices: v.array(
     v.object({ _id: v.id("offices"), name: v.string() }),
+  ),
+  // Roles (data-driven) for the per-flow "role" matcher picker.
+  roles: v.array(
+    v.object({ _id: v.id("roles"), name: v.string() }),
   ),
 })
 

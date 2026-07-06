@@ -94,7 +94,7 @@ const ITEMS: Item[] = [
   {
     label: "Org Structure",
     icon: IconSitemap,
-    href: "/settings/org-structure",
+    href: "/hr-lounge/org-structure",
     permission: "employees:manage",
   },
   {

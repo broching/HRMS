@@ -81,6 +81,20 @@ async function spendForType(
   return { yearlyUsedCents, monthlyUsedCents };
 }
 
+// The base currency an employee's claims are denominated in: their office's
+// default currency, falling back to the org currency.
+async function employeeBaseCurrency(
+  ctx: QueryCtx,
+  org: Doc<"organizations">,
+  employee: Doc<"employees"> | null,
+): Promise<string> {
+  if (employee?.officeId) {
+    const office = await ctx.db.get(employee.officeId);
+    if (office?.defaultCurrency) return office.defaultCurrency;
+  }
+  return org.settings.currency;
+}
+
 async function hydrateClaim(ctx: QueryCtx, claim: Doc<"claims">) {
   const [emp, ct] = await Promise.all([
     ctx.db.get(claim.employeeId),
@@ -273,9 +287,55 @@ async function safeGetUser(ctx: QueryCtx, maybeId: string) {
   }
 }
 
-// Resolve the approval chain for a claim from the org's configured workflow,
-// applying thresholds (amount + office scope) and resolving each step to a
-// concrete approver. Steps that can't be routed (e.g. no manager) are skipped.
+// Choose which flow's workflow applies to a claimant: a flow targeting them
+// specifically wins, then a flow targeting their role, then the "default" flow
+// (the fallback for everyone else). `roleId` is the claimant's *effective* role
+// document id (see `effectiveRoleId`) so role flows match even when a member's
+// `roleId` was never explicitly assigned.
+function selectFlowWorkflow(
+  settings: ResolvedClaimSettings,
+  member: Doc<"members"> | null,
+  roleId: Id<"roles"> | null,
+): ResolvedClaimSettings["approvalWorkflow"] {
+  const flows = settings.approvalFlows;
+  if (member) {
+    const person = flows.find(
+      (f) => f.match.type === "person" && f.match.userId === member.userId,
+    );
+    if (person) return person.workflow;
+    if (roleId) {
+      const role = flows.find(
+        (f) => f.match.type === "role" && f.match.roleId === roleId,
+      );
+      if (role) return role.workflow;
+    }
+  }
+  const def = flows.find((f) => f.match.type === "default");
+  return def?.workflow ?? [];
+}
+
+// Resolve a member's effective role document id. Prefers the explicitly assigned
+// `roleId`; otherwise maps the legacy `role` enum to that org's preset role doc.
+// Members synced from Clerk carry only the `role` enum (no `roleId`), so role
+// flows must match through this or they'd never apply to them.
+async function effectiveRoleId(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  member: Doc<"members"> | null,
+): Promise<Id<"roles"> | null> {
+  if (!member) return null;
+  if (member.roleId) return member.roleId;
+  const preset = await ctx.db
+    .query("roles")
+    .withIndex("by_org_key", (q) => q.eq("orgId", orgId).eq("key", member.role))
+    .unique();
+  return preset?._id ?? null;
+}
+
+// Resolve the approval chain for a claim from the flow that matches the
+// claimant, applying thresholds (amount + office scope) and resolving each step
+// to a concrete approver. Steps that can't be routed (e.g. no manager) are
+// skipped.
 async function buildApprovalChain(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -283,8 +343,18 @@ async function buildApprovalChain(
   amountCents: number,
 ): Promise<ChainStep[]> {
   const settings = await resolveClaimSettings(ctx, orgId);
+  const member = employee.userId
+    ? await ctx.db
+        .query("members")
+        .withIndex("by_org_and_user", (q) =>
+          q.eq("orgId", orgId).eq("userId", employee.userId!),
+        )
+        .unique()
+    : null;
+  const roleId = await effectiveRoleId(ctx, orgId, member);
+  const workflow = selectFlowWorkflow(settings, member, roleId);
   const chain: ChainStep[] = [];
-  for (const step of settings.approvalWorkflow) {
+  for (const step of workflow) {
     if (step.thresholdEnabled) {
       const matches = step.rules.some(
         (r) =>
@@ -358,7 +428,7 @@ async function buildApprovalChain(
   // claims to them without having to wire an explicit workflow step. If the
   // admin *did* place HR explicitly in the workflow, respect that and don't
   // append a second HR step.
-  const hrAlreadyInWorkflow = settings.approvalWorkflow.some(
+  const hrAlreadyInWorkflow = workflow.some(
     (s) => s.approverType === "group" && s.value === CLAIM_GROUP_HR,
   );
   if (!hrAlreadyInWorkflow) {
@@ -468,7 +538,7 @@ export const submit = mutation({
       employeeId: own._id,
       claimTypeId: args.claimTypeId,
       amountCents: args.amountCents,
-      currency: args.currency ?? org.settings.currency,
+      currency: args.currency ?? (await employeeBaseCurrency(ctx, org, own)),
       taxAmountCents: args.taxAmountCents,
       localAmountCents: args.localAmountCents,
       localCurrency: args.localCurrency,
@@ -597,6 +667,25 @@ export const submitMonth = mutation({
     );
     if (drafts.length === 0) {
       throw new ConvexError("No draft claims to submit for this month.");
+    }
+    // Enforce the org's per-period submission cap: each submitted batch (and
+    // each resubmission) is a claim group, so count existing groups for the
+    // month against the limit.
+    const settings = await resolveClaimSettings(ctx, orgId);
+    if (settings.maxGroupsPerPeriod !== null) {
+      const existingGroups = await ctx.db
+        .query("claimGroups")
+        .withIndex("by_employee_month", (q) =>
+          q.eq("employeeId", own._id).eq("periodMonth", month),
+        )
+        .collect();
+      if (existingGroups.length >= settings.maxGroupsPerPeriod) {
+        throw new ConvexError(
+          `You've reached the limit of ${settings.maxGroupsPerPeriod} claim submission${
+            settings.maxGroupsPerPeriod === 1 ? "" : "s"
+          } for this month.`,
+        );
+      }
     }
     const groupId = await createClaimGroup(ctx, orgId, own._id, month);
     for (const claim of drafts) {
@@ -1156,9 +1245,10 @@ export const markReimbursed = mutation({
 });
 
 // Permanently delete a claim (and its receipt files + comments). Replaces the
-// old "cancel". Allowed while draft/rejected (by the owner) or while pending (by
-// an approver who can act on it, or finance). Approved/reimbursed claims — the
-// financial records — can't be deleted.
+// old "cancel". Allowed while draft (by the owner or finance) or while pending
+// (by an approver who can act on it, or finance). Rejected claims are a
+// permanent record and can't be deleted (employees resubmit via a fresh
+// duplicate instead); approved/reimbursed financial records can't be deleted.
 export const deleteClaim = mutation({
   args: { claimId: v.id("claims") },
   returns: v.null(),
@@ -1171,7 +1261,7 @@ export const deleteClaim = mutation({
     const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
 
     let allowed = false;
-    if (claim.status === "draft" || claim.status === "rejected") {
+    if (claim.status === "draft") {
       allowed = isOwner || isFinance;
     } else if (
       claim.status === "pending_manager" ||
@@ -1437,6 +1527,19 @@ export const get = query({
   },
 });
 
+// The current employee's claim base currency (their office's default currency,
+// falling back to the org currency). Lets the submit form show the right
+// currency before a claim type is picked, independent of `typeBalance`.
+export const myBaseCurrency = query({
+  args: {},
+  returns: v.object({ currency: v.string() }),
+  handler: async (ctx) => {
+    const { orgId, userId, org } = await requireOrg(ctx);
+    const own = await employeeByUserId(ctx, orgId, userId);
+    return { currency: await employeeBaseCurrency(ctx, org, own) };
+  },
+});
+
 // Live spend-vs-limit for a claim type, for the current employee, used by the
 // "Balance available to claim" card in the submit form. Periods are the current
 // calendar year / month.
@@ -1467,7 +1570,7 @@ export const typeBalance = query({
 
     return {
       claimTypeId,
-      currency: org.settings.currency,
+      currency: await employeeBaseCurrency(ctx, org, own),
       guidelines: claimType.guidelines ?? null,
       yearlyLimitCents: yearly,
       monthlyLimitCents: monthly,

@@ -79,7 +79,7 @@ const schema = z.object({
   teamId: z.string().optional(),
   positionId: z.string().optional(),
   managerId: z.string().optional(),
-  officeId: z.string().optional(),
+  officeId: z.string().min(1, "Required"),
 })
 
 export type EmployeeFormValues = z.infer<typeof schema>
@@ -226,6 +226,15 @@ export function EmployeeForm({
   })
 
   const [saving, setSaving] = React.useState(false)
+
+  // Office is required; preselect the org's default office when creating a new
+  // employee who doesn't already have one set.
+  React.useEffect(() => {
+    if (employeeId) return
+    if (offices.length === 0 || form.getValues("officeId")) return
+    const def = offices.find((o) => o.isDefault) ?? offices[0]
+    if (def) form.setValue("officeId", def._id)
+  }, [offices, employeeId, form])
 
   async function onSubmit(values: EmployeeFormValues) {
     setSaving(true)
@@ -591,7 +600,6 @@ export function EmployeeForm({
               control={form.control}
               name="officeId"
               label="Office"
-              includeNone
               options={offices.map((o) => ({ value: o._id, label: o.name }))}
             />
           </CardContent>

@@ -23,6 +23,7 @@ export const create = mutation({
     name: v.string(),
     address: v.optional(v.string()),
     timezone: v.string(),
+    defaultCurrency: v.optional(v.string()),
     geo: v.optional(geo),
     radiusMeters: v.optional(v.number()),
   },
@@ -52,6 +53,7 @@ export const update = mutation({
     name: v.optional(v.string()),
     address: v.optional(v.string()),
     timezone: v.optional(v.string()),
+    defaultCurrency: v.optional(v.string()),
     geo: v.optional(geo),
     radiusMeters: v.optional(v.number()),
     qrEnabled: v.optional(v.boolean()),
@@ -67,6 +69,31 @@ export const update = mutation({
   },
 });
 
+// Ensure the org has its protected default office (seeded as "Singapore").
+// Idempotent — a no-op once a default office exists. Called from the offices
+// manager so orgs created before default offices existed get backfilled.
+export const ensureDefault = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const { orgId } = await requirePermission(ctx, "attendance:config");
+    const offices = await ctx.db
+      .query("offices")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    if (offices.some((o) => o.isDefault)) return null;
+    await ctx.db.insert("offices", {
+      orgId,
+      name: "Singapore",
+      timezone: "Asia/Singapore",
+      defaultCurrency: "SGD",
+      isDefault: true,
+      qrEnabled: false,
+    });
+    return null;
+  },
+});
+
 export const remove = mutation({
   args: { id: v.id("offices") },
   returns: v.null(),
@@ -75,6 +102,9 @@ export const remove = mutation({
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId)
       throw new Error("Office not found.");
+    if (existing.isDefault) {
+      throw new Error("The default office can't be deleted.");
+    }
     await ctx.db.delete(id);
     await writeAuditLog(ctx, {
       orgId,

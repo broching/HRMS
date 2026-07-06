@@ -374,6 +374,29 @@ export const claimApproverStep = v.object({
   rules: v.array(claimApprovalThresholdRule),
 });
 
+// A claim approval flow: a matcher that decides which claimants it applies to,
+// plus its own ordered approver steps. The engine picks the flow matching the
+// claimant (a specific person beats a role match; the "default" flow is the
+// fallback for everyone else) and builds the approval chain from its steps.
+// `roleId` is a data-driven role (e.g. a custom "CEO" role); `userId` targets a
+// specific member.
+export const claimFlowMatchType = v.union(
+  v.literal("default"),
+  v.literal("role"),
+  v.literal("person"),
+);
+export const claimFlowMatch = v.object({
+  type: claimFlowMatchType,
+  roleId: v.optional(v.id("roles")), // when type === "role"
+  userId: v.optional(v.id("users")), // when type === "person"
+});
+export const claimApprovalFlow = v.object({
+  id: v.string(),
+  name: v.string(),
+  match: claimFlowMatch,
+  workflow: v.array(claimApproverStep),
+});
+
 // How approved claims flow to payroll.
 export const claimPayrollMode = v.union(
   v.literal("manual"),

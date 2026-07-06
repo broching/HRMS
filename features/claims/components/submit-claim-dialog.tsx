@@ -84,9 +84,11 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
     api.claims.typeBalance,
     claimTypeId ? { claimTypeId: claimTypeId as Id<"claimTypes"> } : "skip",
   )
-  // Base currency is the org default (SGD unless changed). Claims are recorded
-  // in it; a foreign-currency expense is converted into it.
-  const baseCurrency = balance?.currency ?? "SGD"
+  // The employee's claim base currency (their office's default currency, or the
+  // org currency). Resolved independently of the claim type so the form shows
+  // the right currency before a type is picked; `typeBalance` returns the same.
+  const myCurrency = useQuery(api.claims.myBaseCurrency, {})
+  const baseCurrency = balance?.currency ?? myCurrency?.currency ?? "SGD"
 
   const conv = conversionResult(conversion, baseCurrency)
   const amountCents = conversion.enabled
