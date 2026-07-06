@@ -1066,6 +1066,20 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_pinned", ["orgId", "pinned"]),
 
+  // ─── Marketing (public landing-page contact form) ────────────────────────
+
+  // A lead captured from the public LeadMighty landing page "Contact us" form.
+  // Written by the unauthenticated `leads.submitLead` mutation.
+  contactLeads: defineTable({
+    name: v.string(),
+    email: v.string(),
+    company: v.optional(v.string()),
+    // Product line the enquiry is about (e.g. "LeadMightyHR"), when chosen.
+    product: v.optional(v.string()),
+    message: v.string(),
+    source: v.optional(v.string()), // where the lead came from, e.g. "landing"
+  }).index("by_email", ["email"]),
+
   // ─── Billing (existing) ──────────────────────────────────────────────────
 
   paymentAttempts: defineTable(paymentAttemptSchemaValidator)

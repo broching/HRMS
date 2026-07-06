@@ -32,6 +32,7 @@ import type * as goals from "../goals.js";
 import type * as holidays from "../holidays.js";
 import type * as http from "../http.js";
 import type * as jobHistory from "../jobHistory.js";
+import type * as leads from "../leads.js";
 import type * as leaveBalances from "../leaveBalances.js";
 import type * as leaveDashboard from "../leaveDashboard.js";
 import type * as leavePolicies from "../leavePolicies.js";
@@ -106,6 +107,7 @@ declare const fullApi: ApiFromModules<{
   holidays: typeof holidays;
   http: typeof http;
   jobHistory: typeof jobHistory;
+  leads: typeof leads;
   leaveBalances: typeof leaveBalances;
   leaveDashboard: typeof leaveDashboard;
   leavePolicies: typeof leavePolicies;

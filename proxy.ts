@@ -4,6 +4,7 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 // Active-organization enforcement happens in app/(app)/layout.tsx (OrgGuard).
 const isPublicRoute = createRouteMatcher([
   '/',
+  '/leadmightyhr(.*)', // public marketing page for the HR product
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/boards(.*)', // public job board (careers page)
