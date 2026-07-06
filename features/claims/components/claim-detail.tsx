@@ -259,13 +259,24 @@ function ClaimDetailsCard({
                 {s.done ? <IconCheck className="size-3" /> : i + 1}
               </span>
               <span className={cn(s.current && "font-medium")}>{s.label}</span>
-              {s.current && (
-                <Badge variant="secondary" className="text-[10px]">
-                  Awaiting
-                </Badge>
-              )}
+              {s.current &&
+                (claim.waitingForBatch ? (
+                  <Badge variant="outline" className="text-[10px]">
+                    Waiting for batch
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="text-[10px]">
+                    Awaiting
+                  </Badge>
+                ))}
             </div>
           ))}
+          {claim.waitingForBatch && (
+            <p className="text-muted-foreground mt-1 text-xs">
+              This claim has cleared its steps early. It waits here until the rest
+              of the batch reaches this approver, then the group moves on together.
+            </p>
+          )}
         </div>
       )}
 

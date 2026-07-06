@@ -215,6 +215,7 @@ async function notifyStep(
 type ChainStep = {
   approverType: "position" | "specific" | "group";
   value: string;
+  workflowIndex?: number;
   approverUserId?: Id<"users">;
   approverUserIds?: Id<"users">[];
   label: string;
@@ -354,7 +355,8 @@ async function buildApprovalChain(
   const roleId = await effectiveRoleId(ctx, orgId, member);
   const workflow = selectFlowWorkflow(settings, member, roleId);
   const chain: ChainStep[] = [];
-  for (const step of workflow) {
+  for (let wi = 0; wi < workflow.length; wi++) {
+    const step = workflow[wi];
     if (step.thresholdEnabled) {
       const matches = step.rules.some(
         (r) =>
@@ -376,6 +378,7 @@ async function buildApprovalChain(
       chain.push({
         approverType: "group",
         value: step.value,
+        workflowIndex: wi,
         approverUserId: members[0],
         approverUserIds: members,
         label: groupLabel(settings, step.value),
@@ -416,6 +419,7 @@ async function buildApprovalChain(
     chain.push({
       approverType: step.approverType,
       value: step.value,
+      workflowIndex: wi,
       approverUserId,
       label: name ? `${posLabel} — ${name}` : posLabel,
     });
@@ -439,6 +443,9 @@ async function buildApprovalChain(
       chain.push({
         approverType: "group",
         value: CLAIM_GROUP_HR,
+        // The implicit HR stage sits after every explicit workflow step, so it
+        // gets the next index — identical for all claims in the group.
+        workflowIndex: workflow.length,
         approverUserId: hrMembers[0],
         approverUserIds: hrMembers,
         label: "HR",
@@ -466,6 +473,73 @@ async function buildApprovalChain(
     deduped.push(s);
   }
   return deduped;
+}
+
+// ─── Group barrier (the batch moves as a unit) ─────────────────────────────
+//
+// A claim group (one employee's monthly batch) travels through its shared
+// approval flow together: no claim advances to the next approver until every
+// claim in the batch has cleared the current one. Because all claims in a group
+// resolve the same workflow, each chain step carries a `workflowIndex`, so a
+// claim's stage is directly comparable across the batch. `pending_finance` is
+// the final stage; terminal claims (approved/rejected/…) drop out and neither
+// block the batch nor ride along.
+
+// Stage rank beyond the last chain step: the finance stage. Larger than any
+// possible `workflowIndex` (which are small workflow positions).
+const FINANCE_LEVEL = 1_000_000;
+
+// A grouped claim's position in the shared batch flow. Lower = earlier approver.
+function claimGroupLevel(claim: Doc<"claims">): number {
+  if (claim.status === "pending_finance") return FINANCE_LEVEL;
+  if (claim.status === "pending_manager") {
+    const chain = claim.approvalChain ?? [];
+    if (chain.length === 0) return 0; // legacy chain-less → manager stage
+    const step = chain[claim.currentStepIndex ?? 0];
+    return step?.workflowIndex ?? claim.currentStepIndex ?? 0;
+  }
+  return Infinity; // draft / approved / reimbursed / rejected — not active
+}
+
+// The batch's current approver level: the earliest stage any still-active claim
+// sits at. `null` when nothing in the batch is pending.
+function groupActiveLevel(claims: Doc<"claims">[]): number | null {
+  let min = Infinity;
+  for (const c of claims) {
+    const lvl = claimGroupLevel(c);
+    if (lvl < min) min = lvl;
+  }
+  return min === Infinity ? null : min;
+}
+
+// Whether a claim is at its group's current frontier — i.e. the batch is
+// standing at this claim's stage, not ahead of it. Ungrouped/legacy claims have
+// no barrier. A claim that ran ahead (e.g. skipped a threshold-gated HOD step)
+// waits, parked, until the laggards reach the same stage.
+async function claimAtGroupFrontier(
+  ctx: QueryCtx,
+  claim: Doc<"claims">,
+): Promise<boolean> {
+  if (!claim.groupId) return true;
+  const siblings = await ctx.db
+    .query("claims")
+    .withIndex("by_group", (q) => q.eq("groupId", claim.groupId!))
+    .collect();
+  const active = groupActiveLevel(siblings);
+  if (active === null) return true;
+  return claimGroupLevel(claim) === active;
+}
+
+// Human label of the approver a pending claim currently sits with (its chain
+// step, or "Finance" at the finance stage). `null` once the claim is terminal.
+function currentApproverLabel(claim: Doc<"claims">): string | null {
+  if (claim.status === "pending_finance") return "Finance";
+  if (claim.status === "pending_manager") {
+    const chain = claim.approvalChain ?? [];
+    const step = chain[claim.currentStepIndex ?? 0];
+    return step?.label ?? "Manager";
+  }
+  return null;
 }
 
 // Notify all configured finance approvers that a claim awaits their decision.
@@ -932,6 +1006,11 @@ export const managerApprove = mutation({
     if (claim.status !== "pending_manager") {
       throw new ConvexError("Claim is not awaiting approval.");
     }
+    if (!(await claimAtGroupFrontier(ctx, claim))) {
+      throw new ConvexError(
+        "This claim is waiting for the rest of its batch to reach this approval stage.",
+      );
+    }
     await advanceManagerStep(ctx, orgCtx, claim, note);
     return null;
   },
@@ -949,6 +1028,11 @@ export const financeApprove = mutation({
     if (!claim || claim.orgId !== orgId) throw new ConvexError("Claim not found.");
     if (claim.status !== "pending_finance") {
       throw new ConvexError("Claim is not awaiting finance approval.");
+    }
+    if (!(await claimAtGroupFrontier(ctx, claim))) {
+      throw new ConvexError(
+        "This claim is waiting for the rest of its batch to reach the finance stage.",
+      );
     }
     await doFinanceApprove(ctx, orgId, userId, claim, note);
     return null;
@@ -984,6 +1068,8 @@ export const approveAllForEmployee = mutation({
     for (const claim of claims) {
       if (claim.orgId !== orgCtx.orgId) continue;
       if (month && !claim.incurredDate.startsWith(month)) continue;
+      // Group barrier: skip claims parked ahead of their batch's frontier.
+      if (!(await claimAtGroupFrontier(ctx, claim))) continue;
       if (claim.status === "pending_manager") {
         if (!(await callerCanActOnManagerStep(ctx, orgCtx, claim, isFinance)))
           continue;
@@ -993,7 +1079,11 @@ export const approveAllForEmployee = mutation({
         // it in the same pass so "approve all" fully approves.
         if (isFinance) {
           const updated = await ctx.db.get(claim._id);
-          if (updated && updated.status === "pending_finance") {
+          if (
+            updated &&
+            updated.status === "pending_finance" &&
+            (await claimAtGroupFrontier(ctx, updated))
+          ) {
             await doFinanceApprove(ctx, orgCtx.orgId, orgCtx.userId, updated, note);
           }
         }
@@ -1462,6 +1552,13 @@ export const get = query({
       }
     }
 
+    // Group barrier: a claim parked ahead of its batch can't be acted on yet.
+    const isPendingStage =
+      claim.status === "pending_manager" || claim.status === "pending_finance";
+    const atFrontier = await claimAtGroupFrontier(ctx, claim);
+    if (isPendingStage && !atFrontier) canApprove = false;
+    const waitingForBatch = isPendingStage && !atFrontier;
+
     const base = await hydrateClaim(ctx, claim);
     const receipts = await resolveReceipts(ctx, claim.receiptStorageIds);
     const isPending =
@@ -1522,6 +1619,7 @@ export const get = query({
       edits,
       flow,
       approvalChain,
+      waitingForBatch,
       sentToPayroll: claim.sentToPayroll ?? false,
     };
   },
@@ -1778,16 +1876,32 @@ async function approverClaimView(
   claim: Doc<"claims">,
   isFinance: boolean,
   own: Doc<"employees"> | null,
+  // The claim's batch active level (from `groupActiveLevel` over its siblings).
+  // When provided, the group barrier applies: a claim that would await the
+  // caller but isn't at the frontier is parked → shown "visible", not
+  // actionable, until the rest of the batch catches up. Omit for no barrier.
+  groupLevel?: number | null,
 ): Promise<ApproverView> {
   const chain = claim.approvalChain ?? [];
   const stepIdx = claim.currentStepIndex ?? 0;
   const myStep = chain.findIndex((s) => stepEligible(s, orgCtx.userId));
 
+  // Hold back a claim that's ahead of its batch: the group only "arrives" at an
+  // approver once it's their turn. A claim that ran ahead (e.g. skipped a
+  // threshold-gated HOD step) does NOT surface to its next approver until the
+  // slower claims reach the same stage — so the whole batch shows up together.
+  // (Approvers who already cleared an earlier step still watch via the separate
+  // "visible" branch, which this gate doesn't touch.)
+  const gate = (view: ApproverView): ApproverView => {
+    if (view !== "awaiting" || groupLevel == null) return view;
+    return claimGroupLevel(claim) === groupLevel ? "awaiting" : "hidden";
+  };
+
   switch (claim.status) {
     case "pending_manager": {
       if (chain.length > 0) {
         const now = chain[stepIdx];
-        if (now && stepEligible(now, orgCtx.userId)) return "awaiting";
+        if (now && stepEligible(now, orgCtx.userId)) return gate("awaiting");
         if (isFinance) return "visible";
         // An earlier approver who already cleared their step can watch progress.
         if (myStep !== -1 && myStep < stepIdx) return "visible";
@@ -1796,12 +1910,12 @@ async function approverClaimView(
       // Legacy chain-less claim → the claimant's manager decides.
       if (own) {
         const emp = await ctx.db.get(claim.employeeId);
-        if (emp?.managerId === own._id) return "awaiting";
+        if (emp?.managerId === own._id) return gate("awaiting");
       }
       return isFinance ? "visible" : "hidden";
     }
     case "pending_finance": {
-      if (isFinance) return "awaiting";
+      if (isFinance) return gate("awaiting");
       return myStep !== -1 ? "visible" : "hidden";
     }
     case "approved":
@@ -1847,6 +1961,20 @@ export const approvalClaimGroups = query({
     ).filter((c) => c.groupId != null);
     claims = await applyApprovalFilters(ctx, claims, filters);
 
+    // Batch frontier per group (filters never split a group — same claimant,
+    // same month), so the barrier keeps a batch from advancing past its slowest
+    // claim: only claims at the frontier count as awaiting the caller.
+    const levelByGroup = new Map<Id<"claimGroups">, number | null>();
+    {
+      const byG = new Map<Id<"claimGroups">, Doc<"claims">[]>();
+      for (const c of claims) {
+        const arr = byG.get(c.groupId!) ?? [];
+        arr.push(c);
+        byG.set(c.groupId!, arr);
+      }
+      for (const [gid, arr] of byG) levelByGroup.set(gid, groupActiveLevel(arr));
+    }
+
     type Acc = {
       pending: number;
       visible: number;
@@ -1857,7 +1985,14 @@ export const approvalClaimGroups = query({
     };
     const byGroup = new Map<Id<"claimGroups">, Acc>();
     for (const c of claims) {
-      const view = await approverClaimView(ctx, orgCtx, c, isFinance, own);
+      const view = await approverClaimView(
+        ctx,
+        orgCtx,
+        c,
+        isFinance,
+        own,
+        levelByGroup.get(c.groupId!),
+      );
       if (view === "hidden") continue;
       const acc = byGroup.get(c.groupId!) ?? {
         pending: 0,
@@ -1922,19 +2057,37 @@ export const approvalClaimsForGroup = query({
       .query("claims")
       .withIndex("by_group", (q) => q.eq("groupId", groupId))
       .collect();
+    const activeLevel = groupActiveLevel(claims);
     const out: Array<
       Awaited<ReturnType<typeof hydrateClaim>> & {
         receipts: Awaited<ReturnType<typeof resolveReceipts>>;
         canAct: boolean;
+        currentApprover: string | null;
+        waitingForBatch: boolean;
       }
     > = [];
     for (const c of claims) {
-      const view = await approverClaimView(ctx, orgCtx, c, isFinance, own);
+      const view = await approverClaimView(
+        ctx,
+        orgCtx,
+        c,
+        isFinance,
+        own,
+        activeLevel,
+      );
       if (view === "hidden") continue;
+      const pending =
+        c.status === "pending_manager" || c.status === "pending_finance";
       out.push({
         ...(await hydrateClaim(ctx, c)),
         receipts: await resolveReceipts(ctx, c.receiptStorageIds),
         canAct: view === "awaiting",
+        currentApprover: currentApproverLabel(c),
+        // Pending but ahead of the batch frontier: parked until siblings catch up.
+        waitingForBatch:
+          pending &&
+          activeLevel !== null &&
+          claimGroupLevel(c) !== activeLevel,
       });
     }
     out.sort((a, b) => (a.incurredDate < b.incurredDate ? 1 : -1));
@@ -2041,18 +2194,35 @@ export const allClaimsForGroup = query({
       .query("claims")
       .withIndex("by_group", (q) => q.eq("groupId", groupId))
       .collect();
+    const activeLevel = groupActiveLevel(claims);
     const out: Array<
       Awaited<ReturnType<typeof hydrateClaim>> & {
         receipts: Awaited<ReturnType<typeof resolveReceipts>>;
         canAct: boolean;
+        currentApprover: string | null;
+        waitingForBatch: boolean;
       }
     > = [];
     for (const c of claims) {
-      const view = await approverClaimView(ctx, orgCtx, c, isFinance, own);
+      const view = await approverClaimView(
+        ctx,
+        orgCtx,
+        c,
+        isFinance,
+        own,
+        activeLevel,
+      );
+      const pending =
+        c.status === "pending_manager" || c.status === "pending_finance";
       out.push({
         ...(await hydrateClaim(ctx, c)),
         receipts: await resolveReceipts(ctx, c.receiptStorageIds),
         canAct: view === "awaiting",
+        currentApprover: currentApproverLabel(c),
+        waitingForBatch:
+          pending &&
+          activeLevel !== null &&
+          claimGroupLevel(c) !== activeLevel,
       });
     }
     out.sort((a, b) => (a.incurredDate < b.incurredDate ? 1 : -1));
@@ -2172,14 +2342,24 @@ export const approveAllForGroup = mutation({
       .collect();
     let approved = 0;
     for (const claim of claims) {
+      // Group barrier: only act on the batch's current frontier stage. Parked
+      // claims (ahead of the frontier) wait until the laggards catch up.
+      if (!(await claimAtGroupFrontier(ctx, claim))) continue;
       if (claim.status === "pending_manager") {
         if (!(await callerCanActOnManagerStep(ctx, orgCtx, claim, isFinance)))
           continue;
         await advanceManagerStep(ctx, orgCtx, claim, note);
         approved++;
+        // Only clear into finance in the same pass when the claim is STILL at
+        // the (now-recomputed) frontier — otherwise a short-chain claim would
+        // leap through finance while a sibling is stuck at an earlier approver.
         if (isFinance) {
           const updated = await ctx.db.get(claim._id);
-          if (updated && updated.status === "pending_finance") {
+          if (
+            updated &&
+            updated.status === "pending_finance" &&
+            (await claimAtGroupFrontier(ctx, updated))
+          ) {
             await doFinanceApprove(ctx, orgCtx.orgId, orgCtx.userId, updated, note);
           }
         }

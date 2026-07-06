@@ -410,6 +410,13 @@ export type ClaimPayrollMode = "manual" | "automatic";
 export const claimChainStep = v.object({
   approverType: claimApproverType,
   value: v.string(), // "manager" | "department_head" | userId | group id (config)
+  // Position of this step in the claimant's (shared) approval workflow — the
+  // appended implicit-HR step gets `workflow.length`. Because every claim in a
+  // group belongs to the same claimant, they resolve the same workflow, so this
+  // index makes their stages comparable: the batch advances as a unit and no
+  // claim runs ahead of the group's current approver level (threshold-skipped
+  // steps simply leave gaps). Optional for claims submitted before this existed.
+  workflowIndex: v.optional(v.number()),
   approverUserId: v.optional(v.id("users")),
   // For "group" steps: every member eligible to act on this step. Any one of
   // them can approve. `approverUserId` holds the first (primary) for legacy

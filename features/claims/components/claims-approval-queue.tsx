@@ -588,6 +588,19 @@ function GroupClaims({
                           Reject
                         </Button>
                       </div>
+                    ) : c.waitingForBatch ? (
+                      <span
+                        className="text-muted-foreground text-xs"
+                        title="Cleared its steps early — waiting for the rest of the batch to reach this approver."
+                      >
+                        Waiting for batch
+                      </span>
+                    ) : (c.status === "pending_manager" ||
+                        c.status === "pending_finance") &&
+                      c.currentApprover ? (
+                      <span className="text-muted-foreground text-xs">
+                        Awaiting {c.currentApprover}
+                      </span>
                     ) : (
                       <span className="text-muted-foreground text-xs">
                         {c.status === "rejected" && c.decisionNote

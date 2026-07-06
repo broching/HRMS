@@ -528,6 +528,9 @@ export const claimDetail = v.object({
       current: v.boolean(),
     }),
   ),
+  // Pending but parked behind its batch: the group barrier is holding this claim
+  // at its current step until the rest of the batch reaches the same stage.
+  waitingForBatch: v.boolean(),
   sentToPayroll: v.boolean(),
 });
 
@@ -576,6 +579,12 @@ export const claimGroupApprovalItem = v.object({
   ...claimRowFields,
   receipts: v.array(claimReceipt),
   canAct: v.boolean(),
+  // The approver this claim currently sits with (chain step label, or "Finance"),
+  // null once terminal — drives the "chain flow" hint in the group drill-down.
+  currentApprover: v.union(v.string(), v.null()),
+  // Pending but parked ahead of the batch: the group barrier is holding it until
+  // the slower claims reach the same approver level.
+  waitingForBatch: v.boolean(),
 });
 
 // Org claim settings (return of claimSettings.get) — resolved with defaults so
