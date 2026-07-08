@@ -385,7 +385,11 @@ function selectFlowWorkflow(
   const flows = settings.approvalFlows;
   if (member) {
     const person = flows.find(
-      (f) => f.match.type === "person" && f.match.userId === member.userId,
+      (f) =>
+        f.match.type === "person" &&
+        (f.match.userIds
+          ? f.match.userIds.includes(member.userId)
+          : f.match.userId === member.userId),
     );
     if (person) return person.workflow;
     if (roleId) {

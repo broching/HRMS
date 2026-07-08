@@ -58,28 +58,184 @@ function countDays(
   return total;
 }
 
-// Resolve the user who approves at a step, per the policy's approver mode.
-async function resolveApprover(
+// ─── Approval chain ────────────────────────────────────────────────────────
+
+// One resolved step of a leave request's approval chain (mirrors the
+// `leaveChainStep` validator). Any of `approverUserIds` may act on it.
+type ResolvedLeaveStep = {
+  approverType: "position" | "role" | "specific";
+  value: string;
+  approverUserId?: Id<"users">;
+  approverUserIds?: Id<"users">[];
+  label: string;
+  decidedByUserId?: Id<"users">;
+  decidedAt?: number;
+  note?: string;
+};
+
+// A member's effective role document id: the explicitly assigned `roleId`, else
+// the org's preset role doc mapped from the legacy `role` enum. Mirrors the
+// claims engine so role steps match Clerk-synced members that carry only `role`.
+async function effectiveRoleId(
   ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  member: Doc<"members">,
+): Promise<Id<"roles"> | null> {
+  if (member.roleId) return member.roleId;
+  const preset = await ctx.db
+    .query("roles")
+    .withIndex("by_org_key", (q) => q.eq("orgId", orgId).eq("key", member.role))
+    .unique();
+  return preset?._id ?? null;
+}
+
+// Every active member's userId whose effective role is `roleId`.
+async function membersWithRole(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  roleId: Id<"roles">,
+): Promise<Id<"users">[]> {
+  const members = await ctx.db
+    .query("members")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const ids: Id<"users">[] = [];
+  for (const m of members) {
+    if (m.status !== "active") continue;
+    const rid = await effectiveRoleId(ctx, orgId, m);
+    if (rid === roleId) ids.push(m.userId);
+  }
+  return ids;
+}
+
+// Convert a policy's legacy two-step approver modes into chain steps, so
+// policies saved before the chain existed still resolve a chain.
+function legacyChainSteps(
+  policy: Doc<"leavePolicies">,
+): NonNullable<Doc<"leavePolicies">["approvalChain"]> {
+  const steps: NonNullable<Doc<"leavePolicies">["approvalChain"]> = [];
+  const modes = [
+    [policy.firstApproverMode, policy.firstApproverValue] as const,
+    [policy.secondApproverMode, policy.secondApproverValue] as const,
+  ];
+  for (const [mode, value] of modes) {
+    if (mode === "manager" || mode === "department_head") {
+      steps.push({ approverType: "position", value: mode, thresholdEnabled: false });
+    } else if (mode === "specific" && value) {
+      steps.push({
+        approverType: "specific",
+        value: "",
+        userIds: [value as Id<"users">],
+        thresholdEnabled: false,
+      });
+    }
+  }
+  return steps;
+}
+
+// Resolve the approval chain for a leave request from its policy: apply each
+// step's day threshold, resolve eligible approvers (manager / department head /
+// role holders / named people), drop the requester and unroutable steps. Leave
+// is approved individually, so this is a plain ordered list — no batching.
+async function buildLeaveApprovalChain(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
   employee: Doc<"employees">,
-  mode: Doc<"leavePolicies">["firstApproverMode"],
-  value: string | undefined,
-): Promise<Id<"users"> | undefined> {
-  if (mode === "none") return undefined;
-  if (mode === "manager") {
-    if (!employee.managerId) return undefined;
-    const m = await ctx.db.get(employee.managerId);
-    return m?.userId;
+  policy: Doc<"leavePolicies">,
+  totalDays: number,
+): Promise<ResolvedLeaveStep[]> {
+  const steps =
+    policy.approvalChain && policy.approvalChain.length > 0
+      ? policy.approvalChain
+      : legacyChainSteps(policy);
+  const chain: ResolvedLeaveStep[] = [];
+  for (const step of steps) {
+    if (
+      step.thresholdEnabled &&
+      step.daysMoreThan != null &&
+      !(totalDays > step.daysMoreThan)
+    ) {
+      continue;
+    }
+    let ids: Id<"users">[] = [];
+    let label = "";
+    if (step.approverType === "position") {
+      if (step.value === "manager" && employee.managerId) {
+        const mgr = await ctx.db.get(employee.managerId);
+        if (mgr?.userId) {
+          ids = [mgr.userId];
+          label = `Manager — ${mgr.firstName} ${mgr.lastName}`;
+        }
+      } else if (step.value === "department_head" && employee.departmentId) {
+        const dept = await ctx.db.get(employee.departmentId);
+        if (dept?.headEmployeeId) {
+          const head = await ctx.db.get(dept.headEmployeeId);
+          if (head?.userId) {
+            ids = [head.userId];
+            label = `Department head — ${head.firstName} ${head.lastName}`;
+          }
+        }
+      }
+    } else if (step.approverType === "role") {
+      const role = await ctx.db.get(step.value as Id<"roles">);
+      ids = await membersWithRole(ctx, orgId, step.value as Id<"roles">);
+      label = `Role — ${role?.name ?? "Role"}`;
+    } else {
+      ids = step.userIds ?? [];
+    }
+    // Drop the requester and dedupe; skip a step nobody can act on.
+    ids = [...new Set(ids)].filter((uid) => uid !== employee.userId);
+    if (ids.length === 0) continue;
+    if (step.approverType === "specific") {
+      const names = await Promise.all(ids.map((id) => userName(ctx, id)));
+      label = names.filter(Boolean).join(", ") || "Specific approver";
+    }
+    chain.push({
+      approverType: step.approverType,
+      value: step.value,
+      approverUserId: ids[0],
+      approverUserIds: ids,
+      label,
+    });
   }
-  if (mode === "department_head") {
-    if (!employee.departmentId) return undefined;
-    const dept = await ctx.db.get(employee.departmentId);
-    if (!dept?.headEmployeeId) return undefined;
-    const head = await ctx.db.get(dept.headEmployeeId);
-    return head?.userId;
+  return chain;
+}
+
+// The userIds that may act on a request's current step (chain-aware, with a
+// fallback to the legacy two-step fields for in-flight requests).
+function currentStepApprovers(req: Doc<"leaveRequests">): {
+  ids: Id<"users">[];
+  index: number;
+} {
+  if (req.approvalChain && req.approvalChain.length > 0) {
+    const index = req.currentStepIndex ?? 0;
+    const step = req.approvalChain[index];
+    const ids =
+      step?.approverUserIds ??
+      (step?.approverUserId ? [step.approverUserId] : []);
+    return { ids, index };
   }
-  if (mode === "specific" && value) return value as Id<"users">;
-  return undefined;
+  const legacy =
+    req.approvalStep === 2 ? req.secondApproverUserId : req.firstApproverUserId;
+  return { ids: legacy ? [legacy] : [], index: (req.approvalStep ?? 1) - 1 };
+}
+
+// Whether `userId` appears anywhere in the request's approval chain (used to let
+// an approver open a request they've already acted on or will act on later).
+function isChainApprover(
+  req: Doc<"leaveRequests">,
+  userId: Id<"users">,
+): boolean {
+  if (req.approvalChain && req.approvalChain.length > 0) {
+    return req.approvalChain.some((s) =>
+      (s.approverUserIds ?? (s.approverUserId ? [s.approverUserId] : [])).includes(
+        userId,
+      ),
+    );
+  }
+  return (
+    req.firstApproverUserId === userId || req.secondApproverUserId === userId
+  );
 }
 
 type TimelineEvent = {
@@ -137,13 +293,20 @@ async function assertCanApprove(
   orgCtx: OrgContext,
   req: Doc<"leaveRequests">,
 ) {
-  if (ctxHasPermission(orgCtx, "leave:approve:all")) return;
-  const approverForStep =
-    req.approvalStep === 2 ? req.secondApproverUserId : req.firstApproverUserId;
-  if (approverForStep && approverForStep === orgCtx.userId) return;
-  const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
-  const employee = await ctx.db.get(req.employeeId);
-  if (own && employee && employee.managerId === own._id) return;
+  // Only the current step's eligible approvers may act — the chain is enforced
+  // in order, so even a `leave:approve:all` admin can't approve a later step
+  // before the earlier ones are done (they'd act on the current step, which is
+  // the manager's/earlier approver's, bypassing them).
+  const { ids } = currentStepApprovers(req);
+  if (ids.includes(orgCtx.userId)) return;
+  // Legacy in-flight requests (no chain) keep the old behavior: admins with
+  // org-wide approval and the requester's direct manager may act.
+  if (!req.approvalChain || req.approvalChain.length === 0) {
+    if (ctxHasPermission(orgCtx, "leave:approve:all")) return;
+    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const employee = await ctx.db.get(req.employeeId);
+    if (own && employee && employee.managerId === own._id) return;
+  }
   throw new Error("Not authorized to act on this request.");
 }
 
@@ -166,6 +329,24 @@ async function notify(
     entityRef: { table: "leaveRequests", id: requestId },
     read: false,
   });
+}
+
+// Notify every eligible approver of a resolved chain step.
+async function notifyStep(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  step: ResolvedLeaveStep | undefined,
+  type: string,
+  title: string,
+  body: string,
+  requestId: Id<"leaveRequests">,
+) {
+  if (!step) return;
+  const ids = step.approverUserIds ??
+    (step.approverUserId ? [step.approverUserId] : []);
+  for (const id of ids) {
+    await notify(ctx, orgId, id, type, title, body, requestId);
+  }
 }
 
 // Reverse a request's outstanding balance effect (used by cancel/modify/delete).
@@ -266,32 +447,14 @@ export const apply = mutation({
     const year = Number(args.startDate.slice(0, 4));
     const tracked = policy.entitlementMode === "fixed";
 
-    // Resolve the approval chain.
-    const firstApproverUserId = await resolveApprover(
-      ctx,
-      own,
-      policy.firstApproverMode,
-      policy.firstApproverValue,
-    );
-    const secondApproverUserId = await resolveApprover(
-      ctx,
-      own,
-      policy.secondApproverMode,
-      policy.secondApproverValue,
-    );
-    const step1Active = policy.firstApproverMode !== "none" && !!firstApproverUserId;
-    const step2Active = policy.secondApproverMode !== "none" && !!secondApproverUserId;
-
+    // Resolve the approval chain from the policy. No routable approver (or a
+    // type that doesn't require approval) auto-approves.
+    const chain = await buildLeaveApprovalChain(ctx, orgId, own, policy, totalDays);
     let status: Doc<"leaveRequests">["status"] = "approved";
-    let approvalStep: number | undefined = undefined;
-    if (leaveType.requiresApproval) {
-      if (step1Active) {
-        status = "pending";
-        approvalStep = 1;
-      } else if (step2Active) {
-        status = "pending";
-        approvalStep = 2;
-      }
+    let currentStepIndex: number | undefined = undefined;
+    if (leaveType.requiresApproval && chain.length > 0) {
+      status = "pending";
+      currentStepIndex = 0;
     }
 
     if (tracked) {
@@ -335,19 +498,16 @@ export const apply = mutation({
       status,
       approverUserId: status === "approved" ? userId : undefined,
       decidedAt: status === "approved" ? Date.now() : undefined,
-      approvalStep,
-      firstApproverUserId,
-      secondApproverUserId,
+      approvalChain: status === "pending" ? chain : undefined,
+      currentStepIndex,
       timeline,
     });
 
     if (status === "pending") {
-      const recipient =
-        approvalStep === 2 ? secondApproverUserId : firstApproverUserId;
-      await notify(
+      await notifyStep(
         ctx,
         orgId,
-        recipient,
+        chain[0],
         "leave.requested",
         "Leave request",
         `${own.firstName} ${own.lastName} requested ${totalDays} day(s) of ${leaveType.name}`,
@@ -378,6 +538,104 @@ export const approve = mutation({
     }
     await assertCanApprove(ctx, orgCtx, req);
 
+    // ── Chain-based approval (individual, one step at a time) ──
+    if (req.approvalChain && req.approvalChain.length > 0) {
+      const i = req.currentStepIndex ?? 0;
+      const now = Date.now();
+      const chain = req.approvalChain.map((s, idx) =>
+        idx === i
+          ? { ...s, decidedByUserId: orgCtx.userId, decidedAt: now, note }
+          : s,
+      );
+      const nextIndex = i + 1;
+      if (nextIndex < chain.length) {
+        // Advance to the next approver.
+        await ctx.db.patch(requestId, {
+          approvalChain: chain,
+          currentStepIndex: nextIndex,
+          status: "pending",
+          timeline: pushTimeline(req, {
+            at: now,
+            actorUserId: orgCtx.userId,
+            type: "approved_step",
+            note,
+          }),
+        });
+        await notifyStep(
+          ctx,
+          orgCtx.orgId,
+          chain[nextIndex] as ResolvedLeaveStep,
+          "leave.requested",
+          "Leave request (next approval)",
+          "A leave request needs your approval.",
+          requestId,
+        );
+        await writeAuditLog(ctx, {
+          orgId: orgCtx.orgId,
+          actorUserId: orgCtx.userId,
+          action: "leave.approve",
+          entity: "leaveRequests",
+          entityId: requestId,
+          after: { step: nextIndex },
+        });
+        return null;
+      }
+      // Final step approved → finalize the request.
+      const policy = await resolvePolicyForEmployee(
+        ctx,
+        orgCtx.orgId,
+        req.leaveTypeId,
+        req.employeeId,
+      );
+      const leaveType = await ctx.db.get(req.leaveTypeId);
+      if (leaveType && policy?.entitlementMode === "fixed") {
+        const year = Number(req.startDate.slice(0, 4));
+        const bal = await ensureBalance(
+          ctx,
+          orgCtx.orgId,
+          req.employeeId,
+          leaveType,
+          year,
+        );
+        await ctx.db.patch(bal._id, {
+          pendingDays: Math.max(0, bal.pendingDays - req.totalDays),
+          takenDays: bal.takenDays + req.totalDays,
+        });
+      }
+      await ctx.db.patch(requestId, {
+        status: "approved",
+        approvalChain: chain,
+        approverUserId: orgCtx.userId,
+        decidedAt: now,
+        decisionNote: note,
+        timeline: pushTimeline(req, {
+          at: now,
+          actorUserId: orgCtx.userId,
+          type: "approved",
+          note,
+        }),
+      });
+      const emp = await ctx.db.get(req.employeeId);
+      await notify(
+        ctx,
+        orgCtx.orgId,
+        emp?.userId,
+        "leave.approved",
+        "Leave approved",
+        `Your leave on ${req.startDate} was approved.`,
+        requestId,
+      );
+      await writeAuditLog(ctx, {
+        orgId: orgCtx.orgId,
+        actorUserId: orgCtx.userId,
+        action: "leave.approve",
+        entity: "leaveRequests",
+        entityId: requestId,
+      });
+      return null;
+    }
+
+    // ── Legacy two-step path (in-flight requests without a chain) ──
     const advanceToStep2 =
       req.approvalStep === 1 && !!req.secondApproverUserId;
 
@@ -471,13 +729,24 @@ export const reject = mutation({
     }
     await assertCanApprove(ctx, orgCtx, req);
     await reverseBalance(ctx, orgCtx.orgId, req);
+    const now = Date.now();
+    // Record the rejection on the current chain step, if any.
+    const rejectedChain =
+      req.approvalChain && req.approvalChain.length > 0
+        ? req.approvalChain.map((s, idx) =>
+            idx === (req.currentStepIndex ?? 0)
+              ? { ...s, decidedByUserId: orgCtx.userId, decidedAt: now, note }
+              : s,
+          )
+        : undefined;
     await ctx.db.patch(requestId, {
       status: "rejected",
       approverUserId: orgCtx.userId,
-      decidedAt: Date.now(),
+      decidedAt: now,
       decisionNote: note,
+      ...(rejectedChain ? { approvalChain: rejectedChain } : {}),
       timeline: pushTimeline(req, {
-        at: Date.now(),
+        at: now,
         actorUserId: orgCtx.userId,
         type: "rejected",
         note,
@@ -643,32 +912,19 @@ export const respond = mutation({
       );
     }
 
-    // Resolve the approval chain afresh and re-enter at the first active step.
-    const firstApproverUserId = await resolveApprover(
+    // Rebuild the approval chain afresh and re-enter at the first step.
+    const chain = await buildLeaveApprovalChain(
       ctx,
+      orgCtx.orgId,
       own,
-      policy.firstApproverMode,
-      policy.firstApproverValue,
+      policy,
+      totalDays,
     );
-    const secondApproverUserId = await resolveApprover(
-      ctx,
-      own,
-      policy.secondApproverMode,
-      policy.secondApproverValue,
-    );
-    const step1Active = policy.firstApproverMode !== "none" && !!firstApproverUserId;
-    const step2Active = policy.secondApproverMode !== "none" && !!secondApproverUserId;
-
     let status: Doc<"leaveRequests">["status"] = "approved";
-    let approvalStep: number | undefined = undefined;
-    if (leaveType.requiresApproval) {
-      if (step1Active) {
-        status = "pending";
-        approvalStep = 1;
-      } else if (step2Active) {
-        status = "pending";
-        approvalStep = 2;
-      }
+    let currentStepIndex: number | undefined = undefined;
+    if (leaveType.requiresApproval && chain.length > 0) {
+      status = "pending";
+      currentStepIndex = 0;
     }
 
     // Rebalance: drop the old effect, then re-apply the new pending/taken days.
@@ -708,9 +964,12 @@ export const respond = mutation({
       totalDays,
       reason: args.reason ?? req.reason,
       status,
-      approvalStep,
-      firstApproverUserId,
-      secondApproverUserId,
+      approvalChain: status === "pending" ? chain : undefined,
+      currentStepIndex,
+      // Clear any legacy two-step fields so the rebuilt chain is authoritative.
+      approvalStep: undefined,
+      firstApproverUserId: undefined,
+      secondApproverUserId: undefined,
       approverUserId: status === "approved" ? orgCtx.userId : undefined,
       decidedAt: status === "approved" ? Date.now() : undefined,
       decisionNote: undefined,
@@ -723,12 +982,10 @@ export const respond = mutation({
     });
 
     if (status === "pending") {
-      const recipient =
-        approvalStep === 2 ? secondApproverUserId : firstApproverUserId;
-      await notify(
+      await notifyStep(
         ctx,
         orgCtx.orgId,
-        recipient,
+        chain[0],
         "leave.resubmitted",
         "Leave resubmitted",
         `${own.firstName} ${own.lastName} updated and resubmitted a ${leaveType.name} request.`,
@@ -883,10 +1140,9 @@ export const nudgeApprovers = mutation({
       .collect();
     const counts = new Map<Id<"users">, number>();
     for (const req of pending) {
-      const approver =
-        req.approvalStep === 2 ? req.secondApproverUserId : req.firstApproverUserId;
-      if (!approver) continue;
-      counts.set(approver, (counts.get(approver) ?? 0) + 1);
+      for (const approver of currentStepApprovers(req).ids) {
+        counts.set(approver, (counts.get(approver) ?? 0) + 1);
+      }
     }
     let nudged = 0;
     for (const [approver, count] of counts) {
@@ -933,35 +1189,25 @@ export const mine = query({
   },
 });
 
-// Pending requests the caller can approve.
+// Requests currently awaiting the caller's decision — i.e. sitting on the step
+// the caller is an approver for. Deliberately NOT everything-pending for
+// `leave:approve:all` holders: the chain is chronological, so a later approver
+// must not see (or act on) a request until the earlier steps have approved.
+// Org-wide oversight of all requests lives in the HR Lounge (`leaveDashboard`).
 export const approvalQueue = query({
   args: {},
   returns: v.array(leaveRequestRow),
   handler: async (ctx) => {
     const orgCtx = await getOrgContext(ctx);
     if (!orgCtx) return [];
-    if (ctxHasPermission(orgCtx, "leave:approve:all")) {
-      const reqs = await ctx.db
-        .query("leaveRequests")
-        .withIndex("by_org_status", (q) =>
-          q.eq("orgId", orgCtx.orgId).eq("status", "pending"),
-        )
-        .collect();
-      return await Promise.all(reqs.map((r) => hydrate(ctx, r)));
-    }
-    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
-    if (!own) return [];
     const pending = await ctx.db
       .query("leaveRequests")
       .withIndex("by_org_status", (q) =>
         q.eq("orgId", orgCtx.orgId).eq("status", "pending"),
       )
       .collect();
-    // A manager sees requests routed to them (either approval step).
-    const mineToApprove = pending.filter(
-      (r) =>
-        r.firstApproverUserId === orgCtx.userId ||
-        r.secondApproverUserId === orgCtx.userId,
+    const mineToApprove = pending.filter((r) =>
+      currentStepApprovers(r).ids.includes(orgCtx.userId),
     );
     return await Promise.all(mineToApprove.map((r) => hydrate(ctx, r)));
   },
@@ -1000,9 +1246,10 @@ export const get = query({
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isOwner = !!own && own._id === req.employeeId;
     const canManage = ctxHasPermission(orgCtx, "leave:approve:all");
-    const isApprover =
-      req.firstApproverUserId === orgCtx.userId ||
-      req.secondApproverUserId === orgCtx.userId;
+    // Anyone in the chain (past, current, or upcoming) may view the request; the
+    // current step's approvers may act on it.
+    const isApprover = isChainApprover(req, orgCtx.userId);
+    const canActNow = currentStepApprovers(req).ids.includes(orgCtx.userId);
     if (!isOwner && !canManage && !isApprover) return null;
 
     const [emp, lt] = await Promise.all([
@@ -1011,12 +1258,38 @@ export const get = query({
     ]);
     const dept = emp?.departmentId ? await ctx.db.get(emp.departmentId) : null;
     const position = emp?.positionId ? await ctx.db.get(emp.positionId) : null;
+
+    // Resolve the chain for the stepper. Legacy in-flight requests (no chain)
+    // still report their two-step approver names below.
+    const curIndex = req.currentStepIndex ?? 0;
+    const approvalChainView = req.approvalChain
+      ? await Promise.all(
+          req.approvalChain.map(async (s, idx) => {
+            let state: "approved" | "current" | "upcoming" | "rejected";
+            if (req.status === "approved") state = "approved";
+            else if (req.status === "rejected")
+              state = idx < curIndex ? "approved" : idx === curIndex ? "rejected" : "upcoming";
+            else state = idx < curIndex ? "approved" : idx === curIndex ? "current" : "upcoming";
+            return {
+              label: s.label,
+              approverName: await userName(ctx, s.approverUserId),
+              state,
+              note: s.note ?? null,
+              decidedAt: s.decidedAt ?? null,
+            };
+          }),
+        )
+      : [];
+
     const [firstApproverName, secondApproverName] = await Promise.all([
       userName(ctx, req.firstApproverUserId),
       userName(ctx, req.secondApproverUserId),
     ]);
-    const currentApproverName =
-      req.approvalStep === 2 ? secondApproverName : firstApproverName;
+    const currentApproverName = req.approvalChain
+      ? (approvalChainView[curIndex]?.approverName ?? null)
+      : req.approvalStep === 2
+        ? secondApproverName
+        : firstApproverName;
 
     const timeline = await Promise.all(
       (req.timeline ?? []).map(async (e) => ({
@@ -1053,12 +1326,17 @@ export const get = query({
         : null,
       decisionNote: req.decisionNote,
       approvalStep: req.approvalStep ?? null,
-      firstApproverName,
-      secondApproverName,
+      firstApproverName: req.approvalChain ? null : firstApproverName,
+      secondApproverName: req.approvalChain ? null : secondApproverName,
       currentApproverName,
+      approvalChain: approvalChainView,
       timeline,
+      // For chain requests only the current-step approver may act (order is
+      // enforced); legacy requests keep the manage-can-approve behavior.
       canApprove:
-        (canManage || isApprover) &&
+        (req.approvalChain && req.approvalChain.length > 0
+          ? canActNow
+          : canManage || canActNow) &&
         (req.status === "pending" || req.status === "info_requested"),
       canManage,
     };

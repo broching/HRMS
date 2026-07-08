@@ -11,6 +11,7 @@ import {
   incrementMode,
   roundingMode,
   seniorityRule,
+  leaveApproverStep,
 } from "./lib/enums";
 import { requireOrg, requirePermission } from "./auth";
 import {
@@ -134,6 +135,42 @@ export const assignmentsForType = query({
   },
 });
 
+// Members (for the "specific person(s)" picker) + roles (for the "role" picker)
+// used by the leave approval-chain editor.
+export const approverOptions = query({
+  args: {},
+  returns: v.object({
+    members: v.array(v.object({ userId: v.id("users"), name: v.string() })),
+    roles: v.array(v.object({ _id: v.id("roles"), name: v.string() })),
+  }),
+  handler: async (ctx) => {
+    const { orgId } = await requirePermission(ctx, "leave:config");
+    const members = await ctx.db
+      .query("members")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    const active = members.filter((m) => m.status === "active");
+    const resolved = await Promise.all(
+      active.map(async (m) => {
+        const user = await ctx.db.get(m.userId);
+        const name =
+          user?.name?.trim() || user?.username || user?.email || "Unknown";
+        return { userId: m.userId, name };
+      }),
+    );
+    resolved.sort((a, b) => a.name.localeCompare(b.name));
+    const roles = await ctx.db
+      .query("roles")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    roles.sort((a, b) => a.order - b.order);
+    return {
+      members: resolved,
+      roles: roles.map((r) => ({ _id: r._id, name: r.name })),
+    };
+  },
+});
+
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 // Patch arguments — every configurable field is optional so the editor can
@@ -143,6 +180,7 @@ const policyPatchArgs = {
   description: v.optional(v.string()),
   availability: v.optional(policyAvailability),
   order: v.optional(v.number()),
+  approvalChain: v.optional(v.array(leaveApproverStep)),
   firstApproverMode: v.optional(approverMode),
   firstApproverValue: v.optional(v.string()),
   secondApproverMode: v.optional(approverMode),
@@ -190,6 +228,9 @@ export const create = mutation({
       name,
       availability: "groups",
       isDefault: false,
+      approvalChain: [
+        { approverType: "position", value: "manager", thresholdEnabled: false },
+      ],
       firstApproverMode: "manager",
       secondApproverMode: "none",
       entitlementMode: "fixed",

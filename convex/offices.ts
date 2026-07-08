@@ -19,6 +19,17 @@ export const list = query({
   },
 });
 
+export const get = query({
+  args: { id: v.id("offices") },
+  returns: v.union(officeDoc, v.null()),
+  handler: async (ctx, { id }) => {
+    const { orgId } = await requireOrg(ctx);
+    const office = await ctx.db.get(id);
+    if (!office || office.orgId !== orgId) return null;
+    return office;
+  },
+});
+
 export const create = mutation({
   args: {
     name: v.string(),

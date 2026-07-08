@@ -215,13 +215,22 @@ export const save = mutation({
         }
         matchedRoles.add(flow.match.roleId);
       } else if (flow.match.type === "person") {
-        if (!flow.match.userId) {
-          throw new Error("Pick a person for each specific-person flow.");
+        // New saves carry `userIds`; tolerate the legacy single `userId`.
+        const people =
+          flow.match.userIds && flow.match.userIds.length > 0
+            ? flow.match.userIds
+            : flow.match.userId
+              ? [flow.match.userId]
+              : [];
+        if (people.length === 0) {
+          throw new Error("Pick at least one person for each specific-person flow.");
         }
-        if (matchedPeople.has(flow.match.userId)) {
-          throw new Error("Two flows can't target the same person.");
+        for (const userId of people) {
+          if (matchedPeople.has(userId)) {
+            throw new Error("Two flows can't target the same person.");
+          }
+          matchedPeople.add(userId);
         }
-        matchedPeople.add(flow.match.userId);
       }
       // Every workflow step targeting a group must reference an existing one.
       for (const step of flow.workflow) {

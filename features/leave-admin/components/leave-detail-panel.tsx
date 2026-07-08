@@ -91,7 +91,7 @@ export function LeaveDetailPanel({
 
   return (
     <Sheet open={!!requestId} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-md">
+      <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-xl">
         {detail === undefined ? (
           <div className="flex flex-col gap-4 p-6">
             <Skeleton className="h-10 w-48" />
@@ -179,11 +179,24 @@ export function LeaveDetailPanel({
                   {LEAVE_STATUS_LABELS[detail.status]}
                 </span>
               </Field>
-              <Field label="1st Approver">
-                {detail.firstApproverName ?? "—"}
-              </Field>
-              {detail.secondApproverName && (
-                <Field label="2nd Approver">{detail.secondApproverName}</Field>
+              {detail.approvalChain.length > 0 ? (
+                <div className="grid grid-cols-[120px_1fr] items-start gap-2 text-sm">
+                  <dt className="text-muted-foreground">Approval chain</dt>
+                  <dd>
+                    <ApprovalChain steps={detail.approvalChain} />
+                  </dd>
+                </div>
+              ) : (
+                <>
+                  <Field label="1st Approver">
+                    {detail.firstApproverName ?? "—"}
+                  </Field>
+                  {detail.secondApproverName && (
+                    <Field label="2nd Approver">
+                      {detail.secondApproverName}
+                    </Field>
+                  )}
+                </>
               )}
               <Field label="Attachment">
                 {detail.attachmentUrl ? (
@@ -354,6 +367,72 @@ export function LeaveDetailPanel({
         )}
       </SheetContent>
     </Sheet>
+  )
+}
+
+type ChainStep = {
+  label: string
+  approverName: string | null
+  state: "approved" | "current" | "upcoming" | "rejected"
+  note: string | null
+  decidedAt: number | null
+}
+
+// Vertical stepper of the request's approval chain, marking each step's state.
+function ApprovalChain({ steps }: { steps: ChainStep[] }) {
+  return (
+    <ol className="flex flex-col gap-2.5">
+      {steps.map((s, i) => {
+        const done = s.state === "approved"
+        const rejected = s.state === "rejected"
+        const current = s.state === "current"
+        return (
+          <li key={i} className="flex items-start gap-2.5">
+            <span
+              className={cn(
+                "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold",
+                done && "bg-primary text-primary-foreground border-transparent",
+                rejected && "border-transparent bg-red-500 text-white",
+                current && "border-primary text-primary",
+                s.state === "upcoming" &&
+                  "border-muted-foreground/30 text-muted-foreground",
+              )}
+            >
+              {done ? (
+                <IconCheck className="size-3.5" />
+              ) : rejected ? (
+                <IconX className="size-3.5" />
+              ) : (
+                i + 1
+              )}
+            </span>
+            <div className="flex min-w-0 flex-col">
+              <span className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "font-medium",
+                    s.state === "upcoming" &&
+                      "text-muted-foreground font-normal",
+                  )}
+                >
+                  {s.label}
+                </span>
+                {current && (
+                  <span className="bg-muted text-foreground/70 rounded-full px-2 py-0.5 text-xs">
+                    Awaiting
+                  </span>
+                )}
+              </span>
+              {s.note && (
+                <span className="text-muted-foreground mt-0.5 text-xs">
+                  “{s.note}”
+                </span>
+              )}
+            </div>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 

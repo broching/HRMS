@@ -143,6 +143,14 @@ export function defaultLeavePolicyFields(lt: {
     name: "All Employees",
     availability: "all" as const,
     isDefault: true,
+    // Default approval chain: the requester's direct manager.
+    approvalChain: [
+      {
+        approverType: "position" as const,
+        value: "manager",
+        thresholdEnabled: false,
+      },
+    ],
     firstApproverMode: "manager" as const,
     secondApproverMode: "none" as const,
     entitlementMode: (tracked ? "fixed" : "upon_request") as

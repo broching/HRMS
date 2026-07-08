@@ -27,6 +27,7 @@ import {
   roundingMode,
   seniorityRule,
   leaveTimelineEvent,
+  leaveApproverStep,
   claimCategory,
   claimStatus,
   claimApproverStep,
@@ -309,6 +310,7 @@ export const leavePolicyDoc = v.object({
   availability: policyAvailability,
   isDefault: v.boolean(),
   order: v.optional(v.number()),
+  approvalChain: v.optional(v.array(leaveApproverStep)),
   firstApproverMode: approverMode,
   firstApproverValue: v.optional(v.string()),
   secondApproverMode: approverMode,
@@ -405,6 +407,23 @@ export const leaveRequestDetail = v.object({
   firstApproverName: v.union(v.string(), v.null()),
   secondApproverName: v.union(v.string(), v.null()),
   currentApproverName: v.union(v.string(), v.null()),
+  // Resolved approval chain for the stepper. Each item is one step with its
+  // display label, primary approver name, and state relative to the request's
+  // progress. Empty for auto-approved requests with no chain.
+  approvalChain: v.array(
+    v.object({
+      label: v.string(),
+      approverName: v.union(v.string(), v.null()),
+      state: v.union(
+        v.literal("approved"),
+        v.literal("current"),
+        v.literal("upcoming"),
+        v.literal("rejected"),
+      ),
+      note: v.union(v.string(), v.null()),
+      decidedAt: v.union(v.number(), v.null()),
+    }),
+  ),
   timeline: v.array(
     v.object({
       at: v.number(),

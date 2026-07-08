@@ -32,6 +32,8 @@ import {
   roundingMode,
   seniorityRule,
   leaveTimelineEvent,
+  leaveApproverStep,
+  leaveChainStep,
   claimCategory,
   claimStatus,
   claimApproverStep,
@@ -362,7 +364,12 @@ export default defineSchema({
     availability: policyAvailability,
     isDefault: v.boolean(),
     order: v.optional(v.number()),
-    // Approval chain.
+    // Approval chain. `approvalChain` is the ordered multi-step chain (manager /
+    // department_head / role / specific person(s), each optionally day-gated).
+    // The legacy `firstApproverMode` / `secondApproverMode` fields are retained
+    // for policies saved before the chain existed; resolution falls back to them
+    // when `approvalChain` is absent.
+    approvalChain: v.optional(v.array(leaveApproverStep)),
     firstApproverMode: approverMode,
     firstApproverValue: v.optional(v.string()), // userId when mode = specific
     secondApproverMode: approverMode,
@@ -438,8 +445,15 @@ export default defineSchema({
     approverUserId: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
     decisionNote: v.optional(v.string()),
-    // Two-step approval: which step is currently pending (1 or 2), and the
-    // resolved approvers for each step (from the applicable policy).
+    // Approval chain snapshotted from the policy at apply time. While pending,
+    // the request is at `currentStepIndex` in `approvalChain`; each step is
+    // approved individually and any of its eligible approvers can act. Absent on
+    // legacy in-flight requests, which fall back to the two-step fields below.
+    approvalChain: v.optional(v.array(leaveChainStep)),
+    currentStepIndex: v.optional(v.number()),
+    // Legacy two-step approval: which step is currently pending (1 or 2), and
+    // the resolved approvers for each step. Kept for requests created before the
+    // chain existed.
     approvalStep: v.optional(v.number()),
     firstApproverUserId: v.optional(v.id("users")),
     secondApproverUserId: v.optional(v.id("users")),

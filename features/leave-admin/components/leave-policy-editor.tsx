@@ -33,6 +33,11 @@ import { cn } from "@/lib/utils"
 import { ConfirmDialog } from "@/components/shared/confirm-dialog"
 import { AssignPolicyDialog } from "./assign-policy-dialog"
 import { InitialBalancesDialog } from "./initial-balances-dialog"
+import {
+  LeaveApprovalChainEditor,
+  newLeaveStepKey,
+  type LeaveStepForm,
+} from "./leave-approval-chain-editor"
 
 type Policy = FunctionReturnType<typeof api.leavePolicies.listForType>[number]
 
@@ -41,8 +46,7 @@ type Form = {
   name: string
   description: string
   availability: "all" | "groups"
-  firstApproverMode: string
-  secondApproverMode: string
+  approvalChain: LeaveStepForm[]
   entitlementMode: "fixed" | "upon_request"
   entitlementDays: number
   toleranceDays: number | undefined
@@ -66,13 +70,53 @@ type Form = {
   maxConsecutiveDays: number | undefined
 }
 
+// Seed the approval-chain editor from the policy's saved chain, falling back to
+// its legacy two-step approver modes for policies saved before the chain.
+function policyChainToForm(p: Policy): LeaveStepForm[] {
+  const raw =
+    p.approvalChain && p.approvalChain.length > 0
+      ? p.approvalChain
+      : legacyChain(p)
+  return raw.map((s) => ({
+    key: newLeaveStepKey(),
+    approverType: s.approverType,
+    value: s.value,
+    userIds: s.userIds ?? [],
+    thresholdEnabled: s.thresholdEnabled,
+    daysMoreThan: s.daysMoreThan != null ? String(s.daysMoreThan) : "",
+  }))
+}
+
+function legacyChain(p: Policy): NonNullable<Policy["approvalChain"]> {
+  const out: NonNullable<Policy["approvalChain"]> = []
+  const modes = [
+    [p.firstApproverMode, p.firstApproverValue] as const,
+    [p.secondApproverMode, p.secondApproverValue] as const,
+  ]
+  for (const [mode, value] of modes) {
+    if (mode === "manager" || mode === "department_head") {
+      out.push({ approverType: "position", value: mode, thresholdEnabled: false })
+    } else if (mode === "specific" && value) {
+      out.push({
+        approverType: "specific",
+        value: "",
+        userIds: [value as Id<"users">],
+        thresholdEnabled: false,
+      })
+    }
+  }
+  if (out.length === 0) {
+    out.push({ approverType: "position", value: "manager", thresholdEnabled: false })
+  }
+  return out
+}
+
 function toForm(p: Policy): Form {
   return {
     name: p.name,
     description: p.description ?? "",
     availability: p.availability,
-    firstApproverMode: p.firstApproverMode,
-    secondApproverMode: p.secondApproverMode,
+    approvalChain: policyChainToForm(p),
     entitlementMode: p.entitlementMode,
     entitlementDays: p.entitlementDays,
     toleranceDays: p.toleranceDays,
@@ -107,6 +151,7 @@ export function LeavePolicyEditor({
 }) {
   const leaveTypes = useQuery(api.leaveTypes.list, { includeInactive: true })
   const policies = useQuery(api.leavePolicies.listForType, { leaveTypeId })
+  const approverOptions = useQuery(api.leavePolicies.approverOptions)
   const createPolicy = useMutation(api.leavePolicies.create)
   const updatePolicy = useMutation(api.leavePolicies.update)
   const removePolicy = useMutation(api.leavePolicies.remove)
@@ -238,6 +283,14 @@ export function LeavePolicyEditor({
             key={selected._id}
             policy={selected}
             leaveTypes={leaveTypes.filter((t) => t._id !== leaveTypeId)}
+            roleOpts={(approverOptions?.roles ?? []).map((r) => ({
+              value: r._id as string,
+              label: r.name,
+            }))}
+            memberOpts={(approverOptions?.members ?? []).map((m) => ({
+              value: m.userId as string,
+              label: m.name,
+            }))}
             onSave={(patch) =>
               updatePolicy({ policyId: selected._id, ...patch }).then(
                 () => toast.success("Policy saved"),
@@ -436,11 +489,15 @@ function NumberField({
 function PolicyForm({
   policy,
   leaveTypes,
+  roleOpts,
+  memberOpts,
   onSave,
   onDelete,
 }: {
   policy: Policy
   leaveTypes: { _id: Id<"leaveTypes">; name: string }[]
+  roleOpts: { value: string; label: string }[]
+  memberOpts: { value: string; label: string }[]
   onSave: (patch: Record<string, unknown>) => void
   onDelete?: () => void
 }) {
@@ -449,12 +506,32 @@ function PolicyForm({
     setF((prev) => ({ ...prev, [k]: v }))
 
   function save() {
+    // Validate the approval chain before saving.
+    for (const s of f.approvalChain) {
+      if (s.approverType === "role" && !s.value) {
+        toast.error("Pick a role for each role approver step.")
+        return
+      }
+      if (s.approverType === "specific" && s.userIds.length === 0) {
+        toast.error("Pick at least one person for each specific approver step.")
+        return
+      }
+    }
+    const approvalChain = f.approvalChain.map((s) => ({
+      approverType: s.approverType,
+      value: s.approverType === "specific" ? "" : s.value,
+      userIds: s.approverType === "specific" ? s.userIds : undefined,
+      thresholdEnabled: s.thresholdEnabled,
+      daysMoreThan:
+        s.thresholdEnabled && s.daysMoreThan !== ""
+          ? Number(s.daysMoreThan)
+          : undefined,
+    }))
     onSave({
       name: f.name,
       description: f.description || undefined,
       availability: f.availability,
-      firstApproverMode: f.firstApproverMode,
-      secondApproverMode: f.secondApproverMode,
+      approvalChain,
       entitlementMode: f.entitlementMode,
       entitlementDays: f.entitlementDays,
       toleranceDays: f.toleranceDays,
@@ -481,12 +558,6 @@ function PolicyForm({
       maxConsecutiveDays: f.maxConsecutiveDays,
     })
   }
-
-  const APPROVERS = [
-    { value: "manager", label: "Manager" },
-    { value: "department_head", label: "Department head" },
-    { value: "none", label: "None" },
-  ]
 
   return (
     <div className="rounded-lg border px-4">
@@ -519,45 +590,16 @@ function PolicyForm({
         />
       </Section>
 
-      <Section title="Leave approval">
-        <div className="flex flex-wrap gap-4">
-          <div className="grid gap-1.5">
-            <Label className="text-xs">First approver</Label>
-            <Select
-              value={f.firstApproverMode}
-              onValueChange={(v) => set("firstApproverMode", v)}
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {APPROVERS.map((a) => (
-                  <SelectItem key={a.value} value={a.value}>
-                    {a.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-1.5">
-            <Label className="text-xs">Second approver</Label>
-            <Select
-              value={f.secondApproverMode}
-              onValueChange={(v) => set("secondApproverMode", v)}
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {APPROVERS.map((a) => (
-                  <SelectItem key={a.value} value={a.value}>
-                    {a.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+      <Section
+        title="Leave approval"
+        description="Ordered approval chain. Each request walks the steps one at a time; any of a step's approvers can approve or reject it individually."
+      >
+        <LeaveApprovalChainEditor
+          steps={f.approvalChain}
+          onChange={(chain) => set("approvalChain", chain)}
+          roleOpts={roleOpts}
+          memberOpts={memberOpts}
+        />
       </Section>
 
       <Section title="Entitlement">

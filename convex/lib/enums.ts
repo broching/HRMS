@@ -223,6 +223,44 @@ export const approverMode = v.union(
 );
 export type ApproverMode = "manager" | "department_head" | "specific" | "none";
 
+// ─── Leave approval chain ──────────────────────────────────────────────────
+// A leave policy owns an ordered approval chain. Each step resolves to one or
+// more eligible approvers; any one of them can approve, and leave requests are
+// approved/rejected individually (never batched). `approverType`:
+//   "position" — resolved relative to the requester (value = manager |
+//                 department_head).
+//   "role"     — anyone holding the RBAC role (value = roleId).
+//   "specific" — any one of the named members (userIds).
+// When `thresholdEnabled`, the step applies only when the request's day count
+// is greater than `daysMoreThan`.
+export const leaveApproverType = v.union(
+  v.literal("position"),
+  v.literal("role"),
+  v.literal("specific"),
+);
+export type LeaveApproverType = "position" | "role" | "specific";
+export const leaveApproverStep = v.object({
+  approverType: leaveApproverType,
+  value: v.string(), // "manager" | "department_head" (position) | roleId (role)
+  userIds: v.optional(v.array(v.id("users"))), // for "specific"
+  thresholdEnabled: v.boolean(),
+  daysMoreThan: v.optional(v.number()),
+});
+
+// One resolved step of a leave request's approval chain, snapshotted at apply
+// time. Any of `approverUserIds` can act; `approverUserId` is the primary
+// (first) for notification/legacy checks.
+export const leaveChainStep = v.object({
+  approverType: leaveApproverType,
+  value: v.string(),
+  approverUserId: v.optional(v.id("users")),
+  approverUserIds: v.optional(v.array(v.id("users"))),
+  label: v.string(), // e.g. "Manager — Jane Tan" or "Role — HR"
+  decidedByUserId: v.optional(v.id("users")),
+  decidedAt: v.optional(v.number()),
+  note: v.optional(v.string()),
+});
+
 // `fixed` credits a set number of days; `upon_request` tracks no balance (e.g.
 // unpaid leave) and is always available.
 export const entitlementMode = v.union(
@@ -416,7 +454,11 @@ export const claimFlowMatchType = v.union(
 export const claimFlowMatch = v.object({
   type: claimFlowMatchType,
   roleId: v.optional(v.id("roles")), // when type === "role"
-  userId: v.optional(v.id("users")), // when type === "person"
+  // when type === "person": the flow applies to every listed member. `userId`
+  // is the legacy single-person field, still read for flows saved before
+  // multi-person matching existed; new saves populate `userIds`.
+  userId: v.optional(v.id("users")),
+  userIds: v.optional(v.array(v.id("users"))),
 });
 export const claimApprovalFlow = v.object({
   id: v.string(),

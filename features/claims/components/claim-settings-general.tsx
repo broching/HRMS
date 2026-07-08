@@ -153,7 +153,7 @@ type FlowForm = {
   name: string
   matchType: "default" | "role" | "person"
   roleId?: Id<"roles">
-  userId?: Id<"users">
+  userIds: Id<"users">[] // people a "person" flow applies to (any of them)
   workflow: StepForm[]
 }
 type FormState = {
@@ -623,7 +623,10 @@ export function ClaimSettingsGeneral() {
             name: f.name,
             matchType: f.match.type,
             roleId: f.match.roleId,
-            userId: f.match.userId,
+            // Seed from the multi-person list, falling back to the legacy single
+            // person for flows saved before multi-person matching.
+            userIds:
+              f.match.userIds ?? (f.match.userId ? [f.match.userId] : []),
             workflow: f.workflow.map((s) => ({
               key: newId(),
               approverType: s.approverType,
@@ -784,8 +787,8 @@ export function ClaimSettingsGeneral() {
         toast.error("Pick a role for each role flow.")
         return
       }
-      if (flow.matchType === "person" && !flow.userId) {
-        toast.error("Pick a person for each specific-person flow.")
+      if (flow.matchType === "person" && flow.userIds.length === 0) {
+        toast.error("Pick at least one person for each specific-person flow.")
         return
       }
       if (flow.workflow.some((s) => s.approverType === "group" && !s.value)) {
@@ -822,7 +825,7 @@ export function ClaimSettingsGeneral() {
               ? { type: "default" as const }
               : flow.matchType === "role"
                 ? { type: "role" as const, roleId: flow.roleId }
-                : { type: "person" as const, userId: flow.userId },
+                : { type: "person" as const, userIds: flow.userIds },
           workflow: flow.workflow.map((s) => ({
             approverType: s.approverType,
             value: s.value,
@@ -1035,7 +1038,7 @@ export function ClaimSettingsGeneral() {
                           patchFlow(fi, {
                             matchType: v as FlowForm["matchType"],
                             roleId: undefined,
-                            userId: undefined,
+                            userIds: [],
                           })
                         }
                       >
@@ -1044,7 +1047,9 @@ export function ClaimSettingsGeneral() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="role">Role</SelectItem>
-                          <SelectItem value="person">Specific person</SelectItem>
+                          <SelectItem value="person">
+                            Specific person(s)
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                       {flow.matchType === "role" ? (
@@ -1066,23 +1071,16 @@ export function ClaimSettingsGeneral() {
                           </SelectContent>
                         </Select>
                       ) : (
-                        <Select
-                          value={(flow.userId as string) ?? ""}
-                          onValueChange={(v) =>
-                            patchFlow(fi, { userId: v as Id<"users"> })
-                          }
-                        >
-                          <SelectTrigger className="w-44">
-                            <SelectValue placeholder="Choose person" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {options.members.map((m) => (
-                              <SelectItem key={m.userId} value={m.userId}>
-                                {m.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <div className="w-56">
+                          <MultiSelect
+                            options={memberOpts}
+                            selected={flow.userIds as string[]}
+                            onChange={(v) =>
+                              patchFlow(fi, { userIds: v as Id<"users">[] })
+                            }
+                            placeholder="Choose person(s)"
+                          />
+                        </div>
                       )}
                       <Button
                         variant="outline"
@@ -1140,7 +1138,7 @@ export function ClaimSettingsGeneral() {
                       name: "",
                       matchType: "role",
                       roleId: undefined,
-                      userId: undefined,
+                      userIds: [],
                       workflow: [
                         {
                           key: newId(),
