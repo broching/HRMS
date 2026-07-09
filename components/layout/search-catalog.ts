@@ -1,0 +1,132 @@
+import {
+  IconHome,
+  IconRss,
+  IconCalendarStats,
+  IconCalendarCheck,
+  IconReceipt2,
+  IconReceiptTax,
+  IconClockHour4,
+  IconClockCog,
+  IconCalendarTime,
+  IconChartBar,
+  IconUsersGroup,
+  IconUsers,
+  IconAddressBook,
+  IconSitemap,
+  IconLayoutDashboard,
+  IconCash,
+  IconCoin,
+  IconBriefcase,
+  IconReportAnalytics,
+  IconBuildingCog,
+  type Icon,
+} from "@tabler/icons-react"
+import { permitted, type Permission } from "@/convex/lib/permissions"
+import type { HrmsRole } from "@/convex/lib/enums"
+
+// A single searchable destination. `context` is the workspace it lives in and is
+// rendered next to the label (e.g. "Leave (Team)" vs "Leave (HR Lounge)") so the
+// same concept surfaces once per area the user can actually reach. Gating mirrors
+// the nav: an entry shows only when its `permission` is granted (or absent) AND
+// its `roles` include the caller's role (or absent).
+export type SearchContext = "Personal" | "People" | "Team" | "HR Lounge"
+
+export type SearchEntry = {
+  label: string
+  context: SearchContext
+  href: string
+  icon: Icon
+  permission?: Permission
+  roles?: HrmsRole[]
+  // Extra terms that should match this entry beyond its label.
+  keywords?: string[]
+}
+
+// Full destination catalogue. Kept in sync with `SECTIONS` (top nav) and the HR
+// Lounge rail (see hr-lounge-shell). Personal + People entries are open to every
+// member; Team + HR Lounge entries are permission-gated.
+const CATALOG: SearchEntry[] = [
+  // ── Personal ──────────────────────────────────────────────────────────────
+  { label: "Home", context: "Personal", href: "/dashboard", icon: IconHome, keywords: ["dashboard"] },
+  { label: "Feed", context: "Personal", href: "/feed", icon: IconRss, keywords: ["announcements", "news"] },
+  { label: "My Leave", context: "Personal", href: "/leave", icon: IconCalendarStats, keywords: ["time off", "vacation", "annual", "apply leave"] },
+  { label: "My Claims", context: "Personal", href: "/claims", icon: IconReceipt2, keywords: ["expense", "reimburse", "mileage"] },
+  { label: "Attendance", context: "Personal", href: "/attendance", icon: IconClockHour4, keywords: ["clock in", "clock out", "timesheet"] },
+  { label: "My Schedule", context: "Personal", href: "/scheduling", icon: IconCalendarTime, keywords: ["roster", "shift"] },
+  { label: "Payslips", context: "Personal", href: "/payslips", icon: IconCash, keywords: ["salary", "pay", "payroll"] },
+  { label: "My Performance", context: "Personal", href: "/performance", icon: IconChartBar, keywords: ["review", "appraisal", "goals"] },
+
+  // ── People (open to all members) ─────────────────────────────────────────
+  { label: "Employee List", context: "People", href: "/employees", icon: IconAddressBook, keywords: ["directory", "staff", "people", "colleagues"] },
+  { label: "Org Chart", context: "People", href: "/employees/org-chart", icon: IconSitemap, keywords: ["hierarchy", "reporting line", "structure"] },
+
+  // ── Team workspace ────────────────────────────────────────────────────────
+  { label: "Team", context: "Team", href: "/team", icon: IconUsersGroup, permission: "team:access", keywords: ["reports", "my team"] },
+  { label: "Team Calendar", context: "Team", href: "/leave/calendar", icon: IconCalendarStats, permission: "leave:approve", keywords: ["leave", "who is away", "time off"] },
+  { label: "Leave Approvals", context: "Team", href: "/leave/requests", icon: IconCalendarCheck, permission: "leave:approve", keywords: ["leave", "approve", "requests"] },
+  { label: "Claim Approvals", context: "Team", href: "/claims/requests", icon: IconReceipt2, permission: "claims:approve", keywords: ["claims", "expense", "approve"] },
+  { label: "Team Attendance", context: "Team", href: "/attendance/team", icon: IconClockHour4, permission: "attendance:team", keywords: ["clock in", "timesheet"] },
+  { label: "Roster", context: "Team", href: "/scheduling/roster", icon: IconCalendarTime, permission: "scheduling:roster", keywords: ["schedule", "shift", "rota"] },
+  { label: "Team Reviews", context: "Team", href: "/performance/team", icon: IconChartBar, permission: "performance:team", keywords: ["performance", "appraisal", "review"] },
+
+  // ── HR Lounge ─────────────────────────────────────────────────────────────
+  { label: "HR Overview", context: "HR Lounge", href: "/hr-lounge/overview", icon: IconLayoutDashboard, permission: "hr:access", keywords: ["hr lounge", "summary"] },
+  { label: "Employee List", context: "HR Lounge", href: "/hr-lounge", icon: IconUsers, permission: "employees:manage", keywords: ["staff", "members", "roles", "status", "headcount"] },
+  { label: "Leave", context: "HR Lounge", href: "/hr-lounge/leave", icon: IconCalendarStats, permission: "leave:config", keywords: ["leave types", "policies", "public holidays", "holidays", "entitlement"] },
+  { label: "Payroll", context: "HR Lounge", href: "/hr-lounge/payroll", icon: IconCash, permission: "payroll:manage", keywords: ["salary", "pay run", "cpf"] },
+  { label: "Compensation", context: "HR Lounge", href: "/hr-lounge/payroll/compensation", icon: IconCoin, permission: "payroll:manage", keywords: ["salary", "pay", "bonus"] },
+  { label: "Expense Claims", context: "HR Lounge", href: "/hr-lounge/claims", icon: IconReceipt2, permission: "claims:read:all", keywords: ["expense", "reimburse", "headcount"] },
+  { label: "Claim Types", context: "HR Lounge", href: "/hr-lounge/claims/settings", icon: IconReceiptTax, permission: "claims:approve:finance", keywords: ["claim settings", "categories", "expense types"] },
+  { label: "Recruitment", context: "HR Lounge", href: "/hr-lounge/recruitment", icon: IconBriefcase, permission: "recruitment:manage", keywords: ["jobs", "candidates", "hiring", "job board"] },
+  { label: "Performance", context: "HR Lounge", href: "/hr-lounge/performance", icon: IconChartBar, permission: "performance:manage", keywords: ["appraisal", "review cycles", "360"] },
+  { label: "Reports", context: "HR Lounge", href: "/hr-lounge/reports", icon: IconReportAnalytics, permission: "reports:view", keywords: ["statistics", "analytics", "export", "attrition"] },
+  { label: "Org Structure", context: "HR Lounge", href: "/hr-lounge/org-structure", icon: IconSitemap, permission: "employees:manage", keywords: ["departments", "offices", "hierarchy"] },
+  { label: "Organization Settings", context: "HR Lounge", href: "/hr-lounge/org-settings", icon: IconBuildingCog, permission: "org:manage", keywords: ["logo", "locale", "name", "org profile", "currency"] },
+  { label: "Attendance Config", context: "HR Lounge", href: "/settings/attendance", icon: IconClockCog, permission: "attendance:config", keywords: ["qr", "geofence", "office", "clock in"] },
+  { label: "Shift Templates", context: "HR Lounge", href: "/settings/shift-templates", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "shifts", "schedule"] },
+]
+
+function canSee(
+  entry: SearchEntry,
+  role: HrmsRole | undefined,
+  permissions: readonly string[] | undefined,
+): boolean {
+  if (entry.roles && (!role || !entry.roles.includes(role))) return false
+  if (entry.permission && !permitted(permissions, entry.permission)) return false
+  return true
+}
+
+/** Every destination the given member can reach, in catalogue order. */
+export function visibleEntries(
+  role: HrmsRole | undefined,
+  permissions: readonly string[] | undefined,
+): SearchEntry[] {
+  return CATALOG.filter((e) => canSee(e, role, permissions))
+}
+
+/**
+ * Rank `entries` against a free-text `query`. Matches label first, then context,
+ * then keywords; an empty query returns everything (for the palette's idle
+ * state). Simple substring scoring — cheap and predictable for a small catalog.
+ */
+export function searchEntries(
+  entries: SearchEntry[],
+  query: string,
+): SearchEntry[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return entries
+
+  const scored: { entry: SearchEntry; score: number }[] = []
+  for (const entry of entries) {
+    const label = entry.label.toLowerCase()
+    const context = entry.context.toLowerCase()
+    let score = -1
+    if (label.startsWith(q)) score = 100
+    else if (label.includes(q)) score = 80
+    else if (`${label} (${context})`.includes(q)) score = 60
+    else if (entry.keywords?.some((k) => k.toLowerCase().includes(q))) score = 40
+    if (score >= 0) scored.push({ entry, score })
+  }
+  scored.sort((a, b) => b.score - a.score)
+  return scored.map((s) => s.entry)
+}

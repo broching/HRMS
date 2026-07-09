@@ -7,15 +7,23 @@ import { officeMileageSettings } from "./lib/enums";
 
 const geo = v.object({ lat: v.number(), lng: v.number() });
 
+// `qrSecret` is the attendance QR signing secret — it must never be sent to the
+// client. Strip it so public office reads match `officeDoc`.
+function publicOffice<T extends { qrSecret?: string }>(office: T) {
+  const { qrSecret: _qrSecret, ...rest } = office;
+  return rest;
+}
+
 export const list = query({
   args: {},
   returns: v.array(officeDoc),
   handler: async (ctx) => {
     const { orgId } = await requireOrg(ctx);
-    return await ctx.db
+    const offices = await ctx.db
       .query("offices")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .collect();
+    return offices.map(publicOffice);
   },
 });
 
@@ -26,7 +34,7 @@ export const get = query({
     const { orgId } = await requireOrg(ctx);
     const office = await ctx.db.get(id);
     if (!office || office.orgId !== orgId) return null;
-    return office;
+    return publicOffice(office);
   },
 });
 

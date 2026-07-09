@@ -7,13 +7,15 @@ import { LeaveCalendarOverview } from "./leave-calendar-overview"
 import { LeaveManagement } from "./leave-management"
 import { LeavePoliciesList } from "./leave-policies-list"
 import { LeaveDetailPanel } from "./leave-detail-panel"
+import { HolidaysManager } from "./holidays-manager"
 
-type Tab = "dashboard" | "management" | "policies"
+type Tab = "dashboard" | "management" | "policies" | "holidays"
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "dashboard", label: "Dashboard" },
   { key: "management", label: "Leave Management" },
   { key: "policies", label: "Leave Policies" },
+  { key: "holidays", label: "Public Holidays" },
 ]
 
 export function LeaveAdmin() {
@@ -49,6 +51,7 @@ export function LeaveAdmin() {
         <LeaveManagement onSelectRequest={setSelected} />
       )}
       {tab === "policies" && <LeavePoliciesList />}
+      {tab === "holidays" && <HolidaysManager />}
 
       <LeaveDetailPanel requestId={selected} onClose={() => setSelected(null)} />
     </div>

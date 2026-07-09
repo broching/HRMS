@@ -31,6 +31,11 @@ const ALL = "all"
 const iso = (d: Date) => d.toISOString().slice(0, 10)
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
+/** Low-opacity tint for a hex colour used as the chip background. */
+function tint(color: string): string | undefined {
+  return /^#[0-9a-f]{6}$/i.test(color) ? `${color}26` : undefined
+}
+
 function initials(name: string) {
   return name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase()
 }
@@ -274,7 +279,8 @@ export function LeaveCalendarOverview({
                       <button
                         key={r._id}
                         onClick={() => onSelectRequest(r._id)}
-                        className="hover:bg-accent flex items-center gap-1 truncate rounded px-1 text-left text-[11px]"
+                        className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-left text-[11px] hover:brightness-95"
+                        style={{ backgroundColor: tint(r.leaveTypeColor) }}
                         title={`${r.employeeName} · ${r.leaveTypeName} (${r.status})`}
                       >
                         <span

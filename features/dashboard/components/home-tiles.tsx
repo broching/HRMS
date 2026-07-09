@@ -76,8 +76,11 @@ export function HomeTiles() {
   ]
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {tiles.map((t) => {
+    // On xl the column stretches to the profile card's height; capping the grid
+    // at 85% of that keeps the tiles 15% shorter than the profile card.
+    <div className="h-full">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:h-[85%] xl:grid-cols-3">
+        {tiles.map((t) => {
         const inner = (
           <Card
             className={cn(
@@ -115,7 +118,8 @@ export function HomeTiles() {
             {inner}
           </div>
         )
-      })}
+        })}
+      </div>
     </div>
   )
 }

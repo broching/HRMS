@@ -44,6 +44,8 @@ export function Wordmark({ className }: { className?: string }) {
       style={{ fontWeight: 700, color: "var(--lm-ink)" }}
     >
       Lead<span style={{ color: "var(--lm-accent)" }}>Mighty</span>
+      
+      <span style={{ color: "#2f4168" }}>HR</span>
     </span>
   );
 }

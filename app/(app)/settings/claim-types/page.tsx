@@ -1,14 +1,7 @@
-import { PageHeader } from "@/components/shared/page-header"
-import { ClaimSettings } from "@/features/claims/components/claim-settings"
+import { redirect } from "next/navigation"
 
-export default function ClaimTypesSettingsPage() {
-  return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Claim types"
-        description="Configure expense categories and receipt requirements."
-      />
-      <ClaimSettings />
-    </div>
-  )
+// Claim types now live under HR Lounge → Expense Claims → Settings. Keep this
+// route as a redirect for existing links/bookmarks.
+export default function ClaimTypesSettingsRedirect() {
+  redirect("/hr-lounge/claims/settings")
 }

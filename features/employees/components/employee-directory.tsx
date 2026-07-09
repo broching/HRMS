@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useQuery } from "convex/react"
+import { useQuery, useMutation } from "convex/react"
+import { toast } from "sonner"
 import {
   IconPlus,
   IconSearch,
@@ -11,6 +12,7 @@ import {
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { getErrorMessage } from "@/lib/errors"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -43,10 +45,23 @@ function initials(first: string, last: string) {
   return `${first[0] ?? ""}${last[0] ?? ""}`.toUpperCase()
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  probation: "Probation",
+  on_leave: "On leave",
+  suspended: "Suspended",
+  terminated: "Inactive",
+}
+
 export function EmployeeDirectory({
   actions,
+  // When set (HR Lounge), the list doubles as member management: it shows a
+  // Status column and — for callers with `members:manage` — an inline role
+  // changer, replacing the standalone Members screen.
+  memberControls = false,
 }: {
   actions?: React.ReactNode
+  memberControls?: boolean
 } = {}) {
   const [searchInput, setSearchInput] = React.useState("")
   const [search, setSearch] = React.useState("")
@@ -57,6 +72,56 @@ export function EmployeeDirectory({
 
   const member = useCurrentMember()
   const canManage = permitted(member?.permissions, "employees:manage")
+  const canManageMembers =
+    memberControls && permitted(member?.permissions, "members:manage")
+
+  // Member/role data for the inline role changer (HR Lounge only).
+  const members = useQuery(
+    api.members.list,
+    canManageMembers ? {} : "skip",
+  )
+  const roles = useQuery(
+    api.roles.assignable,
+    canManageMembers ? {} : "skip",
+  )
+  const setRoleId = useMutation(api.members.setRoleId)
+  const ensureSeeded = useMutation(api.roles.ensureSeeded)
+
+  // Make sure the preset roles exist so the role dropdown is never empty.
+  React.useEffect(() => {
+    if (canManageMembers) ensureSeeded().catch(() => {})
+  }, [canManageMembers, ensureSeeded])
+
+  // Map an employee to its membership, and resolve a role selection: the
+  // member's explicit roleId, or the preset matching their legacy role enum.
+  const memberByEmployee = React.useMemo(
+    () =>
+      new Map(
+        (members ?? [])
+          .filter((m) => m.employeeId)
+          .map((m) => [m.employeeId as Id<"employees">, m]),
+      ),
+    [members],
+  )
+  const presetByKey = React.useMemo(
+    () =>
+      new Map(
+        (roles ?? []).filter((r) => r.key).map((r) => [r.key as string, r._id]),
+      ),
+    [roles],
+  )
+
+  async function handleRoleChange(
+    memberId: Id<"members">,
+    roleId: Id<"roles">,
+  ) {
+    try {
+      await setRoleId({ memberId, roleId })
+      toast.success("Role updated")
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Could not update role"))
+    }
+  }
 
   // Debounce the search box so we don't refire the query on every keystroke.
   React.useEffect(() => {
@@ -78,6 +143,8 @@ export function EmployeeDirectory({
     officeId: officeId === ALL ? undefined : (officeId as Id<"offices">),
     joinedBefore: joinedBefore || undefined,
   })
+
+  const colCount = 5 + (memberControls ? 1 : 0) + (canManageMembers ? 1 : 0)
 
   const total = employees?.length ?? 0
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -177,13 +244,17 @@ export function EmployeeDirectory({
               <TableHead className="hidden md:table-cell">Department</TableHead>
               <TableHead className="hidden md:table-cell">Office</TableHead>
               <TableHead className="hidden lg:table-cell">Email</TableHead>
+              {memberControls && <TableHead>Status</TableHead>}
+              {canManageMembers && (
+                <TableHead className="w-[180px]">Role</TableHead>
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
             {employees === undefined ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={5}>
+                  <TableCell colSpan={colCount}>
                     <Skeleton className="h-9 w-full" />
                   </TableCell>
                 </TableRow>
@@ -191,7 +262,7 @@ export function EmployeeDirectory({
             ) : pageRows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={colCount}
                   className="text-muted-foreground py-10 text-center"
                 >
                   No employees found.
@@ -243,6 +314,55 @@ export function EmployeeDirectory({
                   <TableCell className="text-muted-foreground hidden lg:table-cell">
                     {e.workEmail ?? "—"}
                   </TableCell>
+                  {memberControls && (
+                    <TableCell>
+                      <Badge
+                        variant={
+                          e.status === "active" ? "secondary" : "outline"
+                        }
+                      >
+                        {STATUS_LABEL[e.status] ?? e.status}
+                      </Badge>
+                    </TableCell>
+                  )}
+                  {canManageMembers && (
+                    <TableCell>
+                      {(() => {
+                        const m = memberByEmployee.get(e._id)
+                        if (!m) {
+                          return (
+                            <span className="text-muted-foreground text-xs">
+                              No account
+                            </span>
+                          )
+                        }
+                        return (
+                          <Select
+                            value={
+                              m.roleId ?? presetByKey.get(m.role) ?? undefined
+                            }
+                            onValueChange={(roleId) =>
+                              handleRoleChange(
+                                m.memberId,
+                                roleId as Id<"roles">,
+                              )
+                            }
+                          >
+                            <SelectTrigger className="w-[170px]">
+                              <SelectValue placeholder="Select role" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(roles ?? []).map((r) => (
+                                <SelectItem key={r._id} value={r._id}>
+                                  {r.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )
+                      })()}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))
             )}

@@ -1270,10 +1270,10 @@ export function ClaimSettingsGeneral() {
                     className="shrink-0"
                     onClick={() => {
                       setGuard(null)
-                      router.push("/settings/members")
+                      router.push("/hr-lounge")
                     }}
                   >
-                    Manage in Members
+                    Manage in Employee List
                   </Button>
                 )}
               </div>

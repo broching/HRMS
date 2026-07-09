@@ -2,11 +2,9 @@
 
 import Link from "next/link"
 import { useClerk, useUser } from "@clerk/nextjs"
-import { dark } from "@clerk/themes"
 import { useTheme } from "next-themes"
 import {
   IconUserCircle,
-  IconSettingsCog,
   IconLogout,
   IconMoon,
   IconSun,
@@ -23,7 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 
 export function NavUserMenu() {
-  const { openUserProfile, signOut } = useClerk()
+  const { signOut } = useClerk()
   const { theme, setTheme } = useTheme()
   const { user } = useUser()
 
@@ -56,16 +54,6 @@ export function NavUserMenu() {
             <IconUserCircle className="size-4" />
             My profile
           </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() =>
-            openUserProfile({
-              appearance: { baseTheme: theme === "dark" ? dark : undefined },
-            })
-          }
-        >
-          <IconSettingsCog className="size-4" />
-          Manage account
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}

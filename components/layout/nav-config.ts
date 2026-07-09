@@ -4,7 +4,6 @@ import {
   IconAddressBook,
   IconBriefcase,
   IconRss,
-  IconSettings,
   IconCalendarStats,
   IconCalendarCheck,
   IconReceipt2,
@@ -136,42 +135,10 @@ export const SECTIONS: NavSection[] = [
   },
 ]
 
-// Configuration area, reached via the top-nav Settings gear (not a primary tab).
-export const SETTINGS_SECTION: NavSection = {
-  key: "settings",
-  title: "Settings",
-  url: "/settings/organization",
-  icon: IconSettings,
-  items: [
-    {
-      title: "Organization",
-      url: "/settings/organization",
-      permission: "org:manage",
-    },
-    {
-      title: "Leave Types",
-      url: "/settings/leave-types",
-      permission: "leave:config",
-    },
-    {
-      title: "Claim Types",
-      url: "/settings/claim-types",
-      permission: "claims:approve:finance",
-    },
-    {
-      title: "Attendance",
-      url: "/settings/attendance",
-      permission: "attendance:config",
-    },
-    {
-      title: "Shift Templates",
-      url: "/settings/shift-templates",
-      permission: "scheduling:manage",
-    },
-  ],
-}
+// Configuration pages (Leave Types, Claim Types, Attendance, Shift Templates)
+// now live inside the HR Lounge rail (see HrLoungeShell), not a top-nav gear.
 
-const ALL_SECTIONS: NavSection[] = [...SECTIONS, SETTINGS_SECTION]
+const ALL_SECTIONS: NavSection[] = [...SECTIONS]
 
 /**
  * Resolve which section "owns" a pathname by longest-matching sub-item url.

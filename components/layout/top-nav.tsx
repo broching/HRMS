@@ -2,10 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { OrganizationSwitcher } from "@clerk/nextjs"
-import { dark } from "@clerk/themes"
-import { useTheme } from "next-themes"
-import { IconMenu2, IconSettings } from "@tabler/icons-react"
+import { IconMenu2 } from "@tabler/icons-react"
 import Image from "next/image";
 import { useCurrentMember } from "@/hooks/use-current-member"
 import { permitted } from "@/convex/lib/permissions"
@@ -13,19 +10,21 @@ import type { HrmsRole } from "@/convex/lib/enums"
 import { cn } from "@/lib/utils"
 import {
   SECTIONS,
-  SETTINGS_SECTION,
   resolveSection,
   type NavLink,
   type NavSection,
 } from "@/components/layout/nav-config"
 import { NavUserMenu } from "@/components/layout/nav-user-menu"
 import { NotificationCenter } from "@/components/layout/notification-center"
+import { OrgSwitcher } from "@/components/layout/org-switcher"
+import { GlobalSearch } from "@/components/layout/global-search"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Wordmark } from "@/app/(landing)/_components/prism-mark"
 
 function canSee(
   item: NavLink | NavSection,
@@ -40,16 +39,12 @@ function canSee(
 
 export function TopNav() {
   const pathname = usePathname()
-  const { theme } = useTheme()
   const member = useCurrentMember()
   const role = member?.role
   const permissions = member?.permissions
 
   const active = resolveSection(pathname)
   const sections = SECTIONS.filter((s) => canSee(s, role, permissions))
-  const settingsVisible = SETTINGS_SECTION.items.some((i) =>
-    canSee(i, role, permissions),
-  )
 
   return (
     <header className="sticky top-0 z-50 h-[65px] border-b border-border bg-background shadow-lg">
@@ -60,7 +55,7 @@ export function TopNav() {
         {/* LEFT PANEL */}
         {/* ---------------------------------------------------------------- */}
 
-        <div className="relative flex w-[320px] shrink-0 items-center bg-background px-2">
+        <div className="relative flex w-[380px] shrink-0 items-center bg-background px-2">
           <Link
             href="/dashboard"
             className="flex items-center gap-0 text-2xl font-extrabold tracking-tight text-foreground"
@@ -70,40 +65,15 @@ export function TopNav() {
               alt="LeadMighty Logo"
               width={56}
               height={56}
-              className="h-14 w-14"
+              className="h-12 w-12"
               priority
             />
-
-            <span className="text-sky-500 dark:text-sky-400">
-              HR
-            </span>
+            <Wordmark />
           </Link>
 
           <div className="mx-3 h-8 w-px bg-border" />
 
-          <OrganizationSwitcher
-            hidePersonal
-            afterSelectOrganizationUrl="/dashboard"
-            afterCreateOrganizationUrl="/dashboard"
-            appearance={{
-              baseTheme: theme === "dark" ? dark : undefined,
-              elements: {
-                rootBox: "ml-0",
-
-                organizationSwitcherTrigger:
-                  "rounded-xl px-3 py-2 transition hover:bg-accent",
-
-                organizationPreviewMainIdentifier:
-                  "font-semibold text-foreground",
-
-                organizationPreviewTextContainer:
-                  "text-foreground",
-
-                organizationSwitcherTriggerIcon:
-                  "text-muted-foreground",
-              },
-            }}
-          />
+          <OrgSwitcher />
 
           {/* Diagonal transition */}
 
@@ -173,24 +143,11 @@ export function TopNav() {
           {/* Right */}
 
           <div className="ml-auto flex items-center gap-2">
+            <GlobalSearch />
+
             <div className="rounded-xl border border-white/20 bg-white/10 p-1 backdrop-blur-md">
               <NotificationCenter />
             </div>
-
-            {settingsVisible && (
-              <Link
-                href={SETTINGS_SECTION.url}
-                className={cn(
-                  "rounded-xl p-2 transition-all duration-300",
-
-                  active?.key === "settings"
-                    ? "bg-white/20 text-white"
-                    : "text-white/90 hover:bg-white/10 hover:scale-110"
-                )}
-              >
-                <IconSettings className="size-5" />
-              </Link>
-            )}
 
             <div className="rounded-xl p-1 transition-all duration-300 hover:bg-white/10 hover:scale-105">
               <NavUserMenu />

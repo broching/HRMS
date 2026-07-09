@@ -111,8 +111,10 @@ export function TeamOverview() {
   return (
     <div className="flex flex-col gap-6 px-4 lg:px-6">
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-        {/* Cards */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {/* Cards — on lg the column stretches to the "Who's away" card height;
+            capping the grid at 85% keeps the cards 15% shorter than it. */}
+        <div className="h-full">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:h-[85%] xl:grid-cols-3">
           {CARDS.map((c) => {
             const inner = (
               <Card
@@ -153,6 +155,7 @@ export function TeamOverview() {
               </div>
             )
           })}
+        </div>
         </div>
 
         {/* Who's away */}

@@ -1,14 +1,8 @@
-import { PageHeader } from "@/components/shared/page-header"
-import { LeaveSettings } from "@/features/leave/components/leave-settings"
+import { redirect } from "next/navigation"
 
-export default function LeaveTypesSettingsPage() {
-  return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Leave types & holidays"
-        description="Configure leave entitlements and the public holiday calendar."
-      />
-      <LeaveSettings />
-    </div>
-  )
+// Leave types now live under HR Lounge → Leave → Leave Policies, and the public
+// holiday calendar under HR Lounge → Leave → Public Holidays. Keep this route as
+// a redirect for existing links/bookmarks.
+export default function LeaveTypesSettingsRedirect() {
+  redirect("/hr-lounge/leave")
 }

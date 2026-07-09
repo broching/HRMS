@@ -13,6 +13,15 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
+import {
+  LeaveDetailDialog,
+  type LeaveDetailRow,
+} from "@/features/leave/components/leave-detail-dialog"
+
+/** Low-opacity tint for a hex colour, e.g. "#6b7280" → cell background. */
+function tint(color: string): string | undefined {
+  return /^#[0-9a-f]{6}$/i.test(color) ? `${color}26` : undefined
+}
 
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
 const MONTHS = [
@@ -37,6 +46,7 @@ export function WhoIsAway() {
   const today = new Date()
   const [year, setYear] = React.useState(today.getFullYear())
   const [month, setMonth] = React.useState(today.getMonth()) // 0-based
+  const [selected, setSelected] = React.useState<LeaveDetailRow | null>(null)
 
   const daysInMonth = new Date(year, month + 1, 0).getDate()
   const firstWeekday = new Date(year, month, 1).getDay()
@@ -48,17 +58,21 @@ export function WhoIsAway() {
     end: monthEnd,
   })
 
-  // Which day-numbers in this month have someone away.
-  const awayDays = React.useMemo(() => {
-    const set = new Set<number>()
-    if (!away) return set
+  // Map each day-number in this month to the leave-type colours away that day.
+  const awayColors = React.useMemo(() => {
+    const map = new Map<number, string[]>()
+    if (!away) return map
     for (const leave of away) {
       for (let d = 1; d <= daysInMonth; d++) {
         const day = iso(year, month, d)
-        if (leave.startDate <= day && leave.endDate >= day) set.add(d)
+        if (leave.startDate <= day && leave.endDate >= day) {
+          const list = map.get(d) ?? []
+          if (!list.includes(leave.leaveTypeColor)) list.push(leave.leaveTypeColor)
+          map.set(d, list)
+        }
       }
     }
-    return set
+    return map
   }, [away, year, month, daysInMonth])
 
   function shift(delta: number) {
@@ -110,17 +124,30 @@ export function WhoIsAway() {
           {cells.map((d, i) => {
             if (d === null) return <span key={`e${i}`} />
             const isToday = isCurrentMonth && d === today.getDate()
-            const isAway = awayDays.has(d)
+            const colors = awayColors.get(d)
+            const isAway = !!colors?.length
             return (
               <span
                 key={d}
                 className={cn(
-                  "flex aspect-square items-center justify-center rounded-md text-sm",
-                  isAway && "bg-primary/15 text-primary font-medium",
+                  "relative flex aspect-square flex-col items-center justify-center rounded-md text-sm",
+                  isAway && "font-medium",
                   isToday && "ring-primary ring-1",
                 )}
+                style={isAway ? { backgroundColor: tint(colors![0]) } : undefined}
               >
                 {d}
+                {isAway && (
+                  <span className="absolute bottom-1 flex gap-0.5">
+                    {colors!.slice(0, 3).map((c, ci) => (
+                      <span
+                        key={ci}
+                        className="size-1 rounded-full"
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                  </span>
+                )}
               </span>
             )
           })}
@@ -135,9 +162,19 @@ export function WhoIsAway() {
             </p>
           ) : (
             away.slice(0, 6).map((leave) => (
-              <div key={leave._id} className="flex items-center gap-2">
+              <button
+                key={leave._id}
+                onClick={() => setSelected(leave)}
+                className="hover:bg-accent/50 -mx-2 flex items-center gap-2 rounded-md px-2 py-1 text-left transition-colors"
+              >
                 <Avatar className="size-8">
-                  <AvatarFallback className="text-xs">
+                  <AvatarFallback
+                    className="text-xs"
+                    style={{
+                      backgroundColor: tint(leave.leaveTypeColor),
+                      color: leave.leaveTypeColor,
+                    }}
+                  >
                     {initials(leave.employeeName)}
                   </AvatarFallback>
                 </Avatar>
@@ -148,15 +185,26 @@ export function WhoIsAway() {
                   <span className="text-sm font-medium leading-tight">
                     {leave.employeeName}
                   </span>
-                  <span className="text-muted-foreground text-xs">
-                    {leave.leaveTypeName}
+                  <span className="flex items-center gap-1.5 text-xs">
+                    <span
+                      className="size-2 rounded-full"
+                      style={{ backgroundColor: leave.leaveTypeColor }}
+                    />
+                    <span className="text-muted-foreground">
+                      {leave.leaveTypeName}
+                    </span>
                   </span>
                 </div>
-              </div>
+              </button>
             ))
           )}
         </div>
       </CardContent>
+
+      <LeaveDetailDialog
+        leave={selected}
+        onOpenChange={(open) => !open && setSelected(null)}
+      />
     </Card>
   )
 }

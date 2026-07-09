@@ -80,6 +80,9 @@ export default defineSchema({
     name: v.string(),
     slug: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    // Org logo uploaded through our own UI (Convex storage). Takes precedence
+    // over Clerk's `imageUrl` so we no longer depend on Clerk's org UI.
+    logoStorageId: v.optional(v.id("_storage")),
     country: v.string(), // ISO country, default "SG"
     settings: orgSettings,
   }).index("by_clerkOrgId", ["clerkOrgId"]),

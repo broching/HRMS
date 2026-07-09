@@ -6,9 +6,18 @@ import { IconChevronLeft, IconChevronRight } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import {
+  LeaveDetailDialog,
+  type LeaveDetailRow,
+} from "@/features/leave/components/leave-detail-dialog"
 
 const iso = (d: Date) => d.toISOString().slice(0, 10)
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+/** Low-opacity tint for a hex colour used as the chip background. */
+function tint(color: string): string | undefined {
+  return /^#[0-9a-f]{6}$/i.test(color) ? `${color}26` : undefined
+}
 
 export function LeaveCalendar() {
   const now = new Date()
@@ -16,6 +25,8 @@ export function LeaveCalendar() {
     y: now.getUTCFullYear(),
     m: now.getUTCMonth(),
   })
+
+  const [selected, setSelected] = React.useState<LeaveDetailRow | null>(null)
 
   const first = new Date(Date.UTC(cursor.y, cursor.m, 1))
   const last = new Date(Date.UTC(cursor.y, cursor.m + 1, 0))
@@ -27,6 +38,13 @@ export function LeaveCalendar() {
   const holidays = useQuery(api.holidays.list, { year: cursor.y })
 
   const holidayByDate = new Map((holidays ?? []).map((h) => [h.date, h.name]))
+
+  // Distinct leave types present this month, for the colour legend.
+  const legend = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const r of leave ?? []) map.set(r.leaveTypeName, r.leaveTypeColor)
+    return [...map.entries()]
+  }, [leave])
 
   // Build a 6-week grid starting on the Monday on/before the 1st.
   const offset = (first.getUTCDay() + 6) % 7
@@ -104,9 +122,11 @@ export function LeaveCalendar() {
               </div>
               <div className="mt-1 flex flex-col gap-0.5">
                 {dayLeave.slice(0, 3).map((r) => (
-                  <div
+                  <button
                     key={r._id}
-                    className="flex items-center gap-1 truncate text-[11px]"
+                    onClick={() => setSelected(r)}
+                    className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-left text-[11px] hover:brightness-95"
+                    style={{ backgroundColor: tint(r.leaveTypeColor) }}
                     title={`${r.employeeName} · ${r.leaveTypeName}`}
                   >
                     <span
@@ -114,7 +134,7 @@ export function LeaveCalendar() {
                       style={{ backgroundColor: r.leaveTypeColor }}
                     />
                     <span className="truncate">{r.employeeName}</span>
-                  </div>
+                  </button>
                 ))}
                 {dayLeave.length > 3 && (
                   <span className="text-muted-foreground text-[10px]">
@@ -126,6 +146,25 @@ export function LeaveCalendar() {
           )
         })}
       </div>
+
+      {legend.length > 0 && (
+        <div className="text-muted-foreground mt-3 flex flex-wrap gap-3 text-xs">
+          {legend.map(([name, color]) => (
+            <span key={name} className="flex items-center gap-1.5">
+              <span
+                className="size-2.5 rounded-full"
+                style={{ backgroundColor: color }}
+              />
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <LeaveDetailDialog
+        leave={selected}
+        onOpenChange={(open) => !open && setSelected(null)}
+      />
     </div>
   )
 }

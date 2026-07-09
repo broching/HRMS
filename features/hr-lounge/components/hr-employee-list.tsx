@@ -10,6 +10,7 @@ import { EmployeeDirectory } from "@/features/employees/components/employee-dire
 export function HrEmployeeList() {
   return (
     <EmployeeDirectory
+      memberControls
       actions={
         <>
           <Button
