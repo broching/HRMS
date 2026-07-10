@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/table"
 import { dollarsToCents, formatMoney } from "@/features/payroll/lib/labels"
 
-type ItemType = "addition" | "deduction" | "overtime"
+type ItemType = "addition" | "deduction" | "employer" | "overtime"
 
 // ─── Add a single adjustment to one employee ─────────────────────────────────
 
@@ -129,6 +129,7 @@ export function AddAdjustmentDialog({
               <SelectContent>
                 <SelectItem value="addition">Addition</SelectItem>
                 <SelectItem value="deduction">Deduction</SelectItem>
+                <SelectItem value="employer">Employer contribution</SelectItem>
                 <SelectItem value="overtime">Overtime</SelectItem>
               </SelectContent>
             </Select>
@@ -192,7 +193,7 @@ export function AddAdjustmentDialog({
                   />
                   Counts toward CPF (Ordinary Wage)
                 </label>
-              ) : (
+              ) : type === "deduction" ? (
                 <label className="flex items-center gap-2 text-sm">
                   <Checkbox
                     checked={affectsGross}
@@ -200,6 +201,10 @@ export function AddAdjustmentDialog({
                   />
                   Reduce before CPF (e.g. no-pay leave)
                 </label>
+              ) : (
+                <p className="text-muted-foreground text-xs">
+                  Paid on top of gross — not deducted from the employee.
+                </p>
               )}
             </>
           )}

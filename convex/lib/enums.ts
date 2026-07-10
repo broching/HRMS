@@ -575,14 +575,25 @@ export const cpfStatus = v.union(
 );
 export type CpfStatus = "citizen_pr" | "foreigner" | "exempt";
 
-// A payroll run is `draft` while being prepared, `finalized` once locked, and
-// `paid` after disbursement.
+// A payroll run's lifecycle:
+//   draft            — being prepared/edited
+//   pending_approval — completed by the preparer; approvers signing each payslip
+//   approved         — all payslips approved+signed by every step; ready to pay
+//   paid             — disbursed and released to employees
+// `finalized` is a legacy status (pre-approval flow), treated like `approved`.
 export const payrollStatus = v.union(
   v.literal("draft"),
+  v.literal("pending_approval"),
+  v.literal("approved"),
   v.literal("finalized"),
   v.literal("paid"),
 );
-export type PayrollStatus = "draft" | "finalized" | "paid";
+export type PayrollStatus =
+  | "draft"
+  | "pending_approval"
+  | "approved"
+  | "finalized"
+  | "paid";
 
 // Payslip line classification for the breakdown.
 export const payslipLineType = v.union(
@@ -605,13 +616,155 @@ export const allowanceItem = v.object({
   cpfable: v.boolean(), // counts toward CPF Ordinary Wages
 });
 
+// A recurring employee deduction on a compensation record (e.g. loan recovery).
+// `affectsGross`: true = pre-CPF (reduces the CPF-able wage), false = post-CPF
+// net-only. Mirrors the semantics of a `deduction` payroll adjustment.
+export const deductionItem = v.object({
+  name: v.string(),
+  amountCents: v.number(),
+  affectsGross: v.boolean(),
+});
+
+// A recurring employer contribution on a compensation record — paid on top of
+// gross (an employer cost), never deducted from the employee.
+export const employerContribItem = v.object({
+  name: v.string(),
+  amountCents: v.number(),
+});
+
+// Proration snapshot recorded on a payslip. `base` pay is prorated by
+// (daysWorked / totalWorkingDays) using the MOM incomplete-month formula, with
+// public holidays treated as non-working days.
+export const prorationMeta = v.object({
+  totalWorkingDays: v.number(),
+  daysWorked: v.number(),
+  unpaidLeaveDays: v.number(),
+  prorated: v.boolean(),
+});
+
 // A one-off payroll line entered/pulled while preparing a run. `addition`
-// increases pay; `deduction` reduces it.
+// increases pay; `deduction` reduces it; `employer` is an employer contribution
+// (paid on top of gross, not deducted).
 export const payrollAdjustmentKind = v.union(
   v.literal("addition"),
   v.literal("deduction"),
+  v.literal("employer"),
 );
-export type PayrollAdjustmentKind = "addition" | "deduction";
+export type PayrollAdjustmentKind = "addition" | "deduction" | "employer";
+
+// ─── Payroll: statutory + custom funds ───────────────────────────────────────
+
+// Self-Help Group funds. An employee contributes to at most one, determined by
+// ethnicity/religion; contributions are employee-side deductions computed from a
+// wage-banded table.
+export const shgFundKey = v.union(
+  v.literal("cdac"),
+  v.literal("sinda"),
+  v.literal("mbmf"),
+  v.literal("ecf"),
+);
+export type ShgFundKey = "cdac" | "sinda" | "mbmf" | "ecf";
+
+// One wage band in a fund table: wages up to `maxWageCents` (inclusive)
+// contribute `amountCents`. The top band uses a very large `maxWageCents`.
+export const fundBand = v.object({
+  maxWageCents: v.number(),
+  amountCents: v.number(),
+});
+
+// A configured SHG fund table (stored in org payroll settings).
+export const shgFundConfig = v.object({
+  key: shgFundKey,
+  name: v.string(),
+  active: v.boolean(),
+  bands: v.array(fundBand),
+});
+
+// SDL (Skills Development Levy) — an employer contribution = rate × gross
+// (before CPF), clamped to [minCents, maxCents].
+export const sdlConfig = v.object({
+  rate: v.number(), // e.g. 0.0025 for 0.25%
+  minCents: v.number(),
+  maxCents: v.number(),
+  active: v.boolean(),
+});
+
+// A custom fund beyond the statutory ones. `kind` decides employee deduction vs
+// employer contribution; `calc` decides flat cents vs percent-of-gross
+// (optionally capped at `capCents`).
+export const customFundCalc = v.union(v.literal("flat"), v.literal("percent"));
+export const customFundItem = v.object({
+  name: v.string(),
+  kind: v.union(v.literal("deduction"), v.literal("employer")),
+  calc: customFundCalc,
+  amountCents: v.optional(v.number()),
+  percent: v.optional(v.number()),
+  capCents: v.optional(v.number()),
+});
+
+// Per-employee fund participation, stored on the compensation record.
+export const employeeFunds = v.object({
+  shg: v.optional(shgFundKey),
+  sdlEnabled: v.boolean(),
+  custom: v.array(customFundItem),
+});
+
+// ─── Payroll: approval chain + signatures ────────────────────────────────────
+
+// One step in the org's payroll approval chain (a single ordered chain applies
+// to the whole run). `role` = anyone holding the RBAC role (value = roleId);
+// `specific` = any one of the named members. `requiresSignature` forces the
+// approver to sign each payslip they approve at this step.
+export const payrollApproverType = v.union(
+  v.literal("role"),
+  v.literal("specific"),
+);
+export type PayrollApproverType = "role" | "specific";
+export const payrollApproverStep = v.object({
+  approverType: payrollApproverType,
+  roleId: v.optional(v.id("roles")),
+  userIds: v.optional(v.array(v.id("users"))),
+  requiresSignature: v.boolean(),
+});
+
+// Org payroll approval configuration.
+export const payrollApprovalConfig = v.object({
+  enabled: v.boolean(),
+  steps: v.array(payrollApproverStep),
+});
+
+// One resolved step of a payslip's approval chain, snapshotted at completion.
+// Any of `approverUserIds` can act; the step advances once decided.
+export const payslipApprovalStep = v.object({
+  approverType: payrollApproverType,
+  approverUserIds: v.array(v.id("users")),
+  requiresSignature: v.boolean(),
+  label: v.string(), // e.g. "Role — Finance" or "Approver 2"
+  decidedByUserId: v.optional(v.id("users")),
+  decidedAt: v.optional(v.number()),
+  note: v.optional(v.string()),
+});
+
+// A signature applied to a payslip — the preparer at completion, or an approver
+// at an approval step. `signatureStorageId` is a PNG in Convex storage.
+export const payslipSignature = v.object({
+  role: v.string(), // "preparer" | the approval step label
+  byUserId: v.id("users"),
+  name: v.string(),
+  signatureStorageId: v.id("_storage"),
+  signedAt: v.number(),
+});
+
+// ─── Payroll: payslip templates ──────────────────────────────────────────────
+
+// Which sections a payslip template renders.
+export const payslipTemplateShow = v.object({
+  employerContribs: v.boolean(),
+  cpfNote: v.boolean(),
+  funds: v.boolean(),
+  signatures: v.boolean(),
+  ytdSummary: v.boolean(),
+});
 
 // Where an adjustment came from. `manual` = keyed in by HR; `claim` =
 // auto-pulled from an approved expense claim; `overtime` = OT hours entered in

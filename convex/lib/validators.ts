@@ -45,6 +45,13 @@ import {
   payrollStatus,
   payslipLine,
   allowanceItem,
+  deductionItem,
+  employerContribItem,
+  employeeFunds,
+  prorationMeta,
+  payslipSignature,
+  payslipApprovalStep,
+  payslipTemplateShow,
   payrollAdjustmentKind,
   payrollAdjustmentSource,
   overtimeMeta,
@@ -776,6 +783,10 @@ export const compensationDoc = v.object({
   baseMonthlyCents: v.number(),
   allowances: v.array(allowanceItem),
   cpfStatus: cpfStatus,
+  workingDays: v.optional(v.array(v.number())),
+  funds: v.optional(employeeFunds),
+  deductions: v.optional(v.array(deductionItem)),
+  employerContributions: v.optional(v.array(employerContribItem)),
   note: v.optional(v.string()),
   createdBy: v.optional(v.id("users")),
 })
@@ -857,6 +868,10 @@ export const payslipWorkspaceRow = v.object({
   employerCpfCents: v.number(),
   netCents: v.number(),
   cpfStatus: cpfStatus,
+  proration: v.union(prorationMeta, v.null()),
+  // The full computed payslip line breakdown (base, allowances, funds, CPF,
+  // SDL, employer contributions, adjustments) — powers the detailed export.
+  lines: v.array(payslipLine),
   adjustments: v.array(payrollAdjustmentRow),
 })
 
@@ -870,6 +885,39 @@ export const payrollWorkspace = v.object({
     unpaidLeaveDays: v.number(),
     overtime: v.number(),
   }),
+})
+
+// A payslip template's rendering config, with the logo resolved to a URL.
+export const payslipTemplateConfig = v.object({
+  accentColor: v.string(),
+  fontFamily: v.string(),
+  logoUrl: v.union(v.string(), v.null()),
+  headerText: v.union(v.string(), v.null()),
+  footerText: v.union(v.string(), v.null()),
+  show: payslipTemplateShow,
+})
+
+// A signature rendered on a payslip, with the image resolved to a URL.
+export const payslipSignatureView = v.object({
+  role: v.string(),
+  name: v.string(),
+  url: v.union(v.string(), v.null()),
+  signedAt: v.number(),
+})
+
+// A payslip template row for the templates manager (logo resolved to a URL).
+export const payslipTemplateRow = v.object({
+  _id: v.id("payslipTemplates"),
+  _creationTime: v.number(),
+  name: v.string(),
+  isDefault: v.boolean(),
+  accentColor: v.string(),
+  fontFamily: v.string(),
+  logoStorageId: v.union(v.id("_storage"), v.null()),
+  logoUrl: v.union(v.string(), v.null()),
+  headerText: v.union(v.string(), v.null()),
+  footerText: v.union(v.string(), v.null()),
+  show: payslipTemplateShow,
 })
 
 export const payslipDetail = v.object({
@@ -889,6 +937,9 @@ export const payslipDetail = v.object({
   cpfStatus: cpfStatus,
   lines: v.array(payslipLine),
   status: payrollStatus,
+  proration: v.union(prorationMeta, v.null()),
+  template: payslipTemplateConfig,
+  signatures: v.array(payslipSignatureView),
   // Document-header context for the printable payslip.
   companyName: v.string(),
   employeeNumber: v.string(),

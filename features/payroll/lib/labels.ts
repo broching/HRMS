@@ -6,6 +6,8 @@ import type {
 
 export const PAYROLL_STATUS_LABELS: Record<PayrollStatus, string> = {
   draft: "Draft",
+  pending_approval: "Pending approval",
+  approved: "Approved",
   finalized: "Finalized",
   paid: "Paid",
 }
@@ -15,6 +17,8 @@ export const PAYROLL_STATUS_BADGE: Record<
   "default" | "secondary" | "outline" | "destructive"
 > = {
   draft: "secondary",
+  pending_approval: "outline",
+  approved: "default",
   finalized: "default",
   paid: "default",
 }

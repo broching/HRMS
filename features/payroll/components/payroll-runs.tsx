@@ -10,6 +10,7 @@ import {
   IconCalendarEvent,
   IconFileDollar,
   IconTrash,
+  IconSettings,
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -56,10 +57,19 @@ function currentPaydayISO(): string {
 function NewRunDialog({ trigger }: { trigger: React.ReactNode }) {
   const router = useRouter()
   const createRun = useMutation(api.payroll.createRun)
+  const templates = useQuery(api.payslipTemplates.list)
   const [open, setOpen] = React.useState(false)
   const [period, setPeriod] = React.useState(currentPeriodMonth())
   const [label, setLabel] = React.useState("")
+  const [templateId, setTemplateId] = React.useState<string>("")
   const [busy, setBusy] = React.useState(false)
+
+  // Default the picker to the org's default template once loaded.
+  React.useEffect(() => {
+    if (open && templates && templates.length > 0 && !templateId) {
+      setTemplateId((templates.find((t) => t.isDefault) ?? templates[0])._id)
+    }
+  }, [open, templates, templateId])
 
   async function submit() {
     setBusy(true)
@@ -67,6 +77,9 @@ function NewRunDialog({ trigger }: { trigger: React.ReactNode }) {
       const id = await createRun({
         periodMonth: period,
         label: label || undefined,
+        templateId: templateId
+          ? (templateId as Id<"payslipTemplates">)
+          : undefined,
       })
       toast.success("Payroll run created")
       setOpen(false)
@@ -108,6 +121,24 @@ function NewRunDialog({ trigger }: { trigger: React.ReactNode }) {
               placeholder="e.g. June 2026 payroll"
             />
           </div>
+          {templates && templates.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <Label>Payslip template</Label>
+              <Select value={templateId} onValueChange={setTemplateId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose template" />
+                </SelectTrigger>
+                <SelectContent>
+                  {templates.map((t) => (
+                    <SelectItem key={t._id} value={t._id}>
+                      {t.name}
+                      {t.isDefault ? " (default)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button onClick={submit} disabled={busy}>
@@ -232,14 +263,22 @@ export function PayrollRuns() {
                 </p>
               </div>
             </div>
-            <NewRunDialog
-              trigger={
-                <Button>
-                  <IconPlus className="size-4" />
-                  Run payroll
-                </Button>
-              }
-            />
+            <div className="flex gap-2">
+              <Button asChild variant="outline">
+                <Link href="/hr-lounge/payroll/settings">
+                  <IconSettings className="size-4" />
+                  Settings
+                </Link>
+              </Button>
+              <NewRunDialog
+                trigger={
+                  <Button>
+                    <IconPlus className="size-4" />
+                    Run payroll
+                  </Button>
+                }
+              />
+            </div>
           </CardContent>
         </Card>
         <Card>

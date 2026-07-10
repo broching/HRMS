@@ -10,6 +10,7 @@ import {
   IconClockHour4,
   IconCalendarTime,
   IconChartBar,
+  IconFileDollar,
   type Icon,
 } from "@tabler/icons-react"
 import type { Permission } from "@/convex/lib/permissions"
@@ -89,6 +90,12 @@ export const SECTIONS: NavSection[] = [
         url: "/claims/requests",
         icon: IconReceipt2,
         permission: "claims:approve",
+      },
+      {
+        title: "Payslip Approvals",
+        url: "/payroll/approvals",
+        icon: IconFileDollar,
+        permission: "payroll:approve",
       },
       {
         title: "Team Attendance",

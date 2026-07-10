@@ -56,6 +56,61 @@ export function CompensationSection({
             </div>
           )}
 
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <Field
+              label="Working days / week"
+              value={String(
+                (current.workingDays && current.workingDays.length > 0
+                  ? current.workingDays
+                  : [1, 2, 3, 4, 5]
+                ).length,
+              )}
+            />
+            {current.funds?.shg && (
+              <Field
+                label="SHG fund"
+                value={current.funds.shg.toUpperCase()}
+              />
+            )}
+            {current.funds && (
+              <Field
+                label="SDL"
+                value={current.funds.sdlEnabled ? "Enabled" : "Off"}
+              />
+            )}
+          </div>
+
+          {current.deductions && current.deductions.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <h3 className="text-sm font-medium">Recurring deductions</h3>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {current.deductions.map((d, i) => (
+                  <Field
+                    key={i}
+                    label={d.name + (d.affectsGross ? " (pre-CPF)" : "")}
+                    value={formatMoney(d.amountCents, current.currency)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {current.employerContributions &&
+            current.employerContributions.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <h3 className="text-sm font-medium">Employer contributions</h3>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {current.employerContributions.map((e, i) => (
+                    <Field
+                      key={i}
+                      label={e.name}
+                      value={formatMoney(e.amountCents, current.currency)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
           {history.length > 0 && (
             <div className="flex flex-col gap-2">
               <h3 className="text-muted-foreground text-sm font-medium">History</h3>

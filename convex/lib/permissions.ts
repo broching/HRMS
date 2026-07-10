@@ -22,6 +22,7 @@ export const PERMISSIONS = [
   "leave:approve", // Team → Team Calendar + Leave Approvals
   "claims:approve", // Team → Claim Approvals (approver view)
   "claims:approve:finance", // finance/HR claim approval + reimbursement
+  "payroll:approve", // Team → Payroll Approvals (sign + approve payslips)
   "attendance:team", // Team → Team Attendance
   "scheduling:roster", // Team → Roster (build + publish team schedule)
   "performance:team", // Team → Team Reviews
@@ -83,6 +84,11 @@ export const PERMISSION_META: Record<
   "claims:approve:finance": {
     label: "Finance claim approval",
     description: "Approve the finance stage and mark claims reimbursed.",
+    module: "Team workspace",
+  },
+  "payroll:approve": {
+    label: "Payroll approvals",
+    description: "Sign and approve payslips assigned to you before release.",
     module: "Team workspace",
   },
   "attendance:team": {
@@ -196,6 +202,7 @@ const FINANCE_PERMISSIONS: Permission[] = [
   "team:access",
   "claims:approve",
   "claims:approve:finance",
+  "payroll:approve",
   "employees:read:all",
   "reports:view",
 ];
@@ -206,6 +213,7 @@ const MANAGER_PERMISSIONS: Permission[] = [
   "team:access",
   "leave:approve",
   "claims:approve",
+  "payroll:approve",
   "attendance:team",
   "scheduling:roster",
   "performance:team",

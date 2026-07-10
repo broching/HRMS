@@ -1,4 +1,4 @@
-import type { LeaveCategory, ClaimCategory } from "./enums";
+import type { LeaveCategory, ClaimCategory, ShgFundKey } from "./enums";
 
 /**
  * Singapore default statutory leave types and public holidays, seeded into
@@ -242,6 +242,107 @@ export const CLAIM_TYPE_DEFAULTS: ClaimTypeSeed[] = [
       "Client entertainment and team events. Note the attendees and business purpose in the description.",
   },
 ];
+
+// ─── Payroll: statutory fund + template defaults ─────────────────────────────
+
+// Sentinel for the top wage band ("and above").
+const BAND_TOP = Number.MAX_SAFE_INTEGER;
+
+type ShgFundSeed = {
+  key: ShgFundKey;
+  name: string;
+  active: boolean;
+  bands: { maxWageCents: number; amountCents: number }[];
+};
+
+/**
+ * Default Self-Help Group contribution tables (monthly wage bands, employee
+ * deduction). These are representative published Singapore figures and MUST be
+ * verified against the current CDAC / SINDA / MBMF / ECF tables before payroll
+ * go-live — they are editable per org in Payroll Settings.
+ */
+export const SG_SHG_FUNDS: ShgFundSeed[] = [
+  {
+    key: "cdac",
+    name: "CDAC",
+    active: true,
+    bands: [
+      { maxWageCents: 200_000, amountCents: 50 }, // ≤ $2,000 → $0.50
+      { maxWageCents: 350_000, amountCents: 100 }, // ≤ $3,500 → $1.00
+      { maxWageCents: 500_000, amountCents: 150 }, // ≤ $5,000 → $1.50
+      { maxWageCents: 750_000, amountCents: 200 }, // ≤ $7,500 → $2.00
+      { maxWageCents: BAND_TOP, amountCents: 300 }, // > $7,500 → $3.00
+    ],
+  },
+  {
+    key: "ecf",
+    name: "ECF (Eurasian)",
+    active: true,
+    bands: [
+      { maxWageCents: 100_000, amountCents: 200 }, // ≤ $1,000 → $2.00
+      { maxWageCents: 150_000, amountCents: 400 }, // ≤ $1,500 → $4.00
+      { maxWageCents: 250_000, amountCents: 600 }, // ≤ $2,500 → $6.00
+      { maxWageCents: 400_000, amountCents: 1000 }, // ≤ $4,000 → $10.00
+      { maxWageCents: 700_000, amountCents: 1500 }, // ≤ $7,000 → $15.00
+      { maxWageCents: 1_000_000, amountCents: 2000 }, // ≤ $10,000 → $20.00
+      { maxWageCents: BAND_TOP, amountCents: 3000 }, // > $10,000 → $30.00
+    ],
+  },
+  {
+    key: "sinda",
+    name: "SINDA",
+    active: true,
+    bands: [
+      { maxWageCents: 100_000, amountCents: 100 }, // ≤ $1,000 → $1.00
+      { maxWageCents: 150_000, amountCents: 300 }, // ≤ $1,500 → $3.00
+      { maxWageCents: 250_000, amountCents: 500 }, // ≤ $2,500 → $5.00
+      { maxWageCents: 450_000, amountCents: 700 }, // ≤ $4,500 → $7.00
+      { maxWageCents: 750_000, amountCents: 900 }, // ≤ $7,500 → $9.00
+      { maxWageCents: 1_000_000, amountCents: 1200 }, // ≤ $10,000 → $12.00
+      { maxWageCents: 1_500_000, amountCents: 1800 }, // ≤ $15,000 → $18.00
+      { maxWageCents: BAND_TOP, amountCents: 3000 }, // > $15,000 → $30.00
+    ],
+  },
+  {
+    key: "mbmf",
+    name: "MBMF (Mosque/Mendaki)",
+    active: true,
+    bands: [
+      { maxWageCents: 100_000, amountCents: 300 }, // ≤ $1,000 → $3.00
+      { maxWageCents: 200_000, amountCents: 450 }, // ≤ $2,000 → $4.50
+      { maxWageCents: 300_000, amountCents: 650 }, // ≤ $3,000 → $6.50
+      { maxWageCents: 400_000, amountCents: 1500 }, // ≤ $4,000 → $15.00
+      { maxWageCents: 600_000, amountCents: 1950 }, // ≤ $6,000 → $19.50
+      { maxWageCents: 800_000, amountCents: 2200 }, // ≤ $8,000 → $22.00
+      { maxWageCents: 1_000_000, amountCents: 2400 }, // ≤ $10,000 → $24.00
+      { maxWageCents: BAND_TOP, amountCents: 2600 }, // > $10,000 → $26.00
+    ],
+  },
+];
+
+// Default SDL: 0.25% of gross, min $2.00, max $11.25.
+export const SG_SDL_DEFAULT = {
+  rate: 0.0025,
+  minCents: 200,
+  maxCents: 1125,
+  active: true,
+};
+
+// Default payslip template appearance (mirrors the current hard-coded layout).
+export const DEFAULT_PAYSLIP_TEMPLATE = {
+  name: "Default",
+  isDefault: true,
+  accentColor: "#4f46e5", // indigo-600
+  fontFamily:
+    "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+  show: {
+    employerContribs: true,
+    cpfNote: true,
+    funds: true,
+    signatures: true,
+    ytdSummary: false,
+  },
+};
 
 // Singapore gazetted public holidays for 2026 (editable per org).
 export const SG_HOLIDAYS_2026: { date: string; name: string }[] = [

@@ -57,6 +57,16 @@ import {
   payrollStatus,
   payslipLine,
   allowanceItem,
+  deductionItem,
+  employerContribItem,
+  prorationMeta,
+  employeeFunds,
+  shgFundConfig,
+  sdlConfig,
+  payrollApprovalConfig,
+  payslipApprovalStep,
+  payslipSignature,
+  payslipTemplateShow,
   payrollAdjustmentKind,
   payrollAdjustmentSource,
   overtimeMeta,
@@ -713,6 +723,15 @@ export default defineSchema({
     baseMonthlyCents: v.number(),
     allowances: v.array(allowanceItem),
     cpfStatus: cpfStatus,
+    // Working weekdays (0=Sun … 6=Sat) used to prorate pay for unpaid leave and
+    // incomplete months. Absent = default Mon–Fri.
+    workingDays: v.optional(v.array(v.number())),
+    // Statutory + custom fund participation for this employee.
+    funds: v.optional(employeeFunds),
+    // Recurring employee deductions (beyond funds/CPF).
+    deductions: v.optional(v.array(deductionItem)),
+    // Recurring employer contributions (beyond CPF/SDL).
+    employerContributions: v.optional(v.array(employerContribItem)),
     note: v.optional(v.string()),
     createdBy: v.optional(v.id("users")),
   })
@@ -733,12 +752,41 @@ export default defineSchema({
     employerCpfCents: v.number(),
     netCents: v.number(),
     payslipCount: v.number(),
+    // Payslip template this run renders with (falls back to the org default).
+    templateId: v.optional(v.id("payslipTemplates")),
+    // Preparer's signature, captured when the run is completed, applied to all
+    // payslips. `completedBy` is the user who completed the run.
+    preparerSignatureStorageId: v.optional(v.id("_storage")),
+    completedBy: v.optional(v.id("users")),
     createdBy: v.optional(v.id("users")),
     finalizedAt: v.optional(v.number()),
     paidAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_period", ["orgId", "periodMonth"]),
+
+  // Org-wide payroll configuration (one row per org): statutory fund tables,
+  // SDL, and the payroll approval chain.
+  payrollSettings: defineTable({
+    orgId: v.id("organizations"),
+    shgFunds: v.array(shgFundConfig),
+    sdl: sdlConfig,
+    approval: payrollApprovalConfig,
+    defaultTemplateId: v.optional(v.id("payslipTemplates")),
+  }).index("by_org", ["orgId"]),
+
+  // A configurable payslip template. An org can have several; each run picks one.
+  payslipTemplates: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    isDefault: v.boolean(),
+    accentColor: v.string(), // CSS color for headings/accents
+    fontFamily: v.string(), // CSS font-family stack
+    logoStorageId: v.optional(v.id("_storage")),
+    headerText: v.optional(v.string()),
+    footerText: v.optional(v.string()),
+    show: payslipTemplateShow,
+  }).index("by_org", ["orgId"]),
 
   // One-off line items entered or pulled while a run is in `draft`. The
   // editable *inputs* behind a payslip — `payslips.lines` is recomputed from
@@ -784,6 +832,14 @@ export default defineSchema({
     cpfStatus: cpfStatus,
     lines: v.array(payslipLine),
     status: payrollStatus,
+    // Proration snapshot (base pay was reduced for unpaid leave / partial month).
+    proration: v.optional(prorationMeta),
+    // Approval chain snapshotted at run completion; the payslip is at
+    // `currentStepIndex` while pending. Each approver signs individually.
+    approvalChain: v.optional(v.array(payslipApprovalStep)),
+    currentStepIndex: v.optional(v.number()),
+    // Preparer + approver signatures rendered on the payslip.
+    signatures: v.optional(v.array(payslipSignature)),
   })
     .index("by_run", ["runId"])
     .index("by_run_employee", ["runId", "employeeId"])

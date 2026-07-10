@@ -7,6 +7,25 @@ import { employeeByUserId } from "./employees";
 import { effectiveCompensation } from "./compensation";
 import { computeCpf, ageOn } from "./model/cpf";
 import {
+  DEFAULT_WORKING_DAYS,
+  workingDaysInMonth,
+  workingDaysBetween,
+  proratedBaseCents,
+} from "./model/proration";
+import {
+  shgContributionCents,
+  sdlContributionCents,
+  customFundCents,
+} from "./model/funds";
+import {
+  getPayrollSettings,
+  type PayrollSettingsValue,
+} from "./payrollSettings";
+import {
+  ensureDefaultTemplate,
+  resolveTemplateConfig,
+} from "./payslipTemplates";
+import {
   payrollRunRow,
   payslipRow,
   payslipDetail,
@@ -40,6 +59,12 @@ function monthLabel(periodMonth: string): string {
   });
 }
 
+interface ProrationCtx {
+  totalWorkingDays: number;
+  daysWorked: number;
+  unpaidLeaveDays: number;
+}
+
 interface ComputedPayslip {
   baseCents: number;
   allowancesCents: number;
@@ -50,6 +75,12 @@ interface ComputedPayslip {
   netCents: number;
   cpfStatus: Doc<"compensation">["cpfStatus"];
   lines: { label: string; amountCents: number; type: "earning" | "deduction" | "employer" }[];
+  proration: {
+    totalWorkingDays: number;
+    daysWorked: number;
+    unpaidLeaveDays: number;
+    prorated: boolean;
+  };
 }
 
 // The bits of an adjustment that affect the computation. Accepts either a full
@@ -78,30 +109,50 @@ export function overtimePayCents(
 }
 
 // Pure-ish: derive a payslip from a compensation record + employee dob + the
-// run's one-off adjustments for this employee.
+// run's one-off adjustments + the proration context + org fund settings.
 function computePayslip(
   comp: Doc<"compensation">,
   dob: string | undefined,
   periodEnd: string,
   adjustments: AdjustmentInput[],
+  proration: ProrationCtx,
+  settings: PayrollSettingsValue,
 ): ComputedPayslip {
-  const baseCents = comp.baseMonthlyCents;
+  // Base pay prorated by days actually worked (MOM incomplete-month formula).
+  const fullBase = comp.baseMonthlyCents;
+  const proratedBase = proratedBaseCents(
+    fullBase,
+    proration.totalWorkingDays,
+    proration.daysWorked,
+  );
+  const isProrated = proratedBase !== fullBase;
+
   const compAllowancesCents = comp.allowances.reduce((s, a) => s + a.amountCents, 0);
 
   const additions = adjustments.filter((a) => a.kind === "addition");
   const deductions = adjustments.filter((a) => a.kind === "deduction");
+  const employerAdjustments = adjustments.filter((a) => a.kind === "employer");
   const grossDeductions = deductions.filter((d) => d.affectsGross); // pre-CPF
   const netDeductions = deductions.filter((d) => !d.affectsGross); // post-CPF
 
+  // Recurring compensation deductions (pre-/post-CPF like adjustments).
+  const compDeductions = comp.deductions ?? [];
+  const compGrossDeductions = compDeductions.filter((d) => d.affectsGross);
+  const compNetDeductions = compDeductions.filter((d) => !d.affectsGross);
+
   const additionsCents = additions.reduce((s, a) => s + a.amountCents, 0);
-  const grossDeductCents = grossDeductions.reduce((s, d) => s + d.amountCents, 0);
-  const netDeductCents = netDeductions.reduce((s, d) => s + d.amountCents, 0);
+  const grossDeductCents =
+    grossDeductions.reduce((s, d) => s + d.amountCents, 0) +
+    compGrossDeductions.reduce((s, d) => s + d.amountCents, 0);
+  const netDeductCents =
+    netDeductions.reduce((s, d) => s + d.amountCents, 0) +
+    compNetDeductions.reduce((s, d) => s + d.amountCents, 0);
 
   const allowancesCents = compAllowancesCents + additionsCents;
-  const grossCents = baseCents + allowancesCents - grossDeductCents;
+  const grossCents = proratedBase + allowancesCents - grossDeductCents;
 
-  // CPF Ordinary Wage = base + cpfable comp allowances + cpfable additions,
-  // less any pre-CPF deductions (e.g. no-pay leave).
+  // CPF Ordinary Wage = prorated base + cpfable comp allowances + cpfable
+  // additions, less any pre-CPF deductions.
   const cpfableAllowances = comp.allowances
     .filter((a) => a.cpfable)
     .reduce((s, a) => s + a.amountCents, 0);
@@ -110,51 +161,95 @@ function computePayslip(
     .reduce((s, a) => s + a.amountCents, 0);
   const ordinaryWage = Math.max(
     0,
-    baseCents + cpfableAllowances + cpfableAdditions - grossDeductCents,
+    proratedBase + cpfableAllowances + cpfableAdditions - grossDeductCents,
   );
   const age = dob ? ageOn(dob, periodEnd) : 30; // assume prime-age band if unknown
   const cpf = computeCpf(ordinaryWage, age, comp.cpfStatus);
 
-  const netCents = grossCents - cpf.employeeCpfCents - netDeductCents;
+  // ─── Funds (SHG deduction, SDL + custom employer contributions) ───
+  const empFunds = comp.funds;
+  let shgCents = 0;
+  let shgLabel = "";
+  if (empFunds?.shg) {
+    const fund = settings.shgFunds.find(
+      (f) => f.key === empFunds.shg && f.active,
+    );
+    if (fund) {
+      shgCents = shgContributionCents(grossCents, fund.bands);
+      shgLabel = fund.name;
+    }
+  }
+  const sdlCents = empFunds?.sdlEnabled
+    ? sdlContributionCents(grossCents, settings.sdl)
+    : 0;
+  const customDeductionFunds = (empFunds?.custom ?? [])
+    .filter((c) => c.kind === "deduction")
+    .map((c) => ({ name: c.name, cents: customFundCents(c, grossCents) }))
+    .filter((c) => c.cents > 0);
+  const customEmployerFunds = (empFunds?.custom ?? [])
+    .filter((c) => c.kind === "employer")
+    .map((c) => ({ name: c.name, cents: customFundCents(c, grossCents) }))
+    .filter((c) => c.cents > 0);
+  const customDeductCents = customDeductionFunds.reduce((s, c) => s + c.cents, 0);
 
-  const lines: ComputedPayslip["lines"] = [
-    { label: "Base pay", amountCents: baseCents, type: "earning" },
-    ...comp.allowances.map((a) => ({
-      label: a.name,
-      amountCents: a.amountCents,
-      type: "earning" as const,
-    })),
-    ...additions.map((a) => ({
-      label: a.label,
-      amountCents: a.amountCents,
-      type: "earning" as const,
-    })),
-    ...grossDeductions.map((d) => ({
-      label: d.label,
-      amountCents: d.amountCents,
-      type: "deduction" as const,
-    })),
-  ];
-  if (cpf.employeeCpfCents > 0) {
+  const compEmployerContribs = comp.employerContributions ?? [];
+
+  const netCents =
+    grossCents -
+    cpf.employeeCpfCents -
+    shgCents -
+    customDeductCents -
+    netDeductCents;
+
+  // ─── Lines ───
+  const lines: ComputedPayslip["lines"] = [];
+  lines.push({
+    label: isProrated
+      ? `Base pay (${proration.daysWorked}/${proration.totalWorkingDays} days)`
+      : "Base pay",
+    amountCents: proratedBase,
+    type: "earning",
+  });
+  for (const a of comp.allowances)
+    lines.push({ label: a.name, amountCents: a.amountCents, type: "earning" });
+  for (const a of additions)
+    lines.push({ label: a.label, amountCents: a.amountCents, type: "earning" });
+  for (const d of grossDeductions)
+    lines.push({ label: d.label, amountCents: d.amountCents, type: "deduction" });
+  for (const d of compGrossDeductions)
+    lines.push({ label: d.name, amountCents: d.amountCents, type: "deduction" });
+  if (cpf.employeeCpfCents > 0)
     lines.push({
       label: "CPF (employee)",
       amountCents: cpf.employeeCpfCents,
       type: "deduction",
     });
-  }
-  if (cpf.employerCpfCents > 0) {
+  if (shgCents > 0)
+    lines.push({ label: shgLabel, amountCents: shgCents, type: "deduction" });
+  for (const c of customDeductionFunds)
+    lines.push({ label: c.name, amountCents: c.cents, type: "deduction" });
+  for (const d of netDeductions)
+    lines.push({ label: d.label, amountCents: d.amountCents, type: "deduction" });
+  for (const d of compNetDeductions)
+    lines.push({ label: d.name, amountCents: d.amountCents, type: "deduction" });
+  // Employer contributions.
+  if (cpf.employerCpfCents > 0)
     lines.push({
       label: "CPF (employer)",
       amountCents: cpf.employerCpfCents,
       type: "employer",
     });
-  }
-  for (const d of netDeductions) {
-    lines.push({ label: d.label, amountCents: d.amountCents, type: "deduction" });
-  }
+  if (sdlCents > 0)
+    lines.push({ label: "SDL", amountCents: sdlCents, type: "employer" });
+  for (const c of customEmployerFunds)
+    lines.push({ label: c.name, amountCents: c.cents, type: "employer" });
+  for (const e of compEmployerContribs)
+    lines.push({ label: e.name, amountCents: e.amountCents, type: "employer" });
+  for (const a of employerAdjustments)
+    lines.push({ label: a.label, amountCents: a.amountCents, type: "employer" });
 
   return {
-    baseCents,
+    baseCents: proratedBase,
     allowancesCents,
     grossCents,
     cpfableWageCents: cpf.cpfableWageCents,
@@ -163,7 +258,76 @@ function computePayslip(
     netCents,
     cpfStatus: comp.cpfStatus,
     lines,
+    proration: {
+      totalWorkingDays: proration.totalWorkingDays,
+      daysWorked: proration.daysWorked,
+      unpaidLeaveDays: proration.unpaidLeaveDays,
+      prorated: isProrated,
+    },
   };
+}
+
+// Build the proration context for an employee's payslip: total working days in
+// the month, days actually worked (inside employment, minus unpaid-leave days),
+// and the unpaid-leave day count. Public holidays are treated as non-working.
+async function prorationContextFor(
+  ctx: QueryCtx,
+  employee: Doc<"employees"> | null,
+  comp: Doc<"compensation">,
+  periodMonth: string,
+): Promise<ProrationCtx> {
+  const workingDays =
+    comp.workingDays && comp.workingDays.length > 0
+      ? comp.workingDays
+      : DEFAULT_WORKING_DAYS;
+
+  const monthStart = `${periodMonth}-01`;
+  const monthEnd = periodEndDate(periodMonth);
+  const holidayRows = await ctx.db
+    .query("holidays")
+    .withIndex("by_org_date", (q) =>
+      q.eq("orgId", comp.orgId).gte("date", monthStart).lte("date", monthEnd),
+    )
+    .collect();
+  const holidays = new Set(holidayRows.map((h) => h.date));
+
+  const { total, withinEmployment } = workingDaysInMonth({
+    periodMonth,
+    workingDays,
+    holidays,
+    employmentStart: employee?.joinDate,
+    employmentEnd: employee?.exitDate,
+  });
+
+  // Distinct unpaid-leave working days that fall in the month.
+  let unpaidLeaveDays = 0;
+  if (employee) {
+    const approved = await ctx.db
+      .query("leaveRequests")
+      .withIndex("by_employee_status", (q) =>
+        q.eq("employeeId", employee._id).eq("status", "approved"),
+      )
+      .collect();
+    const unpaidDates = new Set<string>();
+    for (const req of approved) {
+      if (req.startDate > monthEnd || req.endDate < monthStart) continue;
+      const lt = await ctx.db.get(req.leaveTypeId);
+      if (!lt || lt.paid) continue; // only no-pay leave reduces pay
+      for (const d of workingDaysBetween({
+        start: req.startDate,
+        end: req.endDate,
+        periodMonth,
+        workingDays,
+        holidays,
+      })) {
+        unpaidDates.add(d);
+      }
+    }
+    unpaidLeaveDays = unpaidDates.size;
+  }
+
+  const daysWorked = Math.max(0, withinEmployment - unpaidLeaveDays);
+  return { totalWorkingDays: total, daysWorked, unpaidLeaveDays };
 }
 
 function runRow(run: Doc<"payrollRuns">) {
@@ -218,7 +382,16 @@ async function recomputePayslip(
       q.eq("runId", slip.runId).eq("employeeId", slip.employeeId),
     )
     .collect();
-  const computed = computePayslip(comp, emp?.dob, periodEnd, adjustments);
+  const proration = await prorationContextFor(ctx, emp, comp, slip.periodMonth);
+  const settings = await getPayrollSettings(ctx, slip.orgId);
+  const computed = computePayslip(
+    comp,
+    emp?.dob,
+    periodEnd,
+    adjustments,
+    proration,
+    settings,
+  );
   await ctx.db.patch(slip._id, {
     baseCents: computed.baseCents,
     allowancesCents: computed.allowancesCents,
@@ -229,7 +402,30 @@ async function recomputePayslip(
     netCents: computed.netCents,
     cpfStatus: computed.cpfStatus,
     lines: computed.lines,
+    proration: computed.proration,
   });
+}
+
+// Recompute every DRAFT payslip for an employee across open draft runs — called
+// when their compensation changes so open drafts pick up new pay/funds/etc.
+export async function recomputeDraftPayslipsForEmployee(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  employeeId: Id<"employees">,
+): Promise<void> {
+  const slips = await ctx.db
+    .query("payslips")
+    .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
+    .collect();
+  const runIds = new Set<Id<"payrollRuns">>();
+  for (const slip of slips) {
+    if (slip.orgId !== orgId || slip.status !== "draft") continue;
+    const run = await ctx.db.get(slip.runId);
+    if (!run || run.status !== "draft") continue;
+    await recomputePayslip(ctx, slip);
+    runIds.add(slip.runId);
+  }
+  for (const runId of runIds) await recomputeRunTotals(ctx, runId);
 }
 
 // Re-sum the run's denormalized totals from its payslips.
@@ -290,9 +486,10 @@ export const createRun = mutation({
     periodMonth: v.string(),
     label: v.optional(v.string()),
     payDate: v.optional(v.string()),
+    templateId: v.optional(v.id("payslipTemplates")),
   },
   returns: v.id("payrollRuns"),
-  handler: async (ctx, { periodMonth, label, payDate }) => {
+  handler: async (ctx, { periodMonth, label, payDate, templateId }) => {
     const { orgId, userId, org } = await requirePermission(ctx, "payroll:manage");
     if (!PERIOD_RE.test(periodMonth)) {
       throw new Error("Period must be in YYYY-MM format.");
@@ -305,6 +502,16 @@ export const createRun = mutation({
       .first();
     if (existing) {
       throw new Error("A payroll run for this period already exists.");
+    }
+
+    // Resolve the template (given, or ensure/seed the org default).
+    let resolvedTemplateId: Id<"payslipTemplates"> | undefined = templateId;
+    if (resolvedTemplateId) {
+      const tmpl = await ctx.db.get(resolvedTemplateId);
+      if (!tmpl || tmpl.orgId !== orgId) resolvedTemplateId = undefined;
+    }
+    if (!resolvedTemplateId) {
+      resolvedTemplateId = await ensureDefaultTemplate(ctx, orgId);
     }
 
     const periodEnd = periodEndDate(periodMonth);
@@ -327,9 +534,11 @@ export const createRun = mutation({
       employerCpfCents: 0,
       netCents: 0,
       payslipCount: 0,
+      templateId: resolvedTemplateId,
       createdBy: userId,
     });
 
+    const settings = await getPayrollSettings(ctx, orgId);
     let grossCents = 0;
     let employeeCpfCents = 0;
     let employerCpfCents = 0;
@@ -339,7 +548,15 @@ export const createRun = mutation({
     for (const e of employees) {
       const comp = await effectiveCompensation(ctx, e._id, periodEnd);
       if (!comp) continue; // no salary on file yet → skip
-      const slip = computePayslip(comp, e.dob, periodEnd, []);
+      const proration = await prorationContextFor(ctx, e, comp, periodMonth);
+      const slip = computePayslip(
+        comp,
+        e.dob,
+        periodEnd,
+        [],
+        proration,
+        settings,
+      );
       await ctx.db.insert("payslips", {
         orgId,
         runId,
@@ -356,6 +573,7 @@ export const createRun = mutation({
         cpfStatus: slip.cpfStatus,
         lines: slip.lines,
         status: "draft",
+        proration: slip.proration,
       });
       grossCents += slip.grossCents;
       employeeCpfCents += slip.employeeCpfCents;
@@ -383,103 +601,28 @@ export const createRun = mutation({
   },
 });
 
-async function setRunStatus(
-  ctx: MutationCtx,
-  runId: Id<"payrollRuns">,
-  status: "finalized" | "paid",
-  orgId: Id<"organizations">,
-) {
-  const slips = await ctx.db
-    .query("payslips")
-    .withIndex("by_run", (q) => q.eq("runId", runId))
-    .collect();
-  for (const s of slips) {
-    if (s.orgId === orgId) await ctx.db.patch(s._id, { status });
-  }
-}
+// Run completion, approval + release live in `convex/payrollApproval.ts`.
+// `monthLabel` is exported for reuse there (release notifications).
+export { monthLabel };
 
-export const finalizeRun = mutation({
+// Recompute every payslip in a draft run from current compensation, leave and
+// fund settings — picks up compensation/fund changes made after run creation.
+export const refreshRun = mutation({
   args: { runId: v.id("payrollRuns") },
   returns: v.null(),
   handler: async (ctx, { runId }) => {
-    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
     const run = await ctx.db.get(runId);
     if (!run || run.orgId !== orgId) throw new Error("Run not found.");
-    if (run.status !== "draft") throw new Error("Only draft runs can be finalized.");
-    await ctx.db.patch(runId, { status: "finalized", finalizedAt: Date.now() });
-    await setRunStatus(ctx, runId, "finalized", orgId);
-    await writeAuditLog(ctx, {
-      orgId,
-      actorUserId: userId,
-      action: "payroll.finalize",
-      entity: "payrollRuns",
-      entityId: runId,
-    });
-    return null;
-  },
-});
-
-export const markPaid = mutation({
-  args: { runId: v.id("payrollRuns"), payDate: v.optional(v.string()) },
-  returns: v.null(),
-  handler: async (ctx, { runId, payDate }) => {
-    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
-    const run = await ctx.db.get(runId);
-    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
-    if (run.status !== "finalized") {
-      throw new Error("Only finalized runs can be marked paid.");
+    if (run.status !== "draft") {
+      throw new Error("Only draft runs can be refreshed.");
     }
-    await ctx.db.patch(runId, {
-      status: "paid",
-      paidAt: Date.now(),
-      payDate: payDate ?? run.payDate ?? new Date().toISOString().slice(0, 10),
-    });
-    await setRunStatus(ctx, runId, "paid", orgId);
-
-    // Any claims that were pulled into this run are now reimbursed via payroll —
-    // close them out so they can't be re-pulled into a future run.
-    const claimAdjustments = await ctx.db
-      .query("payrollAdjustments")
-      .withIndex("by_run", (q) => q.eq("runId", runId))
-      .collect();
-    for (const adj of claimAdjustments) {
-      if (adj.source !== "claim" || !adj.sourceRefId) continue;
-      const claim = await ctx.db.get(adj.sourceRefId as Id<"claims">);
-      if (!claim || claim.orgId !== orgId) continue;
-      if (claim.status === "reimbursed") continue;
-      await ctx.db.patch(claim._id, {
-        status: "reimbursed",
-        reimbursedAt: Date.now(),
-      });
-    }
-
-    // Notify each employee that their payslip has been released.
     const slips = await ctx.db
       .query("payslips")
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .collect();
-    const label = monthLabel(run.periodMonth);
-    for (const slip of slips) {
-      if (slip.orgId !== orgId) continue;
-      const emp = await ctx.db.get(slip.employeeId);
-      if (!emp?.userId) continue;
-      await ctx.db.insert("notifications", {
-        orgId,
-        recipientUserId: emp.userId,
-        type: "payroll.payslip_released",
-        title: "Payslip available",
-        body: `Your payslip for ${label} has been released.`,
-        entityRef: { table: "payslips", id: slip._id },
-        read: false,
-      });
-    }
-    await writeAuditLog(ctx, {
-      orgId,
-      actorUserId: userId,
-      action: "payroll.mark_paid",
-      entity: "payrollRuns",
-      entityId: runId,
-    });
+    for (const slip of slips) await recomputePayslip(ctx, slip);
+    await recomputeRunTotals(ctx, runId);
     return null;
   },
 });
@@ -699,130 +842,9 @@ export const addAdjustmentsBulk = mutation({
   },
 });
 
-// Pull approved claims and/or unpaid leave for the period into the run as
-// adjustments. Idempotent — items already pulled (by source ref) are skipped.
-export const syncAutoItems = mutation({
-  args: {
-    runId: v.id("payrollRuns"),
-    sources: v.array(
-      v.union(v.literal("claim"), v.literal("unpaid_leave")),
-    ),
-  },
-  returns: v.object({ claims: v.number(), unpaidLeave: v.number() }),
-  handler: async (ctx, { runId, sources }) => {
-    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
-    const run = await ctx.db.get(runId);
-    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
-    if (run.status !== "draft") throw new Error("Only draft runs can be edited.");
-
-    // Employees that actually have a payslip in this run.
-    const slips = await ctx.db
-      .query("payslips")
-      .withIndex("by_run", (q) => q.eq("runId", runId))
-      .collect();
-    const slipByEmployee = new Map<Id<"employees">, Doc<"payslips">>();
-    for (const s of slips) slipByEmployee.set(s.employeeId, s);
-
-    // Already-pulled source refs, so re-syncing doesn't duplicate.
-    const existing = await ctx.db
-      .query("payrollAdjustments")
-      .withIndex("by_run", (q) => q.eq("runId", runId))
-      .collect();
-    const pulled = new Set(
-      existing.filter((a) => a.sourceRefId).map((a) => a.sourceRefId as string),
-    );
-
-    const touched = new Set<Id<"payslips">>();
-    let claimsAdded = 0;
-    let unpaidLeaveAdded = 0;
-
-    if (sources.includes("claim")) {
-      const claims = await ctx.db
-        .query("claims")
-        .withIndex("by_org_status", (q) =>
-          q.eq("orgId", orgId).eq("status", "approved"),
-        )
-        .collect();
-      for (const claim of claims) {
-        if (!claim.incurredDate.startsWith(run.periodMonth)) continue;
-        if (!claim.sentToPayroll) continue; // only claims queued for payroll
-        if (pulled.has(claim._id)) continue;
-        const slip = slipByEmployee.get(claim.employeeId);
-        if (!slip) continue;
-        const claimType = await ctx.db.get(claim.claimTypeId);
-        await ctx.db.insert("payrollAdjustments", {
-          orgId,
-          runId,
-          employeeId: claim.employeeId,
-          kind: "addition",
-          source: "claim",
-          label: `Claim — ${claimType?.name ?? claim.description}`,
-          amountCents: claim.amountCents,
-          cpfable: false, // expense reimbursements are not CPF-able
-          affectsGross: false,
-          sourceRefId: claim._id,
-          createdBy: userId,
-        });
-        touched.add(slip._id);
-        claimsAdded += 1;
-      }
-    }
-
-    if (sources.includes("unpaid_leave")) {
-      const requests = await ctx.db
-        .query("leaveRequests")
-        .withIndex("by_org_status", (q) =>
-          q.eq("orgId", orgId).eq("status", "approved"),
-        )
-        .collect();
-      for (const req of requests) {
-        if (!req.startDate.startsWith(run.periodMonth)) continue;
-        if (pulled.has(req._id)) continue;
-        const slip = slipByEmployee.get(req.employeeId);
-        if (!slip) continue;
-        const leaveType = await ctx.db.get(req.leaveTypeId);
-        if (!leaveType || leaveType.paid) continue; // only no-pay leave
-        const periodEnd = periodEndDate(run.periodMonth);
-        const comp = await effectiveCompensation(ctx, req.employeeId, periodEnd);
-        if (!comp) continue;
-        // MOM convention: daily rate = monthly basic / 26 working days.
-        const dailyRate = Math.round(comp.baseMonthlyCents / 26);
-        const amountCents = Math.round(dailyRate * req.totalDays);
-        if (amountCents <= 0) continue;
-        await ctx.db.insert("payrollAdjustments", {
-          orgId,
-          runId,
-          employeeId: req.employeeId,
-          kind: "deduction",
-          source: "unpaid_leave",
-          label: `No-pay leave — ${req.totalDays} day(s)`,
-          amountCents,
-          cpfable: false,
-          affectsGross: true, // reduces gross + CPF-able wage
-          sourceRefId: req._id,
-          createdBy: userId,
-        });
-        touched.add(slip._id);
-        unpaidLeaveAdded += 1;
-      }
-    }
-
-    for (const slipId of touched) {
-      const slip = await ctx.db.get(slipId);
-      if (slip) await recomputePayslip(ctx, slip);
-    }
-    await recomputeRunTotals(ctx, runId);
-    await writeAuditLog(ctx, {
-      orgId,
-      actorUserId: userId,
-      action: "payroll.sync_items",
-      entity: "payrollRuns",
-      entityId: runId,
-      after: { claimsAdded, unpaidLeaveAdded },
-    });
-    return { claims: claimsAdded, unpaidLeave: unpaidLeaveAdded };
-  },
-});
+// Note: no-pay leave no longer needs an explicit "pull" — base pay is prorated
+// automatically from each employee's working days (see `prorationContextFor`).
+// Approved claims are pulled explicitly via `pullClaims` (per-claim selection).
 
 // ─── Roster editing (add / remove employees) ─────────────────────────────────
 
@@ -852,7 +874,16 @@ export const addEmployeeToRun = mutation({
     if (!comp) {
       throw new Error("This employee has no compensation on file for this period.");
     }
-    const slip = computePayslip(comp, emp.dob, periodEnd, []);
+    const proration = await prorationContextFor(ctx, emp, comp, run.periodMonth);
+    const settings = await getPayrollSettings(ctx, orgId);
+    const slip = computePayslip(
+      comp,
+      emp.dob,
+      periodEnd,
+      [],
+      proration,
+      settings,
+    );
     await ctx.db.insert("payslips", {
       orgId,
       runId,
@@ -869,6 +900,7 @@ export const addEmployeeToRun = mutation({
       cpfStatus: slip.cpfStatus,
       lines: slip.lines,
       status: "draft",
+      proration: slip.proration,
     });
     await recomputeRunTotals(ctx, runId);
     await writeAuditLog(ctx, {
@@ -1054,6 +1086,8 @@ export const getRunWorkspace = query({
           employerCpfCents: s.employerCpfCents,
           netCents: s.netCents,
           cpfStatus: s.cpfStatus,
+          proration: s.proration ?? null,
+          lines: s.lines,
           adjustments: adjustments
             .map((a) => ({
               _id: a._id,
@@ -1374,7 +1408,9 @@ export const myPayslips = query({
       .withIndex("by_employee", (q) => q.eq("employeeId", own._id))
       .order("desc")
       .take(48);
-    const visible = slips.filter((s) => s.status !== "draft");
+    // Only released (paid) payslips are visible to the employee — nothing leaks
+    // while a run is in draft / pending approval.
+    const visible = slips.filter((s) => s.status === "paid");
     return await Promise.all(visible.map((s) => hydratePayslip(ctx, s)));
   },
 });
@@ -1399,7 +1435,13 @@ export const forEmployeeProfile = query({
       .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
       .order("desc")
       .take(48);
-    const visible = slips.filter((s) => s.status !== "draft");
+    // HR/payroll see everything non-draft; the employee themselves sees only
+    // released (paid) payslips.
+    const visible = slips.filter((s) =>
+      isSelf && !ctxHasPermission(orgCtx, "payroll:manage")
+        ? s.status === "paid"
+        : s.status !== "draft",
+    );
     return await Promise.all(visible.map((s) => hydratePayslip(ctx, s)));
   },
 });
@@ -1415,7 +1457,8 @@ export const getPayslip = query({
     const canManage = ctxHasPermission(orgCtx, "payroll:manage");
     if (!canManage) {
       const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
-      if (!own || slip.employeeId !== own._id || slip.status === "draft") {
+      // Employees may only view their own, released (paid) payslip.
+      if (!own || slip.employeeId !== own._id || slip.status !== "paid") {
         throw new Error("Not authorized to view this payslip.");
       }
     }
@@ -1425,6 +1468,19 @@ export const getPayslip = query({
       emp?.positionId ? ctx.db.get(emp.positionId) : Promise.resolve(null),
       ctx.db.get(slip.runId),
     ]);
+    const template = await resolveTemplateConfig(
+      ctx,
+      orgCtx.orgId,
+      run?.templateId,
+    );
+    const signatures = await Promise.all(
+      (slip.signatures ?? []).map(async (s) => ({
+        role: s.role,
+        name: s.name,
+        url: await ctx.storage.getUrl(s.signatureStorageId),
+        signedAt: s.signedAt,
+      })),
+    );
     return {
       _id: slip._id,
       _creationTime: slip._creationTime,
@@ -1442,6 +1498,9 @@ export const getPayslip = query({
       cpfStatus: slip.cpfStatus,
       lines: slip.lines,
       status: slip.status,
+      proration: slip.proration ?? null,
+      template,
+      signatures,
       companyName: orgCtx.org.name,
       employeeNumber: emp?.employeeNumber ?? "—",
       departmentName: dept?.name ?? null,

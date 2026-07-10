@@ -14,6 +14,7 @@ import {
   IconClock,
   IconUserPlus,
   IconUserMinus,
+  IconRefresh,
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -54,21 +55,17 @@ function initials(name: string) {
 
 function ValidateBanner({
   available,
-  onPullLeave,
   onOpenClaims,
-  pulling,
 }: {
   available: Workspace["available"]
-  onPullLeave: () => void
   onOpenClaims: () => void
-  pulling: boolean
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border bg-muted/40 p-4">
       <div className="text-sm font-medium">
         Validate payroll items
         <p className="text-muted-foreground text-xs font-normal">
-          Review and pull items before you continue.
+          Review items before you continue.
         </p>
       </div>
       <div className="flex items-center gap-2 text-sm">
@@ -77,11 +74,9 @@ function ValidateBanner({
         {available.unpaidLeaveDays > 0 && (
           <Badge variant="secondary">{available.unpaidLeaveDays}d</Badge>
         )}
-        {available.unpaidLeaveDays > 0 && (
-          <Button size="sm" variant="outline" onClick={onPullLeave} disabled={pulling}>
-            Pull
-          </Button>
-        )}
+        <span className="text-muted-foreground text-xs">
+          auto-prorated from base pay
+        </span>
       </div>
       <div className="flex items-center gap-2 text-sm">
         <IconReceipt className="text-muted-foreground size-4" />
@@ -112,7 +107,7 @@ function AdjustmentLines({
   totalCents: number
   currency: string
   items: Adjustment[]
-  tone: "earning" | "deduction"
+  tone: "earning" | "deduction" | "employer"
   onRemove: (id: Id<"payrollAdjustments">) => void
 }) {
   if (items.length === 0) return null
@@ -122,7 +117,9 @@ function AdjustmentLines({
         className={`flex items-center justify-between px-2 py-1.5 font-medium ${
           tone === "earning"
             ? "bg-emerald-50 dark:bg-emerald-950/30"
-            : "bg-rose-50 dark:bg-rose-950/30"
+            : tone === "employer"
+              ? "bg-indigo-50 dark:bg-indigo-950/30"
+              : "bg-rose-50 dark:bg-rose-950/30"
         }`}
       >
         <span>{title}</span>
@@ -187,8 +184,10 @@ function EmployeeRow({
 
   const additions = p.adjustments.filter((a) => a.kind === "addition")
   const deductions = p.adjustments.filter((a) => a.kind === "deduction")
+  const employerItems = p.adjustments.filter((a) => a.kind === "employer")
   const additionsTotal = additions.reduce((s, a) => s + a.amountCents, 0)
   const deductionsTotal = deductions.reduce((s, a) => s + a.amountCents, 0)
+  const employerTotal = employerItems.reduce((s, a) => s + a.amountCents, 0)
 
   async function remove(id: Id<"payrollAdjustments">) {
     try {
@@ -257,7 +256,18 @@ function EmployeeRow({
           <TableCell colSpan={showEmployer ? 6 : 5} className="bg-muted/30 p-0">
             <div className="flex flex-col gap-3 p-4">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Basic salary</span>
+                <span className="text-muted-foreground">
+                  Basic salary
+                  {p.proration?.prorated && (
+                    <span className="ml-2 text-xs">
+                      prorated · {p.proration.daysWorked}/
+                      {p.proration.totalWorkingDays} days
+                      {p.proration.unpaidLeaveDays > 0
+                        ? ` · ${p.proration.unpaidLeaveDays}d unpaid`
+                        : ""}
+                    </span>
+                  )}
+                </span>
                 <span className="tabular-nums">
                   {formatMoney(p.baseCents, p.currency)}
                 </span>
@@ -312,6 +322,14 @@ function EmployeeRow({
                     {formatMoney(p.employeeCpfCents, p.currency)}
                   </span>
                 </div>
+                <AdjustmentLines
+                  title="Employer contributions"
+                  totalCents={employerTotal}
+                  currency={p.currency}
+                  items={employerItems}
+                  tone="employer"
+                  onRemove={remove}
+                />
               </div>
 
               <div className="flex items-center justify-between gap-2">
@@ -364,14 +382,13 @@ function EmployeeRow({
 }
 
 export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
-  const syncAutoItems = useMutation(api.payroll.syncAutoItems)
+  const refreshRun = useMutation(api.payroll.refreshRun)
   const [search, setSearch] = React.useState("")
   const [showEmployer, setShowEmployer] = React.useState(false)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
   const [bulkOpen, setBulkOpen] = React.useState(false)
   const [addEmpOpen, setAddEmpOpen] = React.useState(false)
   const [claimsOpen, setClaimsOpen] = React.useState(false)
-  const [pulling, setPulling] = React.useState(false)
 
   const { run, payslips, available } = workspace
   const filtered = payslips.filter((p) =>
@@ -387,32 +404,11 @@ export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
     })
   }
 
-  async function pullLeave() {
-    setPulling(true)
-    try {
-      const res = await syncAutoItems({
-        runId: run._id,
-        sources: ["unpaid_leave"],
-      })
-      toast.success(
-        res.unpaidLeave === 0
-          ? "Nothing new to pull"
-          : `Pulled ${res.unpaidLeave} no-pay leave item${res.unpaidLeave === 1 ? "" : "s"}`,
-      )
-    } catch (e) {
-      toast.error(getErrorMessage(e, "Couldn't pull items"))
-    } finally {
-      setPulling(false)
-    }
-  }
-
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6">
       <ValidateBanner
         available={available}
-        onPullLeave={pullLeave}
         onOpenClaims={() => setClaimsOpen(true)}
-        pulling={pulling}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -427,6 +423,20 @@ export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
             <Switch checked={showEmployer} onCheckedChange={setShowEmployer} />
             Employer contributions
           </Label>
+          <Button
+            variant="outline"
+            onClick={async () => {
+              try {
+                await refreshRun({ runId: run._id })
+                toast.success("Payslips recomputed from current compensation")
+              } catch (e) {
+                toast.error(getErrorMessage(e, "Couldn't refresh"))
+              }
+            }}
+          >
+            <IconRefresh className="size-4" />
+            Refresh
+          </Button>
           <Button variant="outline" onClick={() => setAddEmpOpen(true)}>
             <IconUserPlus className="size-4" />
             Add employee

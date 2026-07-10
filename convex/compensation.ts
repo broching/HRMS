@@ -3,8 +3,15 @@ import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, requirePermission } from "./auth";
 import { ctxHasPermission } from "./auth";
+import { recomputeDraftPayslipsForEmployee } from "./payroll";
 import { writeAuditLog } from "./lib/audit";
-import { allowanceItem, cpfStatus } from "./lib/enums";
+import {
+  allowanceItem,
+  cpfStatus,
+  employeeFunds,
+  deductionItem,
+  employerContribItem,
+} from "./lib/enums";
 import { compensationDoc, compensationRow } from "./lib/validators";
 
 // The compensation in effect for an employee on `onDate` = the row with the
@@ -20,7 +27,13 @@ export async function effectiveCompensation(
     .collect();
   const eligible = rows.filter((c) => c.effectiveDate <= onDate);
   if (eligible.length === 0) return null;
-  return eligible.reduce((a, b) => (a.effectiveDate >= b.effectiveDate ? a : b));
+  // Latest effective date wins; on a tie (two records saved the same day) the
+  // most recently created one wins, so re-saving compensation takes effect.
+  return eligible.reduce((a, b) => {
+    if (b.effectiveDate > a.effectiveDate) return b;
+    if (b.effectiveDate < a.effectiveDate) return a;
+    return b._creationTime >= a._creationTime ? b : a;
+  });
 }
 
 // Full salary history for one employee (most recent first).
@@ -125,6 +138,10 @@ export const setCompensation = mutation({
     baseMonthlyCents: v.number(),
     allowances: v.optional(v.array(allowanceItem)),
     cpfStatus: cpfStatus,
+    workingDays: v.optional(v.array(v.number())),
+    funds: v.optional(employeeFunds),
+    deductions: v.optional(v.array(deductionItem)),
+    employerContributions: v.optional(v.array(employerContribItem)),
     currency: v.optional(v.string()),
     note: v.optional(v.string()),
   },
@@ -145,6 +162,10 @@ export const setCompensation = mutation({
       baseMonthlyCents: args.baseMonthlyCents,
       allowances: args.allowances ?? [],
       cpfStatus: args.cpfStatus,
+      workingDays: args.workingDays,
+      funds: args.funds,
+      deductions: args.deductions,
+      employerContributions: args.employerContributions,
       note: args.note,
       createdBy: userId,
     });
@@ -160,6 +181,8 @@ export const setCompensation = mutation({
         effectiveDate: args.effectiveDate,
       },
     });
+    // Reflect the change in any open draft payroll runs immediately.
+    await recomputeDraftPayslipsForEmployee(ctx, orgId, args.employeeId);
     return id;
   },
 });
@@ -182,6 +205,7 @@ export const removeCompensation = mutation({
       entityId: id,
       before: existing,
     });
+    await recomputeDraftPayslipsForEmployee(ctx, orgId, existing.employeeId);
     return null;
   },
 });

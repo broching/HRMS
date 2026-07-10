@@ -40,7 +40,10 @@ import {
   centsToCsv,
   downloadFile,
 } from "@/features/payroll/lib/labels"
+import { getErrorMessage } from "@/lib/errors"
 import { AdjustPayrollStep } from "@/features/payroll/components/adjust-payroll-step"
+import { ApprovalsTable } from "@/features/payroll/components/approvals-table"
+import { SignatureCaptureDialog } from "@/features/payroll/components/signature-pad"
 
 function initials(name: string) {
   const [a, b] = name.split(" ")
@@ -295,6 +298,33 @@ function PaymentStep({ workspace }: { workspace: Workspace }) {
     downloadFile(`${fileStem}-report.csv`, csv)
   }
 
+  // One row per payslip line so every item — funds (CDAC/SDL), custom funds,
+  // additions, deductions and employer contributions — is exported.
+  function downloadDetailedBreakdown() {
+    const kindLabel: Record<string, string> = {
+      earning: "Earning",
+      deduction: "Deduction",
+      employer: "Employer contribution",
+    }
+    const rows: (string | number)[][] = []
+    for (const p of payslips) {
+      for (const l of p.lines) {
+        rows.push([
+          p.employeeName,
+          kindLabel[l.type] ?? l.type,
+          l.label,
+          centsToCsv(l.amountCents),
+          p.currency,
+        ])
+      }
+    }
+    const csv = toCsv(
+      ["Employee", "Category", "Item", "Amount", "Currency"],
+      rows,
+    )
+    downloadFile(`${fileStem}-detailed.csv`, csv)
+  }
+
   function downloadVarianceReport() {
     if (!variance) return
     const csv = toCsv(
@@ -335,13 +365,45 @@ function PaymentStep({ workspace }: { workspace: Workspace }) {
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6">
+      {run.status !== "draft" && (
+        <Card>
+          <CardContent className="flex flex-col gap-3 py-4">
+            <div>
+              <p className="font-semibold">Approvals</p>
+              <p className="text-muted-foreground text-sm">
+                {run.status === "pending_approval"
+                  ? "Each payslip must be approved and signed before release."
+                  : run.status === "approved"
+                    ? "All payslips approved — ready to release."
+                    : "Payroll released."}
+              </p>
+            </div>
+            <ApprovalsTable runId={run._id} />
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="py-2">
           <DownloadRow
             title="Payroll report"
-            description="Full breakdown for this pay period."
+            description="Employee-level totals for this pay period."
           >
             <Button variant="outline" size="sm" onClick={downloadPayrollReport}>
+              <IconDownload className="size-4" />
+              Download
+            </Button>
+          </DownloadRow>
+          <Separator />
+          <DownloadRow
+            title="Detailed breakdown"
+            description="Every line item — funds (CDAC/SDL), custom funds, additions, deductions and employer contributions."
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={downloadDetailedBreakdown}
+            >
               <IconDownload className="size-4" />
               Download
             </Button>
@@ -457,11 +519,15 @@ function PaymentStep({ workspace }: { workspace: Workspace }) {
 export function RunWizard({ runId }: { runId: Id<"payrollRuns"> }) {
   const router = useRouter()
   const workspace = useQuery(api.payroll.getRunWorkspace, { runId })
-  const finalize = useMutation(api.payroll.finalizeRun)
-  const markPaid = useMutation(api.payroll.markPaid)
+  const completeRun = useMutation(api.payrollApproval.completeRun)
+  const releaseRun = useMutation(api.payrollApproval.releaseRun)
+  const getUploadUrl = useMutation(
+    api.payrollApproval.generateSignatureUploadUrl,
+  )
 
   const [step, setStep] = React.useState(1)
-  const [confirmOpen, setConfirmOpen] = React.useState(false)
+  const [signOpen, setSignOpen] = React.useState(false)
+  const [releaseOpen, setReleaseOpen] = React.useState(false)
   const initialised = React.useRef(false)
 
   React.useEffect(() => {
@@ -488,15 +554,28 @@ export function RunWizard({ runId }: { runId: Id<"payrollRuns"> }) {
 
   const { run } = workspace
 
-  // Finalize (if still draft) then release payslips. Throws on failure so the
-  // confirm dialog stays open.
-  async function completePayroll() {
+  // Complete the run: the preparer signs, and the approval chain (if any) is
+  // snapshotted onto every payslip. Called from the signature dialog.
+  async function onPreparerSigned(signatureStorageId: string) {
     try {
-      if (run.status === "draft") await finalize({ runId })
-      await markPaid({ runId })
-      toast.success("Payroll completed — payslips released")
+      await completeRun({
+        runId,
+        signatureStorageId: signatureStorageId as Id<"_storage">,
+      })
+      toast.success("Payroll completed — sent for approval")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't complete payroll")
+      toast.error(getErrorMessage(e, "Couldn't complete payroll"))
+      throw e
+    }
+  }
+
+  // Release an approved run to employees.
+  async function release() {
+    try {
+      await releaseRun({ runId })
+      toast.success("Payroll released — payslips available to employees")
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't release payroll"))
       throw e
     }
   }
@@ -557,21 +636,39 @@ export function RunWizard({ runId }: { runId: Id<"payrollRuns"> }) {
           {step === 3 &&
             (completed ? (
               <Badge variant="default" className="self-center">
-                Completed{run.payDate ? ` · ${run.payDate}` : ""}
+                Released{run.payDate ? ` · ${run.payDate}` : ""}
               </Badge>
+            ) : run.status === "draft" ? (
+              <Button onClick={() => setSignOpen(true)}>Complete payroll</Button>
+            ) : run.status === "approved" || run.status === "finalized" ? (
+              <Button onClick={() => setReleaseOpen(true)}>
+                Release to employees
+              </Button>
             ) : (
-              <Button onClick={() => setConfirmOpen(true)}>Complete payroll</Button>
+              <Badge variant="outline" className="self-center">
+                Pending approval
+              </Badge>
             ))}
         </div>
       </div>
 
+      <SignatureCaptureDialog
+        open={signOpen}
+        onOpenChange={setSignOpen}
+        title="Sign to complete payroll"
+        description="Your signature is applied to every payslip as the preparer. Approvers then sign before release."
+        confirmLabel="Complete & sign"
+        getUploadUrl={() => getUploadUrl({})}
+        onSigned={onPreparerSigned}
+      />
+
       <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title="Complete payroll?"
-        description="This finalizes the run and releases payslips to all employees. You won't be able to edit it afterwards."
-        confirmLabel="Complete payroll"
-        onConfirm={completePayroll}
+        open={releaseOpen}
+        onOpenChange={setReleaseOpen}
+        title="Release payroll?"
+        description="This marks the run as paid and makes payslips visible to all employees. This can't be undone."
+        confirmLabel="Release"
+        onConfirm={release}
       />
     </div>
   )
