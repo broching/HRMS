@@ -6,7 +6,7 @@ import { toast } from "sonner"
 import { IconPlus, IconX } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { CpfStatus, ShgFundKey } from "@/convex/lib/enums"
+import type { CpfStatus, PayType, ShgFundKey } from "@/convex/lib/enums"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -27,7 +27,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
-import { CPF_STATUS_LABELS, dollarsToCents } from "@/features/payroll/lib/labels"
+import {
+  CPF_STATUS_LABELS,
+  CPF_STATUS_OPTIONS,
+  dollarsToCents,
+} from "@/features/payroll/lib/labels"
+import { CURRENCIES } from "@/features/claims/lib/labels"
 
 type AllowanceRow = { name: string; amount: string; cpfable: boolean }
 type DeductionRow = { name: string; amount: string; affectsGross: boolean }
@@ -58,6 +63,15 @@ const SHG_LABELS: Record<ShgFundKey, string> = {
   ecf: "ECF (Eurasian)",
 }
 
+// Map the legacy `citizen_pr` value onto `citizen` so the picker (which only
+// offers the split options) shows a valid selection for old records.
+function coerceCpf(
+  s: CpfStatus | null | undefined,
+): Exclude<CpfStatus, "citizen_pr"> | null {
+  if (s == null) return null
+  return s === "citizen_pr" ? "citizen" : s
+}
+
 export function SetCompensationDialog({
   open,
   onOpenChange,
@@ -79,14 +93,25 @@ export function SetCompensationDialog({
     open ? { employeeId } : "skip",
   )
   const current = history?.[0]
+  const baseCurrencyQuery = useQuery(
+    api.compensation.orgBaseCurrency,
+    open ? {} : "skip",
+  )
+  const baseCurrency = baseCurrencyQuery?.currency ?? "SGD"
 
   const [effectiveDate, setEffectiveDate] = React.useState(() =>
     new Date().toISOString().slice(0, 10),
   )
+  const [payType, setPayType] = React.useState<PayType>("fixed")
   const [base, setBase] = React.useState("")
+  const [hourlyRate, setHourlyRate] = React.useState("")
   const [cpf, setCpf] = React.useState<CpfStatus>(
-    defaultCpfStatus ?? "citizen_pr",
+    coerceCpf(defaultCpfStatus) ?? "citizen",
   )
+  const [prStart, setPrStart] = React.useState("")
+  const [currency, setCurrency] = React.useState("")
+  const [exMode, setExMode] = React.useState<"auto" | "manual">("auto")
+  const [manualRate, setManualRate] = React.useState("")
   const [allowances, setAllowances] = React.useState<AllowanceRow[]>([])
   const [workingDays, setWorkingDays] = React.useState<number[]>([1, 2, 3, 4, 5])
   const [shg, setShg] = React.useState<ShgFundKey | "none">("none")
@@ -106,10 +131,27 @@ export function SetCompensationDialog({
       seeded.current = false
       return
     }
-    if (seeded.current || current === undefined) return
+    if (seeded.current || current === undefined || baseCurrencyQuery === undefined)
+      return
     seeded.current = true
-    setCpf(current?.cpfStatus ?? defaultCpfStatus ?? "citizen_pr")
-    setBase(current ? (current.baseMonthlyCents / 100).toFixed(2) : "")
+    setCpf(coerceCpf(current?.cpfStatus ?? defaultCpfStatus) ?? "citizen")
+    setPrStart(current?.prStartDate ?? "")
+    setCurrency(current?.currency ?? baseCurrency)
+    setExMode(current?.exchangeMode ?? "auto")
+    setManualRate(
+      current?.manualRate != null ? String(current.manualRate) : "",
+    )
+    setPayType(current?.payType ?? "fixed")
+    setBase(
+      current && current.payType !== "hourly"
+        ? (current.baseMonthlyCents / 100).toFixed(2)
+        : "",
+    )
+    setHourlyRate(
+      current?.hourlyRateCents != null
+        ? (current.hourlyRateCents / 100).toFixed(2)
+        : "",
+    )
     setAllowances(
       (current?.allowances ?? []).map((a) => ({
         name: a.name,
@@ -150,7 +192,7 @@ export function SetCompensationDialog({
       })),
     )
     setNote("")
-  }, [open, current, defaultCpfStatus])
+  }, [open, current, defaultCpfStatus, baseCurrencyQuery])
 
   function toggleWeekday(value: number) {
     setWorkingDays((d) =>
@@ -159,9 +201,15 @@ export function SetCompensationDialog({
   }
 
   async function submit() {
-    const baseCents = dollarsToCents(base)
+    const isHourly = payType === "hourly"
+    const baseCents = isHourly ? 0 : dollarsToCents(base)
     if (baseCents === null) {
       toast.error("Enter a valid base salary.")
+      return
+    }
+    const hourlyRateCents = isHourly ? dollarsToCents(hourlyRate) : null
+    if (isHourly && (hourlyRateCents === null || hourlyRateCents <= 0)) {
+      toast.error("Enter a valid hourly rate.")
       return
     }
     // Allowances
@@ -258,14 +306,33 @@ export function SetCompensationDialog({
       }
     }
 
+    if (cpf === "pr" && !prStart) {
+      toast.error("Enter the date this employee became a PR.")
+      return
+    }
+
+    const isForeign = !!currency && currency !== baseCurrency
+    const manualRateNum = Number(manualRate)
+    if (isForeign && exMode === "manual" && !(manualRateNum > 0)) {
+      toast.error("Enter a valid default exchange rate, or use auto.")
+      return
+    }
+
     setBusy(true)
     try {
       await setCompensation({
         employeeId,
         effectiveDate,
+        payType,
         baseMonthlyCents: baseCents,
+        hourlyRateCents: isHourly ? (hourlyRateCents ?? 0) : undefined,
         allowances: mappedAllowances,
         cpfStatus: cpf,
+        prStartDate: cpf === "pr" ? prStart : undefined,
+        currency: currency || undefined,
+        exchangeMode: isForeign ? exMode : undefined,
+        manualRate:
+          isForeign && exMode === "manual" ? manualRateNum : undefined,
         workingDays,
         funds: {
           shg: shg === "none" ? undefined : shg,
@@ -296,7 +363,7 @@ export function SetCompensationDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-5">
-          {/* Base + effective */}
+          {/* Pay basis + effective */}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="c-eff">Effective date</Label>
@@ -308,32 +375,151 @@ export function SetCompensationDialog({
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="c-base">Base monthly</Label>
-              <Input
-                id="c-base"
-                inputMode="decimal"
-                value={base}
-                onChange={(e) => setBase(e.target.value)}
-                placeholder="5000.00"
-              />
+              <Label>Pay basis</Label>
+              <Select
+                value={payType}
+                onValueChange={(v) => setPayType(v as PayType)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fixed">Fixed monthly</SelectItem>
+                  <SelectItem value="hourly">Hourly rate</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label>CPF status</Label>
-            <Select value={cpf} onValueChange={(v) => setCpf(v as CpfStatus)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(CPF_STATUS_LABELS) as CpfStatus[]).map((k) => (
-                  <SelectItem key={k} value={k}>
-                    {CPF_STATUS_LABELS[k]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="grid grid-cols-2 gap-3">
+            {payType === "hourly" ? (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="c-rate">Hourly rate</Label>
+                <Input
+                  id="c-rate"
+                  inputMode="decimal"
+                  value={hourlyRate}
+                  onChange={(e) => setHourlyRate(e.target.value)}
+                  placeholder="25.00"
+                />
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="c-base">Base monthly</Label>
+                <Input
+                  id="c-base"
+                  inputMode="decimal"
+                  value={base}
+                  onChange={(e) => setBase(e.target.value)}
+                  placeholder="5000.00"
+                />
+              </div>
+            )}
           </div>
+          {payType === "hourly" && (
+            <p className="text-muted-foreground -mt-3 text-xs">
+              Pay is computed as hourly rate × hours worked. Enter each
+              employee&apos;s hours during the payroll adjust stage.
+            </p>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>CPF status</Label>
+              <Select value={cpf} onValueChange={(v) => setCpf(v as CpfStatus)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CPF_STATUS_OPTIONS.map((k) => (
+                    <SelectItem key={k} value={k}>
+                      {CPF_STATUS_LABELS[k]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {cpf === "pr" && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="c-pr">Singapore PR since</Label>
+                <Input
+                  id="c-pr"
+                  type="date"
+                  value={prStart}
+                  onChange={(e) => setPrStart(e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+          {cpf === "pr" && (
+            <p className="text-muted-foreground -mt-3 text-xs">
+              CPF contributions are graduated for the first two years — Year 1
+              (4% / 5%), Year 2 (9% / 15%), then full rates (17% / 20%) from Year
+              3. The year is derived from this date at each pay run.
+            </p>
+          )}
+          {cpf === "foreigner" && (
+            <p className="text-muted-foreground -mt-3 text-xs">
+              Foreigners (work-pass holders) have no CPF contributions.
+            </p>
+          )}
+
+          {/* Pay currency + conversion */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>Pay currency</Label>
+              <Select value={currency} onValueChange={setCurrency}>
+                <SelectTrigger>
+                  <SelectValue placeholder={baseCurrency} />
+                </SelectTrigger>
+                <SelectContent>
+                  {CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                      {c === baseCurrency ? " (base)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {!!currency && currency !== baseCurrency && (
+            <div className="border-primary/30 bg-muted/40 flex flex-col gap-2 rounded-lg border p-3">
+              <p className="text-xs">
+                Paid in {currency}; the payslip shows {currency}. A rate converts
+                to {baseCurrency} for run totals — set/adjust it during each run.
+              </p>
+              <div className="flex gap-1 rounded-md border p-0.5">
+                {(["auto", "manual"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setExMode(m)}
+                    className={cn(
+                      "flex-1 rounded px-2 py-1 text-xs font-medium capitalize",
+                      exMode === m
+                        ? "bg-background shadow-sm"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {m === "auto" ? "Auto (live rate)" : "Manual rate"}
+                  </button>
+                ))}
+              </div>
+              {exMode === "manual" && (
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">
+                    Default rate (1 {currency} = ? {baseCurrency})
+                  </Label>
+                  <Input
+                    inputMode="decimal"
+                    value={manualRate}
+                    onChange={(e) => setManualRate(e.target.value)}
+                    placeholder="e.g. 1.35"
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Working days */}
           <div className="flex flex-col gap-1.5">

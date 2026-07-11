@@ -22,7 +22,7 @@ export default function PayrollSettingsPage() {
       </div>
       <PageHeader
         title="Payroll settings"
-        description="Statutory funds, approval flow, and payslip templates."
+        description="Approval flow and payslip templates. CPF rates and statutory funds are under Compensation."
       />
       <PayrollSettingsTabs />
     </div>

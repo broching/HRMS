@@ -3,7 +3,11 @@ import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requirePermission } from "./auth";
 import { writeAuditLog } from "./lib/audit";
-import { payslipTemplateShow } from "./lib/enums";
+import {
+  payslipTemplateShow,
+  payslipLayoutBlock,
+  payslipDensity,
+} from "./lib/enums";
 import { payslipTemplateRow, payslipTemplateConfig } from "./lib/validators";
 import { DEFAULT_PAYSLIP_TEMPLATE } from "./lib/sgDefaults";
 
@@ -42,6 +46,10 @@ export async function resolveTemplateConfig(
   headerText: string | null;
   footerText: string | null;
   show: Doc<"payslipTemplates">["show"];
+  layout: NonNullable<Doc<"payslipTemplates">["layout"]> | null;
+  textColor: string | null;
+  fontScale: number | null;
+  density: NonNullable<Doc<"payslipTemplates">["density"]> | null;
 }> {
   let tmpl: Doc<"payslipTemplates"> | null = templateId
     ? await ctx.db.get(templateId)
@@ -61,6 +69,10 @@ export async function resolveTemplateConfig(
       headerText: null,
       footerText: null,
       show: DEFAULT_PAYSLIP_TEMPLATE.show,
+      layout: null,
+      textColor: null,
+      fontScale: null,
+      density: null,
     };
   }
   return {
@@ -72,6 +84,10 @@ export async function resolveTemplateConfig(
     headerText: tmpl.headerText ?? null,
     footerText: tmpl.footerText ?? null,
     show: tmpl.show,
+    layout: tmpl.layout ?? null,
+    textColor: tmpl.textColor ?? null,
+    fontScale: tmpl.fontScale ?? null,
+    density: tmpl.density ?? null,
   };
 }
 
@@ -99,6 +115,10 @@ export const list = query({
         headerText: t.headerText ?? null,
         footerText: t.footerText ?? null,
         show: t.show,
+        layout: t.layout ?? null,
+        textColor: t.textColor ?? null,
+        fontScale: t.fontScale ?? null,
+        density: t.density ?? null,
       })),
     );
   },
@@ -123,6 +143,10 @@ export const create = mutation({
     headerText: v.optional(v.string()),
     footerText: v.optional(v.string()),
     show: payslipTemplateShow,
+    layout: v.optional(v.array(payslipLayoutBlock)),
+    textColor: v.optional(v.string()),
+    fontScale: v.optional(v.number()),
+    density: v.optional(payslipDensity),
     makeDefault: v.optional(v.boolean()),
   },
   returns: v.id("payslipTemplates"),
@@ -147,6 +171,10 @@ export const create = mutation({
       headerText: args.headerText?.trim() || undefined,
       footerText: args.footerText?.trim() || undefined,
       show: args.show,
+      layout: args.layout,
+      textColor: args.textColor,
+      fontScale: args.fontScale,
+      density: args.density,
     });
     await writeAuditLog(ctx, {
       orgId,
@@ -169,6 +197,10 @@ export const update = mutation({
     headerText: v.optional(v.union(v.string(), v.null())),
     footerText: v.optional(v.union(v.string(), v.null())),
     show: v.optional(payslipTemplateShow),
+    layout: v.optional(v.union(v.array(payslipLayoutBlock), v.null())),
+    textColor: v.optional(v.union(v.string(), v.null())),
+    fontScale: v.optional(v.union(v.number(), v.null())),
+    density: v.optional(v.union(payslipDensity, v.null())),
     makeDefault: v.optional(v.boolean()),
   },
   returns: v.null(),
@@ -187,6 +219,12 @@ export const update = mutation({
     if (args.footerText !== undefined)
       patch.footerText = args.footerText?.trim() || undefined;
     if (args.show !== undefined) patch.show = args.show;
+    if (args.layout !== undefined) patch.layout = args.layout ?? undefined;
+    if (args.textColor !== undefined)
+      patch.textColor = args.textColor ?? undefined;
+    if (args.fontScale !== undefined)
+      patch.fontScale = args.fontScale ?? undefined;
+    if (args.density !== undefined) patch.density = args.density ?? undefined;
     await ctx.db.patch(args.templateId, patch);
     if (args.makeDefault === true && !tmpl.isDefault) {
       const all = await ctx.db

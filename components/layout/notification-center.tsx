@@ -26,6 +26,7 @@ function hrefFor(type: string): string {
   if (type.startsWith("claim.requested") || type.startsWith("claim.submitted"))
     return "/claims/requests"
   if (type.startsWith("claim.")) return "/claims"
+  if (type.startsWith("payroll.approval")) return "/payroll/approvals"
   if (type.startsWith("payroll.")) return "/payslips"
   if (type.startsWith("recruitment.")) return "/hr-lounge/recruitment"
   if (type.startsWith("review.") || type.startsWith("feedback."))

@@ -102,12 +102,14 @@ export function PayrollApprovalSettings() {
   const save = useMutation(api.payrollSettings.save)
 
   const [enabled, setEnabled] = React.useState(false)
+  const [showSigsToEmployees, setShowSigsToEmployees] = React.useState(false)
   const [steps, setSteps] = React.useState<StepForm[] | null>(null)
   const [busy, setBusy] = React.useState(false)
 
   React.useEffect(() => {
     if (!data || steps !== null) return
     setEnabled(data.approval.enabled)
+    setShowSigsToEmployees(data.showSignaturesToEmployees)
     setSteps(
       data.approval.steps.map((s) => ({
         key: newId(),
@@ -153,6 +155,7 @@ export function PayrollApprovalSettings() {
       await save({
         shgFunds: data.shgFunds,
         sdl: data.sdl,
+        showSignaturesToEmployees: showSigsToEmployees,
         approval: {
           enabled,
           steps: steps.map((s) => ({
@@ -183,6 +186,23 @@ export function PayrollApprovalSettings() {
             </p>
           </div>
           <Switch checked={enabled} onCheckedChange={setEnabled} />
+        </label>
+      </div>
+
+      <div className="rounded-lg border p-4">
+        <label className="flex items-center justify-between">
+          <div>
+            <p className="font-medium">Show signatures to employees</p>
+            <p className="text-muted-foreground text-sm">
+              When on, preparer and approver signatures are rendered on payslips
+              employees view or download themselves. HR and approvers always see
+              signatures.
+            </p>
+          </div>
+          <Switch
+            checked={showSigsToEmployees}
+            onCheckedChange={setShowSigsToEmployees}
+          />
         </label>
       </div>
 

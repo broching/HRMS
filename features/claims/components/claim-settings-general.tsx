@@ -145,6 +145,7 @@ type StepForm = {
   value: string
   thresholdEnabled: boolean
   rules: RuleForm[]
+  requiresSignature: boolean
 }
 type GroupForm = { id: string; name: string; userIds: Id<"users">[] }
 type FlowForm = {
@@ -161,6 +162,7 @@ type FormState = {
   validityMonths: number | null
   hrApproverUserIds: Id<"users">[]
   financeApproverUserIds: Id<"users">[]
+  financeRequiresSignature: boolean
   assigneeGroups: GroupForm[]
   flows: FlowForm[]
   payrollMode: "manual" | "automatic"
@@ -426,21 +428,32 @@ function WorkflowEditor({
                       )}
                     </div>
 
-                    <label className="ml-28 flex w-fit items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={step.thresholdEnabled}
-                        onCheckedChange={(c) =>
-                          patchStep(i, {
-                            thresholdEnabled: c === true,
-                            rules:
-                              c === true && step.rules.length === 0
-                                ? [{ amount: "", officeIds: [] }]
-                                : step.rules,
-                          })
-                        }
-                      />
-                      Enable threshold
-                    </label>
+                    <div className="ml-28 flex flex-wrap items-center gap-x-5 gap-y-2">
+                      <label className="flex w-fit items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={step.thresholdEnabled}
+                          onCheckedChange={(c) =>
+                            patchStep(i, {
+                              thresholdEnabled: c === true,
+                              rules:
+                                c === true && step.rules.length === 0
+                                  ? [{ amount: "", officeIds: [] }]
+                                  : step.rules,
+                            })
+                          }
+                        />
+                        Enable threshold
+                      </label>
+                      <label className="flex w-fit items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={step.requiresSignature}
+                          onCheckedChange={(c) =>
+                            patchStep(i, { requiresSignature: c === true })
+                          }
+                        />
+                        Require signature
+                      </label>
+                    </div>
 
                     {step.thresholdEnabled && (
                       <div className="border-primary/40 ml-28 flex flex-col gap-3 border-l-2 bg-muted/40 p-3 text-sm">
@@ -548,6 +561,7 @@ function WorkflowEditor({
               value: "manager",
               thresholdEnabled: false,
               rules: [],
+              requiresSignature: false,
             },
           ])
         }
@@ -605,6 +619,7 @@ export function ClaimSettingsGeneral() {
         validityMonths: data.transactionValidityMonths,
         hrApproverUserIds: data.hrApproverUserIds,
         financeApproverUserIds: data.financeApproverUserIds,
+        financeRequiresSignature: data.financeRequiresSignature,
         assigneeGroups: data.assigneeGroups.map((g) => ({
           id: g.id,
           name: g.name,
@@ -636,6 +651,7 @@ export function ClaimSettingsGeneral() {
                 amount: centsToInput(r.amountMoreThanCents),
                 officeIds: r.officeIds,
               })),
+              requiresSignature: s.requiresSignature ?? false,
             })),
           })),
         payrollMode: data.payrollMode,
@@ -812,6 +828,7 @@ export function ClaimSettingsGeneral() {
         transactionValidityMonths: form.validityMonths,
         hrApproverUserIds: form.hrApproverUserIds,
         financeApproverUserIds: form.financeApproverUserIds,
+        financeRequiresSignature: form.financeRequiresSignature,
         assigneeGroups: form.assigneeGroups.map((g) => ({
           id: g.id,
           name: g.name.trim(),
@@ -834,6 +851,7 @@ export function ClaimSettingsGeneral() {
               amountMoreThanCents: dollarsToCents(r.amount) ?? 0,
               officeIds: r.officeIds,
             })),
+            requiresSignature: s.requiresSignature,
           })),
         })),
         payrollMode: form.payrollMode,
@@ -924,6 +942,15 @@ export function ClaimSettingsGeneral() {
                 onChange={(v) => handleAssigneeChange("Finance", v)}
                 placeholder="Choose"
               />
+              <label className="mt-1 flex w-fit items-center gap-2 text-sm">
+                <Checkbox
+                  checked={form.financeRequiresSignature}
+                  onCheckedChange={(c) =>
+                    patch({ financeRequiresSignature: c === true })
+                  }
+                />
+                Require signature at the Finance stage
+              </label>
             </div>
 
             {form.assigneeGroups.length > 0 && (
@@ -1146,6 +1173,7 @@ export function ClaimSettingsGeneral() {
                           value: "manager",
                           thresholdEnabled: false,
                           rules: [],
+                          requiresSignature: false,
                         },
                       ],
                     },

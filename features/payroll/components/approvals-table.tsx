@@ -4,13 +4,19 @@ import * as React from "react"
 import { useMutation, useQuery } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
 import { toast } from "sonner"
-import { IconCheck, IconSignature } from "@tabler/icons-react"
+import { IconCheck, IconEye, IconSignature } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Table,
   TableBody,
@@ -22,6 +28,7 @@ import {
 import { formatMoney } from "@/features/payroll/lib/labels"
 import { getErrorMessage } from "@/lib/errors"
 import { SignatureCaptureDialog } from "@/features/payroll/components/signature-pad"
+import { PayslipDocument } from "@/features/payroll/components/payslip-document"
 
 type ApprovalRow = NonNullable<
   FunctionReturnType<typeof api.payrollApproval.getRunApprovals>
@@ -30,6 +37,34 @@ type ApprovalRow = NonNullable<
 type PendingAction =
   | { kind: "single"; payslipId: Id<"payslips"> }
   | { kind: "bulk"; payslipIds: Id<"payslips">[] }
+
+// Quick read-only payslip preview so an approver can verify before signing.
+function PayslipPreviewDialog({
+  payslipId,
+  onOpenChange,
+}: {
+  payslipId: Id<"payslips"> | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const slip = useQuery(
+    api.payroll.getPayslip,
+    payslipId ? { payslipId } : "skip",
+  )
+  return (
+    <Dialog open={payslipId !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Review payslip</DialogTitle>
+        </DialogHeader>
+        {slip === undefined ? (
+          <Skeleton className="h-96 w-full" />
+        ) : (
+          <PayslipDocument slip={slip} />
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 export function ApprovalsTable({ runId }: { runId: Id<"payrollRuns"> }) {
   const data = useQuery(api.payrollApproval.getRunApprovals, { runId })
@@ -41,6 +76,7 @@ export function ApprovalsTable({ runId }: { runId: Id<"payrollRuns"> }) {
 
   const [selected, setSelected] = React.useState<Set<string>>(new Set())
   const [sigOpen, setSigOpen] = React.useState(false)
+  const [previewId, setPreviewId] = React.useState<Id<"payslips"> | null>(null)
   const pending = React.useRef<PendingAction | null>(null)
 
   if (data === undefined) return <Skeleton className="h-48 w-full" />
@@ -203,19 +239,32 @@ export function ApprovalsTable({ runId }: { runId: Id<"payrollRuns"> }) {
                   </div>
                 </TableCell>
                 <TableCell className="text-right">
-                  {p.canAct && (
-                    <Button size="sm" variant="outline" onClick={() => actSingle(p)}>
-                      {p.needsSignature ? (
-                        <>
-                          <IconSignature className="size-4" /> Approve &amp; sign
-                        </>
-                      ) : (
-                        <>
-                          <IconCheck className="size-4" /> Approve
-                        </>
-                      )}
+                  <div className="flex items-center justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setPreviewId(p._id)}
+                    >
+                      <IconEye className="size-4" /> View
                     </Button>
-                  )}
+                    {p.canAct && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => actSingle(p)}
+                      >
+                        {p.needsSignature ? (
+                          <>
+                            <IconSignature className="size-4" /> Approve &amp; sign
+                          </>
+                        ) : (
+                          <>
+                            <IconCheck className="size-4" /> Approve
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -231,6 +280,13 @@ export function ApprovalsTable({ runId }: { runId: Id<"payrollRuns"> }) {
         confirmLabel="Approve & sign"
         getUploadUrl={() => getUploadUrl({})}
         onSigned={onSigned}
+      />
+
+      <PayslipPreviewDialog
+        payslipId={previewId}
+        onOpenChange={(open) => {
+          if (!open) setPreviewId(null)
+        }}
       />
     </div>
   )

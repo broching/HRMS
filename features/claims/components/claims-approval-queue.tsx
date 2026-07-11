@@ -63,52 +63,106 @@ import {
   monthLabel,
 } from "@/features/claims/lib/labels"
 import {
-  downloadClaims,
-  type ClaimExportRow,
-} from "@/features/claims/lib/export"
+  buildClaimsListWorkbook,
+  buildMonthlyTotalsWorkbook,
+  buildClaimFormsZip,
+  buildClaimFormWorkbook,
+  downloadClaimBlob,
+} from "@/features/claims/lib/claims-excel"
+import { SignatureCaptureDialog } from "@/features/payroll/components/signature-pad"
 
 type Group = FunctionReturnType<typeof api.claims.approvalClaimGroups>[number]
 const ALL = "all"
 
-// Export dropdown (CSV / Excel). `fetchRows` pulls the flat rows on demand so a
-// large export isn't held in a live subscription.
+// Export args shared by the flat-rows (`exportRows`) and per-employee form
+// (`exportForms`) queries.
+type ExportArgs = {
+  source: "mine" | "all"
+  month?: string
+  departmentId?: Id<"departments">
+  teamId?: Id<"teams">
+  employeeId?: Id<"employees">
+}
+
+// Export dropdown. Fetches on demand (not held in a live subscription) and
+// offers an Excel claims list with grand total + signatures, the monthly totals
+// listing, and the staff-expense claim form(s). When scoped to a single employee
+// it downloads one form; org-wide it zips one per employee.
 function ExportMenu({
   label = "Export",
   filename,
-  fetchRows,
+  month,
+  args,
+  single,
 }: {
   label?: string
   filename: string
-  fetchRows: () => Promise<ClaimExportRow[]>
+  month: string
+  args: ExportArgs
+  single?: boolean
 }) {
+  const convex = useConvex()
   const [busy, setBusy] = React.useState(false)
-  async function run(format: "csv" | "excel") {
+
+  async function run(kind: "list" | "totals" | "forms") {
     setBusy(true)
     try {
-      const rows = await fetchRows()
-      if (rows.length === 0) {
-        toast.info("No claims to export.")
-        return
+      const groups = await convex.query(api.claims.exportForms, args)
+      if (groups.length === 0) return toast.info("No claims to export.")
+      if (kind === "list") {
+        downloadClaimBlob(
+          `${filename}.xlsx`,
+          await buildClaimsListWorkbook({ groups, periodMonth: month }),
+        )
+      } else if (kind === "totals") {
+        downloadClaimBlob(
+          `${filename}-totals.xlsx`,
+          await buildMonthlyTotalsWorkbook({
+            groups,
+            periodMonth: month,
+            valueDate: new Date().toISOString().slice(0, 10),
+          }),
+        )
+      } else {
+        if (single && groups.length === 1) {
+          const buffer = await buildClaimFormWorkbook(groups[0])
+          downloadClaimBlob(
+            `${filename}-form.xlsx`,
+            new Blob([buffer], {
+              type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }),
+          )
+        } else {
+          downloadClaimBlob(
+            `${filename}-forms.zip`,
+            await buildClaimFormsZip(groups, month),
+          )
+        }
       }
-      downloadClaims(rows, format, filename)
     } catch (e) {
       toast.error(getErrorMessage(e, "Couldn't export claims"))
     } finally {
       setBusy(false)
     }
   }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" disabled={busy}>
           <IconDownload className="size-4" />
-          {label}
+          {busy ? "Exporting…" : label}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => run("csv")}>CSV (.csv)</DropdownMenuItem>
-        <DropdownMenuItem onClick={() => run("excel")}>
-          Excel (.xls)
+        <DropdownMenuItem onClick={() => run("list")}>
+          Claims list (.xlsx)
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => run("totals")}>
+          Monthly totals (.xlsx)
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => run("forms")}>
+          {single ? "Claim form (.xlsx)" : "Claim forms (.zip)"}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -158,8 +212,6 @@ export function ClaimsApprovalQueue({
     source === "all" ? filterArgs : "skip",
   )
   const groups = source === "all" ? allGroups : mineGroups
-
-  const convex = useConvex()
 
   const matches = (g: Group) =>
     search.trim()
@@ -226,9 +278,8 @@ export function ClaimsApprovalQueue({
           <ExportMenu
             label={source === "all" ? "Export all" : "Export"}
             filename={`claims-${month}`}
-            fetchRows={() =>
-              convex.query(api.claims.exportRows, { source, ...filterArgs })
-            }
+            month={month}
+            args={{ source, ...filterArgs }}
           />
         </div>
       </div>
@@ -388,7 +439,7 @@ function GroupClaims({
   const reject = useMutation(api.claims.reject)
   const approveAll = useMutation(api.claims.approveAllForGroup)
   const markReimbursed = useMutation(api.claims.markGroupReimbursed)
-  const convex = useConvex()
+  const getUploadUrl = useMutation(api.claims.generateUploadUrl)
 
   const [openId, setOpenId] = React.useState<Id<"claims"> | null>(null)
   const [editId, setEditId] = React.useState<Id<"claims"> | null>(null)
@@ -399,11 +450,14 @@ function GroupClaims({
     remarks: string
   } | null>(null)
   const [approveAllOpen, setApproveAllOpen] = React.useState(false)
+  const [signAllOpen, setSignAllOpen] = React.useState(false)
   const [reimburseOpen, setReimburseOpen] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
 
   const currency = claims?.[0]?.currency ?? group.currency
   const actionable = (claims ?? []).filter((c) => c.canAct)
+  // Any claim awaiting the caller that needs their signature to approve.
+  const needsSignature = actionable.some((c) => c.needsSignature)
   const pendingTotal = actionable.reduce((s, c) => s + c.amountCents, 0)
   const approvedCount = (claims ?? []).filter(
     (c) => c.status === "approved",
@@ -428,14 +482,18 @@ function GroupClaims({
     }
   }
 
-  async function handleApproveAll() {
+  async function handleApproveAll(signatureStorageId?: Id<"_storage">) {
     setBusy(true)
     try {
-      const { approved } = await approveAll({ groupId: group.groupId })
+      const { approved } = await approveAll({
+        groupId: group.groupId,
+        signatureStorageId,
+      })
       toast.success(
         `Approved ${approved} claim${approved === 1 ? "" : "s"} for ${group.employeeName}`,
       )
       setApproveAllOpen(false)
+      setSignAllOpen(false)
     } catch (e) {
       toast.error(getErrorMessage(e, "Couldn't approve claims"))
     } finally {
@@ -470,13 +528,14 @@ function GroupClaims({
         </div>
         <ExportMenu
           label="Export claims"
-          filename={`claims-${group.employeeName.replace(/\s+/g, "-")}`}
-          fetchRows={() =>
-            convex.query(api.claims.exportRows, {
-              source,
-              employeeId: group.employeeId,
-            })
-          }
+          single
+          filename={`claims-${group.employeeName.replace(/\s+/g, "-")}-${group.periodMonth}`}
+          month={group.periodMonth}
+          args={{
+            source,
+            month: group.periodMonth,
+            employeeId: group.employeeId,
+          }}
         />
       </div>
 
@@ -632,9 +691,14 @@ function GroupClaims({
             )}
             <Button
               disabled={actionable.length === 0}
-              onClick={() => setApproveAllOpen(true)}
+              onClick={() =>
+                needsSignature
+                  ? setSignAllOpen(true)
+                  : setApproveAllOpen(true)
+              }
             >
-              Approve all ({actionable.length})
+              {needsSignature ? "Approve & sign all" : "Approve all"} (
+              {actionable.length})
             </Button>
           </div>
         </div>
@@ -705,7 +769,18 @@ function GroupClaims({
         description={`This approves all ${actionable.length} claim${actionable.length === 1 ? "" : "s"} from ${group.employeeName} awaiting your decision (${formatMoney(pendingTotal, currency)}).`}
         confirmLabel="Approve all"
         busy={busy}
-        onConfirm={handleApproveAll}
+        onConfirm={() => handleApproveAll()}
+      />
+      <SignatureCaptureDialog
+        open={signAllOpen}
+        onOpenChange={setSignAllOpen}
+        title="Sign to approve claims"
+        description={`Your signature is applied to all ${actionable.length} claim${actionable.length === 1 ? "" : "s"} from ${group.employeeName} awaiting your decision.`}
+        confirmLabel="Approve & sign"
+        getUploadUrl={() => getUploadUrl({})}
+        onSigned={async (storageId) => {
+          await handleApproveAll(storageId as Id<"_storage">)
+        }}
       />
       <ConfirmDialog
         open={reimburseOpen}

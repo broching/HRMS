@@ -33,10 +33,17 @@ export function CompensationSection({
       ) : (
         <>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            <Field
-              label="Base monthly"
-              value={formatMoney(current.baseMonthlyCents, current.currency)}
-            />
+            {current.payType === "hourly" ? (
+              <Field
+                label="Hourly rate"
+                value={`${formatMoney(current.hourlyRateCents ?? 0, current.currency)}/hr`}
+              />
+            ) : (
+              <Field
+                label="Base monthly"
+                value={formatMoney(current.baseMonthlyCents, current.currency)}
+              />
+            )}
             <Field label="CPF status" value={CPF_STATUS_LABELS[current.cpfStatus]} />
             <Field label="Effective date" value={current.effectiveDate} />
           </div>
@@ -95,6 +102,10 @@ export function CompensationSection({
             </div>
           )}
 
+          {current.note && (
+            <Field label="Note" value={current.note} />
+          )}
+
           {current.employerContributions &&
             current.employerContributions.length > 0 && (
               <div className="flex flex-col gap-2">
@@ -119,8 +130,9 @@ export function CompensationSection({
                   <thead>
                     <tr className="text-muted-foreground border-b text-left text-xs uppercase">
                       <th className="py-2 pr-4 font-medium">Effective</th>
-                      <th className="py-2 pr-4 font-medium">Base monthly</th>
+                      <th className="py-2 pr-4 font-medium">Base pay</th>
                       <th className="py-2 pr-4 font-medium">CPF</th>
+                      <th className="py-2 pr-4 font-medium">Note</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -128,12 +140,17 @@ export function CompensationSection({
                       <tr key={c._id} className="border-b last:border-0">
                         <td className="py-2 pr-4">{c.effectiveDate}</td>
                         <td className="py-2 pr-4">
-                          {formatMoney(c.baseMonthlyCents, c.currency)}
+                          {c.payType === "hourly"
+                            ? `${formatMoney(c.hourlyRateCents ?? 0, c.currency)}/hr`
+                            : formatMoney(c.baseMonthlyCents, c.currency)}
                         </td>
                         <td className="py-2 pr-4">
                           <Badge variant="outline">
                             {CPF_STATUS_LABELS[c.cpfStatus]}
                           </Badge>
+                        </td>
+                        <td className="text-muted-foreground py-2 pr-4">
+                          {c.note ?? "—"}
                         </td>
                       </tr>
                     ))}

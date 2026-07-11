@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useMutation } from "convex/react"
+import { useMutation, useAction } from "convex/react"
 import { toast } from "sonner"
 import type { FunctionReturnType } from "convex/server"
 import {
@@ -33,7 +33,12 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ConfirmDialog } from "@/components/shared/confirm-dialog"
-import { formatMoney } from "@/features/payroll/lib/labels"
+import { cn } from "@/lib/utils"
+import {
+  formatMoney,
+  prYearLabel,
+  CPF_STATUS_LABELS,
+} from "@/features/payroll/lib/labels"
 import { getErrorMessage } from "@/lib/errors"
 import {
   AddAdjustmentDialog,
@@ -164,6 +169,451 @@ function AdjustmentLines({
   )
 }
 
+// Statutory funds & schemes (SHG e.g. CDAC, SDL, custom funds) computed onto the
+// payslip lines — surfaced read-only so HR can see them while adjusting.
+function FundLines({
+  lines,
+  currency,
+}: {
+  lines: PayslipRow["lines"]
+  currency: string
+}) {
+  const funds = lines.filter((l) => l.category === "fund")
+  if (funds.length === 0) return null
+  return (
+    <div className="overflow-hidden rounded-md border bg-background text-sm">
+      <div className="text-muted-foreground bg-muted/40 px-2 py-1.5 text-xs font-medium uppercase">
+        Statutory funds &amp; schemes
+      </div>
+      {funds.map((l, i) => (
+        <div key={i} className="flex items-center justify-between px-2 py-1.5">
+          <span className="flex items-center gap-2">
+            {l.label}
+            <Badge variant="outline" className="text-[10px]">
+              {l.type === "employer" ? "employer" : "employee"}
+            </Badge>
+          </span>
+          <span className="tabular-nums">
+            {l.type === "deduction" ? "−" : ""}
+            {formatMoney(l.amountCents, currency)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Editable proration panel: shows base × daysWorked / totalWorkingDays and lets
+// HR correct the day counts when the auto-computed proration is wrong.
+function ProrationEditor({
+  runId,
+  p,
+}: {
+  runId: Id<"payrollRuns">
+  p: PayslipRow
+}) {
+  const setOverride = useMutation(api.payroll.setProrationOverride)
+  const clearOverride = useMutation(api.payroll.clearProrationOverride)
+  const [editing, setEditing] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+
+  const pr = p.proration
+  const autoTotal = pr?.totalWorkingDays ?? 0
+  const autoWorked = pr?.daysWorked ?? autoTotal
+  const [worked, setWorked] = React.useState(String(autoWorked))
+  const [total, setTotal] = React.useState(String(autoTotal))
+
+  // Re-seed inputs when the underlying figures change (e.g. after refresh).
+  React.useEffect(() => {
+    setWorked(String(autoWorked))
+    setTotal(String(autoTotal))
+  }, [autoWorked, autoTotal])
+
+  const workedN = Number(worked)
+  const totalN = Number(total)
+  const valid =
+    Number.isFinite(workedN) &&
+    Number.isFinite(totalN) &&
+    totalN > 0 &&
+    workedN >= 0 &&
+    workedN <= totalN
+  const preview =
+    valid && totalN > 0
+      ? Math.round((p.fullBaseCents * workedN) / totalN)
+      : p.baseCents
+
+  async function apply() {
+    if (!valid) {
+      toast.error("Days worked must be between 0 and total working days.")
+      return
+    }
+    setBusy(true)
+    try {
+      await setOverride({
+        runId,
+        employeeId: p.employeeId,
+        daysWorked: workedN,
+        totalWorkingDays: totalN,
+      })
+      toast.success("Proration updated")
+      setEditing(false)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't update proration"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function reset() {
+    setBusy(true)
+    try {
+      await clearOverride({ runId, employeeId: p.employeeId })
+      toast.success("Proration reset to auto-computed")
+      setEditing(false)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't reset proration"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const isProrated = pr?.prorated ?? false
+  const overridden = pr?.overridden ?? false
+
+  return (
+    <div className="rounded-md border bg-background text-sm">
+      <div className="flex items-center justify-between px-2 py-1.5">
+        <span className="flex items-center gap-2">
+          <span className="text-muted-foreground">Basic salary</span>
+          {isProrated && (
+            <Badge variant="secondary" className="text-[10px]">
+              prorated
+            </Badge>
+          )}
+          {overridden && (
+            <Badge variant="outline" className="text-[10px]">
+              edited
+            </Badge>
+          )}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="tabular-nums">
+            {formatMoney(p.baseCents, p.currency)}
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
+            onClick={(e) => {
+              e.stopPropagation()
+              setEditing((v) => !v)
+            }}
+          >
+            {editing ? "Close" : "Edit proration"}
+          </Button>
+        </span>
+      </div>
+
+      {(isProrated || overridden) && !editing && (
+        <div className="text-muted-foreground border-t px-2 py-1.5 text-xs">
+          {formatMoney(p.fullBaseCents, p.currency)} × {autoWorked}/{autoTotal}{" "}
+          working days
+          {pr && pr.unpaidLeaveDays > 0 && !overridden
+            ? ` · ${pr.unpaidLeaveDays}d unpaid`
+            : ""}
+        </div>
+      )}
+
+      {editing && (
+        <div
+          className="flex flex-col gap-3 border-t p-3"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs">Days worked</Label>
+              <Input
+                inputMode="numeric"
+                value={worked}
+                onChange={(e) => setWorked(e.target.value)}
+                className="h-8"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs">Total working days</Label>
+              <Input
+                inputMode="numeric"
+                value={total}
+                onChange={(e) => setTotal(e.target.value)}
+                className="h-8"
+              />
+            </div>
+          </div>
+          <div className="text-muted-foreground text-xs">
+            = <span className="text-foreground tabular-nums">
+              {formatMoney(preview, p.currency)}
+            </span>{" "}
+            ({formatMoney(p.fullBaseCents, p.currency)} × {worked || 0}/
+            {total || 0})
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={apply} disabled={busy || !valid}>
+              Apply
+            </Button>
+            {overridden && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={reset}
+                disabled={busy}
+              >
+                Reset to auto
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Hours editor for an hourly-paid employee: enter hours worked this period and
+// preview base = hourly rate × hours. Replaces the proration editor for hourly
+// pay (which isn't prorated by month days).
+function HoursEditor({
+  runId,
+  p,
+}: {
+  runId: Id<"payrollRuns">
+  p: PayslipRow
+}) {
+  const setHours = useMutation(api.payroll.setPayslipHours)
+  const [busy, setBusy] = React.useState(false)
+  const [hours, setHoursInput] = React.useState(
+    p.hoursWorked != null ? String(p.hoursWorked) : "",
+  )
+
+  React.useEffect(() => {
+    setHoursInput(p.hoursWorked != null ? String(p.hoursWorked) : "")
+  }, [p.hoursWorked])
+
+  const rate = p.hourlyRateCents ?? 0
+  const hoursN = Number(hours)
+  const valid = Number.isFinite(hoursN) && hoursN >= 0
+  const preview = valid ? Math.round(rate * hoursN) : p.baseCents
+
+  async function apply() {
+    if (!valid) {
+      toast.error("Enter a valid number of hours.")
+      return
+    }
+    setBusy(true)
+    try {
+      await setHours({ runId, employeeId: p.employeeId, hours: hoursN })
+      toast.success("Hours updated")
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't update hours"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className="rounded-md border bg-background text-sm"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between px-2 py-1.5">
+        <span className="flex items-center gap-2">
+          <span className="text-muted-foreground">Hourly pay</span>
+          <Badge variant="secondary" className="text-[10px]">
+            {formatMoney(rate, p.currency)}/hr
+          </Badge>
+          {p.hoursWorked == null && (
+            <Badge variant="outline" className="text-[10px]">
+              hours not set
+            </Badge>
+          )}
+        </span>
+        <span className="tabular-nums">
+          {formatMoney(p.baseCents, p.currency)}
+        </span>
+      </div>
+      <div className="flex flex-col gap-3 border-t p-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Hours worked</Label>
+            <Input
+              inputMode="decimal"
+              value={hours}
+              onChange={(e) => setHoursInput(e.target.value)}
+              placeholder="0"
+              className="h-8"
+            />
+          </div>
+        </div>
+        <div className="text-muted-foreground text-xs">
+          ={" "}
+          <span className="text-foreground tabular-nums">
+            {formatMoney(preview, p.currency)}
+          </span>{" "}
+          ({formatMoney(rate, p.currency)}/hr × {hours || 0} hr)
+        </div>
+        <div>
+          <Button size="sm" onClick={apply} disabled={busy || !valid}>
+            Apply hours
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Exchange-rate editor for a foreign-currency payslip: fetch a live rate or
+// enter one manually, apply it (with its date) to the run, and preview the
+// base-currency net. Only rendered when the pay currency ≠ base currency.
+function ExchangeEditor({
+  runId,
+  p,
+}: {
+  runId: Id<"payrollRuns">
+  p: PayslipRow
+}) {
+  const getRate = useAction(api.exchange.getRate)
+  const setRate = useMutation(api.payroll.setPayslipExchangeRate)
+  const base = p.baseCurrency ?? ""
+  const [mode, setMode] = React.useState<"auto" | "manual">(
+    p.exchangeMode ?? "auto",
+  )
+  const [manual, setManual] = React.useState(
+    p.exchangeRate != null && p.exchangeMode === "manual"
+      ? String(p.exchangeRate)
+      : "",
+  )
+  const [fetching, setFetching] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+
+  const today = () => new Date().toISOString().slice(0, 10)
+
+  async function applyAuto() {
+    setFetching(true)
+    try {
+      const res = await getRate({ from: p.currency, to: base, date: today() })
+      await setRate({
+        runId,
+        employeeId: p.employeeId,
+        rate: res.rate,
+        date: res.date,
+        mode: "auto",
+        provider: res.provider,
+      })
+      toast.success(`Rate updated · 1 ${p.currency} = ${res.rate} ${base}`)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't fetch rate"))
+    } finally {
+      setFetching(false)
+    }
+  }
+
+  async function applyManual() {
+    const rate = Number(manual)
+    if (!(rate > 0)) {
+      toast.error("Enter a valid exchange rate.")
+      return
+    }
+    setBusy(true)
+    try {
+      await setRate({
+        runId,
+        employeeId: p.employeeId,
+        rate,
+        date: today(),
+        mode: "manual",
+        provider: "manual",
+      })
+      toast.success("Exchange rate updated")
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't set rate"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const baseNet =
+    p.exchangeRate != null ? Math.round(p.netCents * p.exchangeRate) : null
+
+  return (
+    <div
+      className="border-primary/30 bg-background rounded-md border p-3 text-sm"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="flex items-center gap-2 font-medium">
+          Currency conversion
+          <Badge variant="secondary" className="text-[10px]">
+            {p.currency} → {base}
+          </Badge>
+        </span>
+        {p.exchangeRate != null ? (
+          <span className="text-muted-foreground text-xs">
+            1 {p.currency} = {p.exchangeRate} {base}
+            {p.exchangeProvider ? ` · ${p.exchangeProvider}` : ""}
+            {p.exchangeRateDate ? ` · ${p.exchangeRateDate}` : ""}
+          </span>
+        ) : (
+          <Badge variant="destructive" className="text-[10px]">
+            rate not set
+          </Badge>
+        )}
+      </div>
+
+      <div className="mt-2 flex gap-1 rounded-md border p-0.5">
+        {(["auto", "manual"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            className={cn(
+              "flex-1 rounded px-2 py-1 text-xs font-medium capitalize",
+              mode === m ? "bg-muted shadow-sm" : "text-muted-foreground",
+            )}
+          >
+            {m === "auto" ? "Auto (live rate)" : "Manual rate"}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-2 flex items-center gap-2">
+        {mode === "auto" ? (
+          <Button size="sm" variant="outline" onClick={applyAuto} disabled={fetching}>
+            {fetching ? "Fetching…" : "Fetch & apply today's rate"}
+          </Button>
+        ) : (
+          <>
+            <Input
+              inputMode="decimal"
+              value={manual}
+              onChange={(e) => setManual(e.target.value)}
+              placeholder={`1 ${p.currency} = ? ${base}`}
+              className="h-8 max-w-[180px]"
+            />
+            <Button size="sm" onClick={applyManual} disabled={busy}>
+              Apply
+            </Button>
+          </>
+        )}
+      </div>
+
+      {baseNet != null && (
+        <p className="text-muted-foreground mt-2 text-xs">
+          Net {formatMoney(p.netCents, p.currency)} ≈{" "}
+          <span className="text-foreground">{formatMoney(baseNet, base)}</span>
+        </p>
+      )}
+    </div>
+  )
+}
+
 function EmployeeRow({
   runId,
   p,
@@ -255,23 +705,15 @@ function EmployeeRow({
         <TableRow className="hover:bg-transparent">
           <TableCell colSpan={showEmployer ? 6 : 5} className="bg-muted/30 p-0">
             <div className="flex flex-col gap-3 p-4">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">
-                  Basic salary
-                  {p.proration?.prorated && (
-                    <span className="ml-2 text-xs">
-                      prorated · {p.proration.daysWorked}/
-                      {p.proration.totalWorkingDays} days
-                      {p.proration.unpaidLeaveDays > 0
-                        ? ` · ${p.proration.unpaidLeaveDays}d unpaid`
-                        : ""}
-                    </span>
-                  )}
-                </span>
-                <span className="tabular-nums">
-                  {formatMoney(p.baseCents, p.currency)}
-                </span>
-              </div>
+              {p.baseCurrency && p.currency !== p.baseCurrency && (
+                <ExchangeEditor runId={runId} p={p} />
+              )}
+
+              {p.payType === "hourly" ? (
+                <HoursEditor runId={runId} p={p} />
+              ) : (
+                <ProrationEditor runId={runId} p={p} />
+              )}
 
               {p.allowances.length > 0 && (
                 <div className="text-sm">
@@ -317,7 +759,15 @@ function EmployeeRow({
                   onRemove={remove}
                 />
                 <div className="flex items-center justify-between px-2 py-1.5 text-sm">
-                  <span>CPF (employee)</span>
+                  <span className="flex items-center gap-2">
+                    CPF (employee)
+                    <Badge variant="outline" className="text-[10px]">
+                      {CPF_STATUS_LABELS[p.cpfStatus]}
+                      {p.cpfStatus === "pr" && p.prYear
+                        ? ` · ${prYearLabel(p.prYear)}`
+                        : ""}
+                    </Badge>
+                  </span>
                   <span className="tabular-nums">
                     {formatMoney(p.employeeCpfCents, p.currency)}
                   </span>
@@ -331,6 +781,8 @@ function EmployeeRow({
                   onRemove={remove}
                 />
               </div>
+
+              <FundLines lines={p.lines} currency={p.currency} />
 
               <div className="flex items-center justify-between gap-2">
                 <Button

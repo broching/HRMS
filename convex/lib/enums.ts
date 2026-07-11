@@ -438,6 +438,9 @@ export const claimApproverStep = v.object({
   value: v.string(), // "manager" | "department_head" | userId | group id
   thresholdEnabled: v.boolean(),
   rules: v.array(claimApprovalThresholdRule),
+  // When on, the approver must clock a signature to approve this step. Absent on
+  // steps saved before claim signatures existed (treated as false).
+  requiresSignature: v.optional(v.boolean()),
 });
 
 // A claim approval flow: a matcher that decides which claimants it applies to,
@@ -493,9 +496,22 @@ export const claimChainStep = v.object({
   // single-approver checks and notification targeting.
   approverUserIds: v.optional(v.array(v.id("users"))),
   label: v.string(), // e.g. "Manager — Jane Tan" or "Finance"
+  // Snapshotted from the workflow step: this approver must sign to approve.
+  requiresSignature: v.optional(v.boolean()),
   decidedByUserId: v.optional(v.id("users")),
   decidedAt: v.optional(v.number()),
   note: v.optional(v.string()),
+});
+
+// A signature applied to a claim by an approver at an approval step (or by
+// finance). `signatureStorageId` is a PNG in Convex storage. Mirrors
+// `payslipSignature`.
+export const claimSignature = v.object({
+  role: v.string(), // the approval step label, or "Finance"
+  byUserId: v.id("users"),
+  name: v.string(),
+  signatureStorageId: v.id("_storage"),
+  signedAt: v.number(),
 });
 
 // How a foreign-currency claim's exchange rate was obtained. "manual" = the
@@ -565,15 +581,58 @@ export type ShiftStatus = "draft" | "published" | "cancelled";
 
 // ─── Payroll module ──────────────────────────────────────────────────────
 
-// CPF treatment for an employee. `citizen_pr` is subject to CPF; `foreigner`
-// (work-pass holders) and `exempt` are not (a levy applies separately, out of
-// scope for v1).
+// CPF treatment for an employee.
+//   citizen    — full age-banded CPF rates.
+//   pr         — Permanent Resident; graduated rates in years 1–2, full from
+//                year 3 (the year is derived from the PR-start date on
+//                compensation at pay time).
+//   foreigner  — work-pass holders; no CPF (a levy applies separately, out of
+//                scope for v1).
+//   exempt     — no CPF.
+// `citizen_pr` is a legacy value (pre citizen/PR split) treated as `citizen`.
 export const cpfStatus = v.union(
-  v.literal("citizen_pr"),
+  v.literal("citizen"),
+  v.literal("pr"),
   v.literal("foreigner"),
   v.literal("exempt"),
+  v.literal("citizen_pr"),
 );
-export type CpfStatus = "citizen_pr" | "foreigner" | "exempt";
+export type CpfStatus = "citizen" | "pr" | "foreigner" | "exempt" | "citizen_pr";
+
+// One age band of CPF contribution rates. `maxAge` is the inclusive upper bound
+// in whole years; the top band uses a large sentinel (e.g. 200) since Convex
+// numbers must be finite. Rates are fractions (0.17 = 17%).
+export const cpfBand = v.object({
+  maxAge: v.number(),
+  employeeRate: v.number(),
+  employerRate: v.number(),
+});
+export type CpfBand = {
+  maxAge: number;
+  employeeRate: number;
+  employerRate: number;
+};
+
+// Flat graduated rate applied to a PR in their 1st or 2nd contribution year.
+export const cpfGraduatedRate = v.object({
+  employeeRate: v.number(),
+  employerRate: v.number(),
+});
+
+// Org-configurable CPF settings: the Ordinary-Wage monthly ceiling, the
+// age-banded citizen/PR-year-3+ rate table, and the graduated PR year-1/2 rates.
+export const cpfConfig = v.object({
+  owCeilingCents: v.number(),
+  bands: v.array(cpfBand),
+  prYear1: cpfGraduatedRate,
+  prYear2: cpfGraduatedRate,
+});
+export type CpfConfigValue = {
+  owCeilingCents: number;
+  bands: CpfBand[];
+  prYear1: { employeeRate: number; employerRate: number };
+  prYear2: { employeeRate: number; employerRate: number };
+};
 
 // A payroll run's lifecycle:
 //   draft            — being prepared/edited
@@ -595,6 +654,13 @@ export type PayrollStatus =
   | "finalized"
   | "paid";
 
+// How an employee's base pay is defined.
+//   fixed  — a set monthly salary, prorated by days worked for partial months.
+//   hourly — paid an hourly rate × hours worked, entered during the payroll
+//            adjust stage; no monthly proration applies.
+export const payType = v.union(v.literal("fixed"), v.literal("hourly"));
+export type PayType = "fixed" | "hourly";
+
 // Payslip line classification for the breakdown.
 export const payslipLineType = v.union(
   v.literal("earning"),
@@ -607,6 +673,9 @@ export const payslipLine = v.object({
   label: v.string(),
   amountCents: v.number(),
   type: payslipLineType,
+  // Optional grouping hint. "fund" marks statutory/scheme lines (SHG e.g. CDAC,
+  // SDL, custom funds) so the run editor can surface them distinctly.
+  category: v.optional(v.string()),
 });
 
 // A recurring compensation allowance (e.g. transport, meal).
@@ -640,6 +709,9 @@ export const prorationMeta = v.object({
   daysWorked: v.number(),
   unpaidLeaveDays: v.number(),
   prorated: v.boolean(),
+  // True when HR hand-edited the day counts (proration override) rather than
+  // the auto-computed MOM figures.
+  overridden: v.optional(v.boolean()),
 });
 
 // A one-off payroll line entered/pulled while preparing a run. `addition`
@@ -757,7 +829,8 @@ export const payslipSignature = v.object({
 
 // ─── Payroll: payslip templates ──────────────────────────────────────────────
 
-// Which sections a payslip template renders.
+// Which sections a payslip template renders. Legacy fixed-layout toggles; a
+// template with a `layout` (block list) overrides these.
 export const payslipTemplateShow = v.object({
   employerContribs: v.boolean(),
   cpfNote: v.boolean(),
@@ -765,6 +838,73 @@ export const payslipTemplateShow = v.object({
   signatures: v.boolean(),
   ytdSummary: v.boolean(),
 });
+
+// A payslip is composed of ordered, toggleable blocks the builder can drag to
+// reorder. Structural blocks (header … signatures) render fixed content;
+// `customText`, `divider` and `spacer` are user-added decoration.
+export const payslipBlockType = v.union(
+  v.literal("header"), // legacy combined block (logo + name + header text); migrated to the three below
+  v.literal("logo"), // company logo only
+  v.literal("companyName"), // company name only
+  v.literal("headerText"), // header text only
+  v.literal("payMeta"), // payment period / date of payment
+  v.literal("employeeDetails"), // name, id, dept, occupation, CPF status
+  v.literal("earnings"),
+  v.literal("deductions"),
+  v.literal("employerContribs"),
+  v.literal("totals"), // gross + net pay
+  v.literal("exchangeInfo"), // foreign-currency conversion note
+  v.literal("cpfNote"),
+  v.literal("signatures"),
+  v.literal("footer"), // footer text
+  v.literal("customText"),
+  v.literal("divider"),
+  v.literal("spacer"),
+);
+export type PayslipBlockType =
+  | "header"
+  | "logo"
+  | "companyName"
+  | "headerText"
+  | "payMeta"
+  | "employeeDetails"
+  | "earnings"
+  | "deductions"
+  | "employerContribs"
+  | "totals"
+  | "exchangeInfo"
+  | "cpfNote"
+  | "signatures"
+  | "footer"
+  | "customText"
+  | "divider"
+  | "spacer";
+
+export const payslipTextAlign = v.union(
+  v.literal("left"),
+  v.literal("center"),
+  v.literal("right"),
+);
+export type PayslipTextAlign = "left" | "center" | "right";
+
+// One block in a template's layout.
+export const payslipLayoutBlock = v.object({
+  id: v.string(), // stable client id for drag/keying
+  type: payslipBlockType,
+  visible: v.boolean(),
+  // customText: the text; heading toggles a larger accented style.
+  text: v.optional(v.string()),
+  heading: v.optional(v.boolean()),
+  align: v.optional(payslipTextAlign),
+});
+
+// Vertical spacing preset for the whole document.
+export const payslipDensity = v.union(
+  v.literal("compact"),
+  v.literal("normal"),
+  v.literal("relaxed"),
+);
+export type PayslipDensity = "compact" | "normal" | "relaxed";
 
 // Where an adjustment came from. `manual` = keyed in by HR; `claim` =
 // auto-pulled from an approved expense claim; `overtime` = OT hours entered in

@@ -170,7 +170,9 @@ export function CompensationManagement() {
                     )}
                   </TableCell>
                   <TableCell className="tabular-nums">
-                    {r.baseMonthlyCents != null && r.currency ? (
+                    {r.currency && r.payType === "hourly" ? (
+                      `${formatMoney(r.hourlyRateCents ?? 0, r.currency)}/hr`
+                    ) : r.baseMonthlyCents != null && r.currency ? (
                       formatMoney(r.baseMonthlyCents, r.currency)
                     ) : (
                       <span className="text-muted-foreground">Not set</span>

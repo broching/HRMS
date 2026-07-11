@@ -24,9 +24,30 @@ export const PAYROLL_STATUS_BADGE: Record<
 }
 
 export const CPF_STATUS_LABELS: Record<CpfStatus, string> = {
-  citizen_pr: "Citizen / PR",
+  citizen: "Citizen",
+  pr: "Permanent Resident",
   foreigner: "Foreigner",
   exempt: "Exempt",
+  citizen_pr: "Citizen / PR",
+}
+
+// CPF statuses HR can pick for a new record (legacy `citizen_pr` omitted).
+export const CPF_STATUS_OPTIONS: Exclude<CpfStatus, "citizen_pr">[] = [
+  "citizen",
+  "pr",
+  "foreigner",
+  "exempt",
+]
+
+// A short "Permanent Resident · Year 2 (9% / 15%)" style descriptor.
+export function prYearLabel(year: number): string {
+  const rates: Record<number, string> = {
+    1: "4% / 5%",
+    2: "9% / 15%",
+    3: "17% / 20%",
+  }
+  const ordinal = year >= 3 ? "Year 3+" : `Year ${year}`
+  return `${ordinal}${rates[year] ? ` (${rates[year]})` : ""}`
 }
 
 export const ADJUSTMENT_SOURCE_LABELS: Record<PayrollAdjustmentSource, string> =

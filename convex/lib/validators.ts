@@ -42,6 +42,7 @@ import {
   correctionStatus,
   shiftStatus,
   cpfStatus,
+  payType,
   payrollStatus,
   payslipLine,
   allowanceItem,
@@ -52,6 +53,8 @@ import {
   payslipSignature,
   payslipApprovalStep,
   payslipTemplateShow,
+  payslipLayoutBlock,
+  payslipDensity,
   payrollAdjustmentKind,
   payrollAdjustmentSource,
   overtimeMeta,
@@ -578,6 +581,9 @@ export const claimDetail = v.object({
   // at its current step until the rest of the batch reaches the same stage.
   waitingForBatch: v.boolean(),
   sentToPayroll: v.boolean(),
+  // Whether approving the current stage requires the caller to clock a signature
+  // (the current chain step, or finance when finance signatures are required).
+  needsSignature: v.boolean(),
 });
 
 // One employee's bucket in the approver's queue: how many of their claims await
@@ -631,6 +637,8 @@ export const claimGroupApprovalItem = v.object({
   // Pending but parked ahead of the batch: the group barrier is holding it until
   // the slower claims reach the same approver level.
   waitingForBatch: v.boolean(),
+  // Whether acting on this claim now requires a signature from the caller.
+  needsSignature: v.boolean(),
 });
 
 // Org claim settings (return of claimSettings.get) — resolved with defaults so
@@ -640,6 +648,7 @@ export const claimSettingsValue = v.object({
   transactionValidityMonths: v.union(v.number(), v.null()),
   hrApproverUserIds: v.array(v.id("users")),
   financeApproverUserIds: v.array(v.id("users")),
+  financeRequiresSignature: v.boolean(),
   assigneeGroups: v.array(claimAssigneeGroup),
   approvalWorkflow: v.array(claimApproverStep),
   approvalFlows: v.array(claimApprovalFlow),
@@ -780,9 +789,14 @@ export const compensationDoc = v.object({
   employeeId: v.id("employees"),
   effectiveDate: v.string(),
   currency: v.string(),
+  payType: v.optional(payType),
   baseMonthlyCents: v.number(),
+  hourlyRateCents: v.optional(v.number()),
   allowances: v.array(allowanceItem),
   cpfStatus: cpfStatus,
+  prStartDate: v.optional(v.string()),
+  exchangeMode: v.optional(claimExchangeMode),
+  manualRate: v.optional(v.number()),
   workingDays: v.optional(v.array(v.number())),
   funds: v.optional(employeeFunds),
   deductions: v.optional(v.array(deductionItem)),
@@ -801,7 +815,9 @@ export const compensationRow = v.object({
   teamId: v.union(v.id("teams"), v.null()),
   teamName: v.union(v.string(), v.null()),
   currency: v.union(v.string(), v.null()),
+  payType: v.union(payType, v.null()),
   baseMonthlyCents: v.union(v.number(), v.null()),
+  hourlyRateCents: v.union(v.number(), v.null()),
   cpfStatus: v.union(cpfStatus, v.null()),
   effectiveDate: v.union(v.string(), v.null()),
 })
@@ -861,6 +877,13 @@ export const payslipWorkspaceRow = v.object({
   departmentName: v.union(v.string(), v.null()),
   currency: v.string(),
   baseCents: v.number(),
+  // The un-prorated full monthly base (for the proration editor's "× d/t").
+  fullBaseCents: v.number(),
+  // Pay basis for this employee. "hourly" employees get an hours editor at the
+  // adjust stage instead of a proration editor; base = hourlyRate × hours.
+  payType: payType,
+  hourlyRateCents: v.union(v.number(), v.null()),
+  hoursWorked: v.union(v.number(), v.null()),
   allowances: v.array(allowanceItem),
   grossCents: v.number(),
   cpfableWageCents: v.number(),
@@ -868,6 +891,14 @@ export const payslipWorkspaceRow = v.object({
   employerCpfCents: v.number(),
   netCents: v.number(),
   cpfStatus: cpfStatus,
+  prYear: v.union(v.number(), v.null()),
+  // Multi-currency: `currency` is the pay currency; when it differs from
+  // `baseCurrency` the exchange rate converts to base for totals/exports.
+  baseCurrency: v.union(v.string(), v.null()),
+  exchangeRate: v.union(v.number(), v.null()),
+  exchangeRateDate: v.union(v.string(), v.null()),
+  exchangeMode: v.union(claimExchangeMode, v.null()),
+  exchangeProvider: v.union(v.string(), v.null()),
   proration: v.union(prorationMeta, v.null()),
   // The full computed payslip line breakdown (base, allowances, funds, CPF,
   // SDL, employer contributions, adjustments) — powers the detailed export.
@@ -895,6 +926,10 @@ export const payslipTemplateConfig = v.object({
   headerText: v.union(v.string(), v.null()),
   footerText: v.union(v.string(), v.null()),
   show: payslipTemplateShow,
+  layout: v.union(v.array(payslipLayoutBlock), v.null()),
+  textColor: v.union(v.string(), v.null()),
+  fontScale: v.union(v.number(), v.null()),
+  density: v.union(payslipDensity, v.null()),
 })
 
 // A signature rendered on a payslip, with the image resolved to a URL.
@@ -918,6 +953,10 @@ export const payslipTemplateRow = v.object({
   headerText: v.union(v.string(), v.null()),
   footerText: v.union(v.string(), v.null()),
   show: payslipTemplateShow,
+  layout: v.union(v.array(payslipLayoutBlock), v.null()),
+  textColor: v.union(v.string(), v.null()),
+  fontScale: v.union(v.number(), v.null()),
+  density: v.union(payslipDensity, v.null()),
 })
 
 export const payslipDetail = v.object({
@@ -935,6 +974,12 @@ export const payslipDetail = v.object({
   employerCpfCents: v.number(),
   netCents: v.number(),
   cpfStatus: cpfStatus,
+  prYear: v.union(v.number(), v.null()),
+  baseCurrency: v.union(v.string(), v.null()),
+  exchangeRate: v.union(v.number(), v.null()),
+  exchangeRateDate: v.union(v.string(), v.null()),
+  exchangeMode: v.union(claimExchangeMode, v.null()),
+  exchangeProvider: v.union(v.string(), v.null()),
   lines: v.array(payslipLine),
   status: payrollStatus,
   proration: v.union(prorationMeta, v.null()),

@@ -29,6 +29,33 @@ async function userName(
   return name || u.username || u.email || "Unknown";
 }
 
+// Notify a set of approvers that payslips are waiting at their step (skips the
+// acting user and de-dupes). Links to the approver inbox.
+async function notifyApprovers(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  run: Doc<"payrollRuns">,
+  userIds: Iterable<Id<"users">>,
+  actorUserId: Id<"users"> | null,
+): Promise<void> {
+  const label = monthLabel(run.periodMonth);
+  const seen = new Set<string>();
+  for (const uid of userIds) {
+    if (actorUserId && uid === actorUserId) continue;
+    if (seen.has(uid)) continue;
+    seen.add(uid);
+    await ctx.db.insert("notifications", {
+      orgId,
+      recipientUserId: uid,
+      type: "payroll.approval_pending",
+      title: "Payslips awaiting your approval",
+      body: `Payroll for ${label} has payslips awaiting your approval.`,
+      entityRef: { table: "payrollRuns", id: run._id },
+      read: false,
+    });
+  }
+}
+
 // Resolve the org's configured approval steps into a per-payslip chain snapshot
 // (eligible approver user ids + display label per step).
 async function resolveApprovalChain(
@@ -96,6 +123,19 @@ export const completeRun = mutation({
       .collect();
     if (slips.length === 0) throw new Error("This run has no payslips.");
 
+    // Foreign-currency payslips must have an exchange rate before completion so
+    // base-currency totals and the bank file are correct.
+    const missingRate = slips.find(
+      (s) => s.currency !== run.currency && !s.exchangeRate,
+    );
+    if (missingRate) {
+      const emp = await ctx.db.get(missingRate.employeeId);
+      const who = emp ? `${emp.firstName} ${emp.lastName}` : "an employee";
+      throw new Error(
+        `Set an exchange rate for ${who} (${missingRate.currency}) before completing the run.`,
+      );
+    }
+
     const name = await userName(ctx, userId);
     const now = Date.now();
     const preparerSig = {
@@ -131,6 +171,8 @@ export const completeRun = mutation({
         preparerSignatureStorageId: signatureStorageId,
         finalizedAt: now,
       });
+      // Remind the first step's approvers there are payslips to approve.
+      await notifyApprovers(ctx, orgId, run, chain[0].approverUserIds, userId);
     } else {
       // No approval configured — the preparer's signature finalizes each slip.
       for (const s of slips) {
@@ -174,24 +216,25 @@ async function approveOne(
   signatureStorageId: Id<"_storage"> | undefined,
   note: string | undefined,
   throwOnError: boolean,
-): Promise<boolean> {
+): Promise<{ advanced: boolean; nextApproverIds: Id<"users">[] }> {
+  const noop = { advanced: false, nextApproverIds: [] as Id<"users">[] };
   if (slip.status !== "pending_approval" || !slip.approvalChain) {
     if (throwOnError) throw new Error("This payslip is not awaiting approval.");
-    return false;
+    return noop;
   }
   const idx = slip.currentStepIndex ?? 0;
   const step = slip.approvalChain[idx];
   if (!step) {
     if (throwOnError) throw new Error("No pending approval step.");
-    return false;
+    return noop;
   }
   if (!step.approverUserIds.includes(userId)) {
     if (throwOnError) throw new Error("You are not an approver for this step.");
-    return false;
+    return noop;
   }
   if (step.requiresSignature && !signatureStorageId) {
     if (throwOnError) throw new Error("A signature is required to approve.");
-    return false;
+    return noop;
   }
 
   const now = Date.now();
@@ -218,7 +261,10 @@ async function approveOne(
     signatures,
     status: done ? "approved" : "pending_approval",
   });
-  return true;
+  return {
+    advanced: true,
+    nextApproverIds: done ? [] : chain[nextIdx].approverUserIds,
+  };
 }
 
 // After approvals, promote the run to `approved` once every payslip is approved.
@@ -249,8 +295,22 @@ export const approvePayslip = mutation({
     const slip = await ctx.db.get(payslipId);
     if (!slip || slip.orgId !== orgId) throw new Error("Payslip not found.");
     const name = await userName(ctx, userId);
-    await approveOne(ctx, slip, userId, name, signatureStorageId, note, true);
+    const res = await approveOne(
+      ctx,
+      slip,
+      userId,
+      name,
+      signatureStorageId,
+      note,
+      true,
+    );
     await maybeApproveRun(ctx, slip.runId);
+    // Nudge the next step's approvers once work reaches them.
+    if (res.advanced && res.nextApproverIds.length > 0) {
+      const run = await ctx.db.get(slip.runId);
+      if (run)
+        await notifyApprovers(ctx, orgId, run, res.nextApproverIds, userId);
+    }
     return null;
   },
 });
@@ -266,11 +326,13 @@ export const approvePayslipsBulk = mutation({
     const { orgId, userId } = await requireOrg(ctx);
     const name = await userName(ctx, userId);
     const runIds = new Set<Id<"payrollRuns">>();
+    // Per-run set of approvers to nudge once work advances to their step.
+    const nextByRun = new Map<Id<"payrollRuns">, Set<Id<"users">>>();
     let approved = 0;
     for (const id of payslipIds) {
       const slip = await ctx.db.get(id);
       if (!slip || slip.orgId !== orgId) continue;
-      const ok = await approveOne(
+      const res = await approveOne(
         ctx,
         slip,
         userId,
@@ -279,12 +341,23 @@ export const approvePayslipsBulk = mutation({
         note,
         false,
       );
-      if (ok) {
+      if (res.advanced) {
         approved += 1;
         runIds.add(slip.runId);
+        if (res.nextApproverIds.length > 0) {
+          const set = nextByRun.get(slip.runId) ?? new Set<Id<"users">>();
+          for (const uid of res.nextApproverIds) set.add(uid);
+          nextByRun.set(slip.runId, set);
+        }
       }
     }
     for (const runId of runIds) await maybeApproveRun(ctx, runId);
+    for (const [runId, users] of nextByRun) {
+      const run = await ctx.db.get(runId);
+      // Only nudge for runs still pending (a fully-approved run needs no nudge).
+      if (run && run.status === "pending_approval")
+        await notifyApprovers(ctx, orgId, run, users, userId);
+    }
     return approved;
   },
 });
@@ -480,6 +553,61 @@ export const getRunApprovals = query({
     );
     rows.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
     return { status: run.status, canManage, payslips: rows };
+  },
+});
+
+// Distinct signatures across a run's payslips (preparer + each approver), with
+// image URLs — for embedding at the bottom of the detailed Excel export. Only
+// returns signatures once the run is at least approved.
+export const runSignatures = query({
+  args: { runId: v.id("payrollRuns") },
+  returns: v.array(
+    v.object({
+      role: v.string(),
+      name: v.string(),
+      url: v.union(v.string(), v.null()),
+      signedAt: v.number(),
+    }),
+  ),
+  handler: async (ctx, { runId }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) return [];
+    if (run.status !== "approved" && run.status !== "finalized" && run.status !== "paid") {
+      return [];
+    }
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    // De-dupe by signer + role (the same approver signs every payslip).
+    const seen = new Map<
+      string,
+      { role: string; name: string; storageId: Id<"_storage">; signedAt: number }
+    >();
+    for (const s of slips) {
+      for (const sig of s.signatures ?? []) {
+        const key = `${sig.byUserId}:${sig.role}`;
+        if (!seen.has(key)) {
+          seen.set(key, {
+            role: sig.role,
+            name: sig.name,
+            storageId: sig.signatureStorageId,
+            signedAt: sig.signedAt,
+          });
+        }
+      }
+    }
+    const out = await Promise.all(
+      [...seen.values()].map(async (s) => ({
+        role: s.role,
+        name: s.name,
+        url: await ctx.storage.getUrl(s.storageId),
+        signedAt: s.signedAt,
+      })),
+    );
+    out.sort((a, b) => a.signedAt - b.signedAt);
+    return out;
   },
 });
 

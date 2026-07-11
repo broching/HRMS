@@ -44,6 +44,7 @@ import {
   formatMoney,
 } from "@/features/claims/lib/labels"
 import { ClaimEditDialog } from "@/features/claims/components/claim-edit-dialog"
+import { SignatureCaptureDialog } from "@/features/payroll/components/signature-pad"
 
 type ClaimDoc = FunctionReturnType<typeof api.claims.get>
 
@@ -65,9 +66,11 @@ function ClaimActions({
   const reject = useMutation(api.claims.reject)
   const markReimbursed = useMutation(api.claims.markReimbursed)
   const setSentToPayroll = useMutation(api.claims.setSentToPayroll)
+  const getUploadUrl = useMutation(api.claims.generateUploadUrl)
   const [busy, setBusy] = React.useState(false)
   const [rejectOpen, setRejectOpen] = React.useState(false)
   const [rejectNote, setRejectNote] = React.useState("")
+  const [signOpen, setSignOpen] = React.useState(false)
 
   const isFinance = !!member?.permissions?.includes("claims:approve:finance")
   // The claimant can confirm reimbursement themselves — unless it's already
@@ -104,10 +107,11 @@ function ClaimActions({
   }
 
   // At the finance stage the approving mutation differs from the chain stage.
-  const approve = () =>
+  // A signature is threaded through when the step requires one.
+  const approve = (signatureStorageId?: Id<"_storage">) =>
     claim.status === "pending_finance"
-      ? financeApprove({ claimId })
-      : managerApprove({ claimId })
+      ? financeApprove({ claimId, signatureStorageId })
+      : managerApprove({ claimId, signatureStorageId })
 
   return (
     <div className="flex flex-wrap gap-2">
@@ -116,10 +120,28 @@ function ClaimActions({
           <Button
             size="sm"
             disabled={busy}
-            onClick={() => run(approve(), "Claim approved")}
+            onClick={() =>
+              claim.needsSignature
+                ? setSignOpen(true)
+                : run(approve(), "Claim approved")
+            }
           >
-            Approve
+            {claim.needsSignature ? "Approve & sign" : "Approve"}
           </Button>
+          <SignatureCaptureDialog
+            open={signOpen}
+            onOpenChange={setSignOpen}
+            title="Sign to approve claim"
+            description="Your signature is recorded against this claim and rendered on the claim's Excel export."
+            confirmLabel="Approve & sign"
+            getUploadUrl={() => getUploadUrl({})}
+            onSigned={async (storageId) => {
+              await run(
+                approve(storageId as Id<"_storage">),
+                "Claim approved",
+              )
+            }}
+          />
           <Button
             size="sm"
             variant="outline"

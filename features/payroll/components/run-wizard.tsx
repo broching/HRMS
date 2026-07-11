@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useQuery, useMutation } from "convex/react"
+import { useQuery, useMutation, useConvex } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
 import { toast } from "sonner"
 import {
@@ -41,6 +41,11 @@ import {
   downloadFile,
 } from "@/features/payroll/lib/labels"
 import { getErrorMessage } from "@/lib/errors"
+import {
+  buildDetailedWorkbook,
+  downloadBlob,
+} from "@/features/payroll/lib/payroll-excel"
+import { buildPayslipsPdfZip } from "@/features/payroll/lib/payslip-pdf"
 import { AdjustPayrollStep } from "@/features/payroll/components/adjust-payroll-step"
 import { ApprovalsTable } from "@/features/payroll/components/approvals-table"
 import { SignatureCaptureDialog } from "@/features/payroll/components/signature-pad"
@@ -105,53 +110,75 @@ type Workspace = NonNullable<
 
 type PayslipRow = Workspace["payslips"][number]
 
-// Read-only breakdown shown when a review row is expanded.
+// Read-only breakdown shown when a review row is expanded. Renders the
+// authoritative computed payslip lines (base, allowances, additions, CPF, funds
+// like CDAC/SDL, custom funds, deductions and employer contributions).
 function ReviewBreakdown({ p }: { p: PayslipRow }) {
-  const additions = p.adjustments.filter((a) => a.kind === "addition")
-  const deductions = p.adjustments.filter((a) => a.kind === "deduction")
-  const Line = ({
-    label,
-    cents,
-    muted,
-  }: {
-    label: string
-    cents: number
-    muted?: boolean
-  }) => (
-    <div
-      className={`flex items-center justify-between px-2 py-1.5 text-sm ${
-        muted ? "text-muted-foreground" : ""
-      }`}
-    >
-      <span>{label}</span>
-      <span className="tabular-nums">{formatMoney(cents, p.currency)}</span>
-    </div>
-  )
+  const GROUPS = [
+    { type: "earning", title: "Earnings" },
+    { type: "deduction", title: "Deductions" },
+    { type: "employer", title: "Employer contributions" },
+  ] as const
+
+  const pr = p.proration
   return (
     <div className="bg-muted/30 flex flex-col gap-3 p-4">
+      {pr && (pr.prorated || pr.overridden) && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background px-2 py-1.5 text-sm">
+          <span className="flex items-center gap-2">
+            <span className="text-muted-foreground">Prorated basic pay</span>
+            {pr.overridden && (
+              <Badge variant="outline" className="text-[10px]">
+                edited
+              </Badge>
+            )}
+          </span>
+          <span className="text-muted-foreground text-xs">
+            {formatMoney(p.fullBaseCents, p.currency)} × {pr.daysWorked}/
+            {pr.totalWorkingDays} working days ={" "}
+            <span className="text-foreground tabular-nums">
+              {formatMoney(p.baseCents, p.currency)}
+            </span>
+          </span>
+        </div>
+      )}
       <div className="overflow-hidden rounded-md border bg-background">
-        <Line label="Basic salary" cents={p.baseCents} />
-        {p.allowances.map((al, i) => (
-          <Line key={`al-${i}`} label={al.name} cents={al.amountCents} muted />
-        ))}
-        {additions.map((a) => (
-          <Line key={a._id} label={a.label} cents={a.amountCents} muted />
-        ))}
-        {deductions.map((d) => (
-          <Line key={d._id} label={`− ${d.label}`} cents={d.amountCents} muted />
-        ))}
-        <Line label="CPF (employee)" cents={p.employeeCpfCents} muted />
+        {GROUPS.map((g) => {
+          const lines = p.lines.filter((l) => l.type === g.type)
+          if (lines.length === 0) return null
+          return (
+            <div key={g.type}>
+              <div className="text-muted-foreground bg-muted/40 px-2 py-1.5 text-xs font-medium uppercase">
+                {g.title}
+              </div>
+              {lines.map((l, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between px-2 py-1.5 text-sm"
+                >
+                  <span className="flex items-center gap-2">
+                    {l.label}
+                    {l.category === "fund" && (
+                      <Badge variant="outline" className="text-[10px]">
+                        fund
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="tabular-nums">
+                    {l.type === "deduction" ? "−" : ""}
+                    {formatMoney(l.amountCents, p.currency)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )
+        })}
         <div className="bg-muted/40 flex items-center justify-between px-2 py-1.5 text-sm font-medium">
           <span>Net pay</span>
           <span className="tabular-nums">
             {formatMoney(p.netCents, p.currency)}
           </span>
         </div>
-        <Line
-          label="Employer CPF (not deducted)"
-          cents={p.employerCpfCents}
-          muted
-        />
       </div>
     </div>
   )
@@ -274,8 +301,14 @@ function DownloadRow({
 
 function PaymentStep({ workspace }: { workspace: Workspace }) {
   const { run, payslips } = workspace
+  const convex = useConvex()
   const variance = useQuery(api.payroll.varianceReport, { runId: run._id })
+  const signatures = useQuery(api.payrollApproval.runSignatures, {
+    runId: run._id,
+  })
   const [paySearch, setPaySearch] = React.useState("")
+  const [xlsxBusy, setXlsxBusy] = React.useState(false)
+  const [zipBusy, setZipBusy] = React.useState(false)
 
   const filteredPayments = payslips.filter((p) =>
     p.employeeName.toLowerCase().includes(paySearch.toLowerCase()),
@@ -298,31 +331,57 @@ function PaymentStep({ workspace }: { workspace: Workspace }) {
     downloadFile(`${fileStem}-report.csv`, csv)
   }
 
-  // One row per payslip line so every item — funds (CDAC/SDL), custom funds,
-  // additions, deductions and employer contributions — is exported.
-  function downloadDetailedBreakdown() {
-    const kindLabel: Record<string, string> = {
-      earning: "Earning",
-      deduction: "Deduction",
-      employer: "Employer contribution",
+  // Detailed Excel workbook: one row per employee with a column per distinct
+  // line item (earnings → gross → deductions → net → employer), plus currency,
+  // exchange rate + date, and net in base currency. Approver signatures are
+  // embedded at the bottom once the run is approved.
+  async function downloadDetailedBreakdown() {
+    setXlsxBusy(true)
+    try {
+      const blob = await buildDetailedWorkbook({
+        title: `Payroll — ${run.label}`,
+        periodLabel: run.periodMonth,
+        baseCurrency: run.currency,
+        payslips: payslips.map((p) => ({
+          employeeName: p.employeeName,
+          currency: p.currency,
+          baseCurrency: p.baseCurrency,
+          exchangeRate: p.exchangeRate,
+          exchangeRateDate: p.exchangeRateDate,
+          grossCents: p.grossCents,
+          netCents: p.netCents,
+          lines: p.lines,
+        })),
+        signatures: signatures ?? [],
+      })
+      downloadBlob(`${fileStem}-detailed.xlsx`, blob)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't build the Excel file"))
+    } finally {
+      setXlsxBusy(false)
     }
-    const rows: (string | number)[][] = []
-    for (const p of payslips) {
-      for (const l of p.lines) {
-        rows.push([
-          p.employeeName,
-          kindLabel[l.type] ?? l.type,
-          l.label,
-          centsToCsv(l.amountCents),
-          p.currency,
-        ])
+  }
+
+  // One PDF payslip per employee — the exact document the employee receives —
+  // bundled into a single ZIP named after the pay period. Each file is
+  // "{Employee} — {month}.pdf".
+  async function downloadAllPayslips() {
+    setZipBusy(true)
+    try {
+      const slips = await convex.query(api.payroll.getRunPayslipsForPrint, {
+        runId: run._id,
+      })
+      if (slips.length === 0) {
+        toast.info("No payslips to export.")
+        return
       }
+      const blob = await buildPayslipsPdfZip(slips, run.periodMonth)
+      downloadBlob(`${fileStem}-payslips.zip`, blob)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't build the payslips ZIP"))
+    } finally {
+      setZipBusy(false)
     }
-    const csv = toCsv(
-      ["Employee", "Category", "Item", "Amount", "Currency"],
-      rows,
-    )
-    downloadFile(`${fileStem}-detailed.csv`, csv)
   }
 
   function downloadVarianceReport() {
@@ -396,16 +455,32 @@ function PaymentStep({ workspace }: { workspace: Workspace }) {
           </DownloadRow>
           <Separator />
           <DownloadRow
-            title="Detailed breakdown"
-            description="Every line item — funds (CDAC/SDL), custom funds, additions, deductions and employer contributions."
+            title="Detailed breakdown (Excel)"
+            description="One row per employee — every line item inline, exchange rate + date per currency, and approver signatures once approved."
           >
             <Button
               variant="outline"
               size="sm"
               onClick={downloadDetailedBreakdown}
+              disabled={xlsxBusy}
             >
               <IconDownload className="size-4" />
-              Download
+              {xlsxBusy ? "Building…" : "Download .xlsx"}
+            </Button>
+          </DownloadRow>
+          <Separator />
+          <DownloadRow
+            title="Payslips (PDF ZIP)"
+            description="One PDF payslip per employee — the exact document the employee receives — named by employee and pay month, bundled into a single ZIP."
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={downloadAllPayslips}
+              disabled={zipBusy}
+            >
+              <IconDownload className="size-4" />
+              {zipBusy ? "Zipping…" : "Download ZIP"}
             </Button>
           </DownloadRow>
           <Separator />

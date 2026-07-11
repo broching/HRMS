@@ -8,11 +8,25 @@ import { writeAuditLog } from "./lib/audit";
 import {
   allowanceItem,
   cpfStatus,
+  payType,
   employeeFunds,
   deductionItem,
   employerContribItem,
+  claimExchangeMode,
 } from "./lib/enums";
 import { compensationDoc, compensationRow } from "./lib/validators";
+
+// Sort compensation rows most-recent first: latest effectiveDate wins, and on a
+// tie (two records saved the same day) the most recently created one leads — so
+// the "current" record and its note/base reflect the latest save.
+function byEffectiveThenNewest(
+  a: Doc<"compensation">,
+  b: Doc<"compensation">,
+): number {
+  if (a.effectiveDate !== b.effectiveDate)
+    return a.effectiveDate < b.effectiveDate ? 1 : -1;
+  return b._creationTime - a._creationTime;
+}
 
 // The compensation in effect for an employee on `onDate` = the row with the
 // latest effectiveDate on or before it. Shared with the payroll engine.
@@ -52,7 +66,7 @@ export const listForEmployee = query({
         q.eq("employeeId", employeeId),
       )
       .collect();
-    rows.sort((a, b) => (a.effectiveDate < b.effectiveDate ? 1 : -1));
+    rows.sort(byEffectiveThenNewest);
     return rows;
   },
 });
@@ -76,7 +90,7 @@ export const forProfile = query({
       .query("compensation")
       .withIndex("by_employee_effective", (q) => q.eq("employeeId", employeeId))
       .collect();
-    rows.sort((a, b) => (a.effectiveDate < b.effectiveDate ? 1 : -1));
+    rows.sort(byEffectiveThenNewest);
     return rows;
   },
 });
@@ -120,7 +134,9 @@ export const overview = query({
           teamId: e.teamId ?? null,
           teamName: e.teamId ? (teamName.get(e.teamId) ?? null) : null,
           currency: comp?.currency ?? null,
+          payType: comp?.payType ?? null,
           baseMonthlyCents: comp?.baseMonthlyCents ?? null,
+          hourlyRateCents: comp?.hourlyRateCents ?? null,
           cpfStatus: comp?.cpfStatus ?? null,
           effectiveDate: comp?.effectiveDate ?? null,
         };
@@ -131,18 +147,34 @@ export const overview = query({
   },
 });
 
+// The org's base/reporting currency — the reference for converting a
+// foreign-currency salary (payslips in the pay currency, totals in base).
+export const orgBaseCurrency = query({
+  args: {},
+  returns: v.object({ currency: v.string() }),
+  handler: async (ctx) => {
+    const { org } = await requirePermission(ctx, "payroll:manage");
+    return { currency: org.settings.currency };
+  },
+});
+
 export const setCompensation = mutation({
   args: {
     employeeId: v.id("employees"),
     effectiveDate: v.string(),
+    payType: v.optional(payType),
     baseMonthlyCents: v.number(),
+    hourlyRateCents: v.optional(v.number()),
     allowances: v.optional(v.array(allowanceItem)),
     cpfStatus: cpfStatus,
+    prStartDate: v.optional(v.string()),
     workingDays: v.optional(v.array(v.number())),
     funds: v.optional(employeeFunds),
     deductions: v.optional(v.array(deductionItem)),
     employerContributions: v.optional(v.array(employerContribItem)),
     currency: v.optional(v.string()),
+    exchangeMode: v.optional(claimExchangeMode),
+    manualRate: v.optional(v.number()),
     note: v.optional(v.string()),
   },
   returns: v.id("compensation"),
@@ -153,15 +185,27 @@ export const setCompensation = mutation({
       throw new Error("Employee not found.");
     }
     if (args.baseMonthlyCents < 0) throw new Error("Base pay can't be negative.");
+    if ((args.hourlyRateCents ?? 0) < 0) {
+      throw new Error("Hourly rate can't be negative.");
+    }
+    const payTypeValue = args.payType ?? "fixed";
 
     const id = await ctx.db.insert("compensation", {
       orgId,
       employeeId: args.employeeId,
       effectiveDate: args.effectiveDate,
       currency: args.currency ?? org.settings.currency,
-      baseMonthlyCents: args.baseMonthlyCents,
+      payType: payTypeValue,
+      // Hourly employees don't carry a monthly base; store 0 to keep it explicit.
+      baseMonthlyCents:
+        payTypeValue === "hourly" ? 0 : args.baseMonthlyCents,
+      hourlyRateCents:
+        payTypeValue === "hourly" ? (args.hourlyRateCents ?? 0) : undefined,
       allowances: args.allowances ?? [],
       cpfStatus: args.cpfStatus,
+      prStartDate: args.cpfStatus === "pr" ? args.prStartDate : undefined,
+      exchangeMode: args.exchangeMode,
+      manualRate: args.manualRate,
       workingDays: args.workingDays,
       funds: args.funds,
       deductions: args.deductions,

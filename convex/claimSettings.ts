@@ -37,6 +37,7 @@ const DEFAULTS = {
   transactionValidityMonths: null as number | null,
   hrApproverUserIds: [] as Id<"users">[],
   financeApproverUserIds: [] as Id<"users">[],
+  financeRequiresSignature: false,
   assigneeGroups: [] as { id: string; name: string; userIds: Id<"users">[] }[],
   approvalWorkflow: DEFAULT_WORKFLOW,
   approvalFlows: [DEFAULT_FLOW],
@@ -55,12 +56,14 @@ export type ResolvedClaimSettings = Omit<
   | "assigneeGroups"
   | "approvalFlows"
   | "maxGroupsPerPeriod"
+  | "financeRequiresSignature"
 > & {
   transactionValidityMonths: number | null;
   payrollItem: string | null;
   assigneeGroups: { id: string; name: string; userIds: Id<"users">[] }[];
   approvalFlows: NonNullable<Doc<"claimSettings">["approvalFlows"]>;
   maxGroupsPerPeriod: number | null;
+  financeRequiresSignature: boolean;
 };
 
 // Load an org's claim settings, falling back to defaults. Shared with the
@@ -89,6 +92,7 @@ export async function resolveClaimSettings(
     transactionValidityMonths: row.transactionValidityMonths ?? null,
     hrApproverUserIds: row.hrApproverUserIds,
     financeApproverUserIds: row.financeApproverUserIds,
+    financeRequiresSignature: row.financeRequiresSignature ?? false,
     assigneeGroups: row.assigneeGroups ?? [],
     approvalWorkflow: row.approvalWorkflow,
     approvalFlows,
@@ -165,6 +169,7 @@ export const save = mutation({
     transactionValidityMonths: v.union(v.number(), v.null()),
     hrApproverUserIds: v.array(v.id("users")),
     financeApproverUserIds: v.array(v.id("users")),
+    financeRequiresSignature: v.optional(v.boolean()),
     assigneeGroups: v.array(claimAssigneeGroup),
     approvalFlows: v.array(claimApprovalFlow),
     payrollMode: claimPayrollMode,
@@ -251,6 +256,7 @@ export const save = mutation({
       transactionValidityMonths: args.transactionValidityMonths ?? undefined,
       hrApproverUserIds: args.hrApproverUserIds,
       financeApproverUserIds: args.financeApproverUserIds,
+      financeRequiresSignature: args.financeRequiresSignature ?? false,
       assigneeGroups: args.assigneeGroups.map((g) => ({
         id: g.id,
         name: g.name.trim(),

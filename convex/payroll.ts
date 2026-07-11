@@ -5,7 +5,7 @@ import { requireOrg, getOrgContext, requirePermission } from "./auth";
 import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { effectiveCompensation } from "./compensation";
-import { computeCpf, ageOn } from "./model/cpf";
+import { computeCpf, ageOn, prYearOn } from "./model/cpf";
 import {
   DEFAULT_WORKING_DAYS,
   workingDaysInMonth,
@@ -36,6 +36,7 @@ import {
   payrollAdjustmentSource,
   overtimeMeta,
   claimStatus,
+  claimExchangeMode,
 } from "./lib/enums";
 import { writeAuditLog } from "./lib/audit";
 
@@ -63,6 +64,48 @@ interface ProrationCtx {
   totalWorkingDays: number;
   daysWorked: number;
   unpaidLeaveDays: number;
+  // Set when the day counts came from an HR override rather than auto-computed.
+  overridden?: boolean;
+}
+
+// The exchange fields to seed onto a fresh payslip, given the org base currency
+// and the employee's compensation. Same-currency → locked at rate 1. A foreign
+// employee whose comp defaults to a manual rate is seeded with it; otherwise the
+// rate is left unset for HR to fetch/enter during the run.
+function seedExchangeFields(
+  baseCurrency: string,
+  comp: Doc<"compensation">,
+): {
+  baseCurrency: string;
+  exchangeRate?: number;
+  exchangeRateDate?: string;
+  exchangeMode?: "auto" | "manual";
+  exchangeProvider?: string;
+} {
+  if (comp.currency === baseCurrency) {
+    return {
+      baseCurrency,
+      exchangeRate: 1,
+      exchangeProvider: "same",
+    };
+  }
+  const mode = comp.exchangeMode ?? "auto";
+  if (mode === "manual" && comp.manualRate && comp.manualRate > 0) {
+    return {
+      baseCurrency,
+      exchangeRate: comp.manualRate,
+      exchangeRateDate: new Date().toISOString().slice(0, 10),
+      exchangeMode: "manual",
+      exchangeProvider: "manual",
+    };
+  }
+  return { baseCurrency, exchangeMode: mode };
+}
+
+// Convert a pay-currency cent amount to the run's base currency using a
+// payslip's exchange rate (rate 1 when same-currency or not yet set).
+function toBaseCents(cents: number, rate: number | undefined): number {
+  return Math.round(cents * (rate ?? 1));
 }
 
 interface ComputedPayslip {
@@ -74,12 +117,19 @@ interface ComputedPayslip {
   employerCpfCents: number;
   netCents: number;
   cpfStatus: Doc<"compensation">["cpfStatus"];
-  lines: { label: string; amountCents: number; type: "earning" | "deduction" | "employer" }[];
+  prYear: number | null;
+  lines: {
+    label: string;
+    amountCents: number;
+    type: "earning" | "deduction" | "employer";
+    category?: string;
+  }[];
   proration: {
     totalWorkingDays: number;
     daysWorked: number;
     unpaidLeaveDays: number;
     prorated: boolean;
+    overridden?: boolean;
   };
 }
 
@@ -117,15 +167,23 @@ function computePayslip(
   adjustments: AdjustmentInput[],
   proration: ProrationCtx,
   settings: PayrollSettingsValue,
+  hoursWorked: number | undefined,
 ): ComputedPayslip {
-  // Base pay prorated by days actually worked (MOM incomplete-month formula).
+  // Base pay: for hourly employees it's the hourly rate × hours worked (entered
+  // at the adjust stage, no monthly proration); otherwise the monthly base
+  // prorated by days actually worked (MOM incomplete-month formula).
+  const isHourly = comp.payType === "hourly";
   const fullBase = comp.baseMonthlyCents;
-  const proratedBase = proratedBaseCents(
-    fullBase,
-    proration.totalWorkingDays,
-    proration.daysWorked,
-  );
-  const isProrated = proratedBase !== fullBase;
+  const hours = Math.max(0, hoursWorked ?? 0);
+  const proratedBase = isHourly
+    ? Math.round((comp.hourlyRateCents ?? 0) * hours)
+    : proratedBaseCents(
+        fullBase,
+        proration.totalWorkingDays,
+        proration.daysWorked,
+      );
+  // Only monthly (fixed) pay is "prorated"; hourly pay is inherently by hours.
+  const isProrated = !isHourly && proratedBase !== fullBase;
 
   const compAllowancesCents = comp.allowances.reduce((s, a) => s + a.amountCents, 0);
 
@@ -164,7 +222,16 @@ function computePayslip(
     proratedBase + cpfableAllowances + cpfableAdditions - grossDeductCents,
   );
   const age = dob ? ageOn(dob, periodEnd) : 30; // assume prime-age band if unknown
-  const cpf = computeCpf(ordinaryWage, age, comp.cpfStatus);
+  // For PRs, derive the graduated contribution year from their PR-start date.
+  const prYear =
+    comp.cpfStatus === "pr" ? prYearOn(comp.prStartDate, periodEnd) : null;
+  const cpf = computeCpf(
+    ordinaryWage,
+    age,
+    comp.cpfStatus,
+    prYear ?? 3,
+    settings.cpf,
+  );
 
   // ─── Funds (SHG deduction, SDL + custom employer contributions) ───
   const empFunds = comp.funds;
@@ -204,9 +271,11 @@ function computePayslip(
   // ─── Lines ───
   const lines: ComputedPayslip["lines"] = [];
   lines.push({
-    label: isProrated
-      ? `Base pay (${proration.daysWorked}/${proration.totalWorkingDays} days)`
-      : "Base pay",
+    label: isHourly
+      ? `Base pay (${hours} hr${hours === 1 ? "" : "s"})`
+      : isProrated
+        ? `Base pay (${proration.daysWorked}/${proration.totalWorkingDays} days)`
+        : "Base pay",
     amountCents: proratedBase,
     type: "earning",
   });
@@ -225,9 +294,19 @@ function computePayslip(
       type: "deduction",
     });
   if (shgCents > 0)
-    lines.push({ label: shgLabel, amountCents: shgCents, type: "deduction" });
+    lines.push({
+      label: shgLabel,
+      amountCents: shgCents,
+      type: "deduction",
+      category: "fund",
+    });
   for (const c of customDeductionFunds)
-    lines.push({ label: c.name, amountCents: c.cents, type: "deduction" });
+    lines.push({
+      label: c.name,
+      amountCents: c.cents,
+      type: "deduction",
+      category: "fund",
+    });
   for (const d of netDeductions)
     lines.push({ label: d.label, amountCents: d.amountCents, type: "deduction" });
   for (const d of compNetDeductions)
@@ -240,9 +319,19 @@ function computePayslip(
       type: "employer",
     });
   if (sdlCents > 0)
-    lines.push({ label: "SDL", amountCents: sdlCents, type: "employer" });
+    lines.push({
+      label: "SDL",
+      amountCents: sdlCents,
+      type: "employer",
+      category: "fund",
+    });
   for (const c of customEmployerFunds)
-    lines.push({ label: c.name, amountCents: c.cents, type: "employer" });
+    lines.push({
+      label: c.name,
+      amountCents: c.cents,
+      type: "employer",
+      category: "fund",
+    });
   for (const e of compEmployerContribs)
     lines.push({ label: e.name, amountCents: e.amountCents, type: "employer" });
   for (const a of employerAdjustments)
@@ -257,12 +346,14 @@ function computePayslip(
     employerCpfCents: cpf.employerCpfCents,
     netCents,
     cpfStatus: comp.cpfStatus,
+    prYear,
     lines,
     proration: {
       totalWorkingDays: proration.totalWorkingDays,
       daysWorked: proration.daysWorked,
       unpaidLeaveDays: proration.unpaidLeaveDays,
       prorated: isProrated,
+      overridden: proration.overridden,
     },
   };
 }
@@ -382,7 +473,13 @@ async function recomputePayslip(
       q.eq("runId", slip.runId).eq("employeeId", slip.employeeId),
     )
     .collect();
-  const proration = await prorationContextFor(ctx, emp, comp, slip.periodMonth);
+  const autoProration = await prorationContextFor(
+    ctx,
+    emp,
+    comp,
+    slip.periodMonth,
+  );
+  const proration = applyProrationOverride(autoProration, slip.prorationOverride);
   const settings = await getPayrollSettings(ctx, slip.orgId);
   const computed = computePayslip(
     comp,
@@ -391,6 +488,7 @@ async function recomputePayslip(
     adjustments,
     proration,
     settings,
+    slip.hoursWorked,
   );
   await ctx.db.patch(slip._id, {
     baseCents: computed.baseCents,
@@ -401,9 +499,30 @@ async function recomputePayslip(
     employerCpfCents: computed.employerCpfCents,
     netCents: computed.netCents,
     cpfStatus: computed.cpfStatus,
+    prYear: computed.prYear ?? undefined,
     lines: computed.lines,
     proration: computed.proration,
   });
+}
+
+// Merge an HR proration override onto the auto-computed context. The override
+// supplies the day counts; unpaid-leave days are re-derived for display.
+function applyProrationOverride(
+  auto: ProrationCtx,
+  override: Doc<"payslips">["prorationOverride"],
+): ProrationCtx {
+  if (!override) return auto;
+  const totalWorkingDays = Math.max(0, Math.round(override.totalWorkingDays));
+  const daysWorked = Math.max(
+    0,
+    Math.min(totalWorkingDays, Math.round(override.daysWorked)),
+  );
+  return {
+    totalWorkingDays,
+    daysWorked,
+    unpaidLeaveDays: Math.max(0, totalWorkingDays - daysWorked),
+    overridden: true,
+  };
 }
 
 // Recompute every DRAFT payslip for an employee across open draft runs — called
@@ -441,11 +560,14 @@ async function recomputeRunTotals(
   let employeeCpfCents = 0;
   let employerCpfCents = 0;
   let netCents = 0;
+  // Run totals are denominated in the run's base currency; each payslip is
+  // converted from its pay currency via its exchange rate (1 when same).
   for (const s of slips) {
-    grossCents += s.grossCents;
-    employeeCpfCents += s.employeeCpfCents;
-    employerCpfCents += s.employerCpfCents;
-    netCents += s.netCents;
+    const rate = s.exchangeRate;
+    grossCents += toBaseCents(s.grossCents, rate);
+    employeeCpfCents += toBaseCents(s.employeeCpfCents, rate);
+    employerCpfCents += toBaseCents(s.employerCpfCents, rate);
+    netCents += toBaseCents(s.netCents, rate);
   }
   await ctx.db.patch(runId, {
     grossCents,
@@ -556,6 +678,7 @@ export const createRun = mutation({
         [],
         proration,
         settings,
+        undefined,
       );
       await ctx.db.insert("payslips", {
         orgId,
@@ -571,14 +694,17 @@ export const createRun = mutation({
         employerCpfCents: slip.employerCpfCents,
         netCents: slip.netCents,
         cpfStatus: slip.cpfStatus,
+        prYear: slip.prYear ?? undefined,
+        ...seedExchangeFields(org.settings.currency, comp),
         lines: slip.lines,
         status: "draft",
         proration: slip.proration,
       });
-      grossCents += slip.grossCents;
-      employeeCpfCents += slip.employeeCpfCents;
-      employerCpfCents += slip.employerCpfCents;
-      netCents += slip.netCents;
+      const ex = seedExchangeFields(org.settings.currency, comp);
+      grossCents += toBaseCents(slip.grossCents, ex.exchangeRate);
+      employeeCpfCents += toBaseCents(slip.employeeCpfCents, ex.exchangeRate);
+      employerCpfCents += toBaseCents(slip.employerCpfCents, ex.exchangeRate);
+      netCents += toBaseCents(slip.netCents, ex.exchangeRate);
       count += 1;
     }
 
@@ -622,6 +748,128 @@ export const refreshRun = mutation({
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .collect();
     for (const slip of slips) await recomputePayslip(ctx, slip);
+    await recomputeRunTotals(ctx, runId);
+    return null;
+  },
+});
+
+// Override the prorated day counts for one employee's payslip in a draft run.
+// The base pay is recomputed as base × daysWorked / totalWorkingDays and the
+// override persists across refreshes (until cleared).
+export const setProrationOverride = mutation({
+  args: {
+    runId: v.id("payrollRuns"),
+    employeeId: v.id("employees"),
+    daysWorked: v.number(),
+    totalWorkingDays: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { runId, employeeId, daysWorked, totalWorkingDays }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const { slip } = await requireEditablePayslip(
+      ctx,
+      orgId,
+      runId,
+      employeeId,
+    );
+    if (!Number.isFinite(daysWorked) || !Number.isFinite(totalWorkingDays)) {
+      throw new Error("Day counts must be numbers.");
+    }
+    if (totalWorkingDays <= 0) {
+      throw new Error("Total working days must be greater than zero.");
+    }
+    if (daysWorked < 0 || daysWorked > totalWorkingDays) {
+      throw new Error("Days worked must be between 0 and total working days.");
+    }
+    await ctx.db.patch(slip._id, {
+      prorationOverride: {
+        daysWorked: Math.round(daysWorked),
+        totalWorkingDays: Math.round(totalWorkingDays),
+      },
+    });
+    const fresh = await ctx.db.get(slip._id);
+    if (fresh) await recomputePayslip(ctx, fresh);
+    await recomputeRunTotals(ctx, runId);
+    return null;
+  },
+});
+
+// Clear a proration override, reverting to the auto-computed MOM figures.
+export const clearProrationOverride = mutation({
+  args: { runId: v.id("payrollRuns"), employeeId: v.id("employees") },
+  returns: v.null(),
+  handler: async (ctx, { runId, employeeId }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const { slip } = await requireEditablePayslip(
+      ctx,
+      orgId,
+      runId,
+      employeeId,
+    );
+    await ctx.db.patch(slip._id, { prorationOverride: undefined });
+    const fresh = await ctx.db.get(slip._id);
+    if (fresh) await recomputePayslip(ctx, fresh);
+    await recomputeRunTotals(ctx, runId);
+    return null;
+  },
+});
+
+// Set the hours worked for an hourly-paid employee's payslip in a draft run.
+// Base pay recomputes as hourlyRate × hours. Persists across refreshes.
+export const setPayslipHours = mutation({
+  args: {
+    runId: v.id("payrollRuns"),
+    employeeId: v.id("employees"),
+    hours: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { runId, employeeId, hours }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const { slip } = await requireEditablePayslip(ctx, orgId, runId, employeeId);
+    if (!Number.isFinite(hours) || hours < 0) {
+      throw new Error("Hours must be a non-negative number.");
+    }
+    await ctx.db.patch(slip._id, { hoursWorked: Math.round(hours * 100) / 100 });
+    const fresh = await ctx.db.get(slip._id);
+    if (fresh) await recomputePayslip(ctx, fresh);
+    await recomputeRunTotals(ctx, runId);
+    return null;
+  },
+});
+
+// Set/modify the exchange rate for a foreign-currency payslip during the run.
+// The client fetches the live rate via `exchange.getRate` (auto) or the user
+// enters it (manual), then passes it here with its date. Re-sums run totals.
+export const setPayslipExchangeRate = mutation({
+  args: {
+    runId: v.id("payrollRuns"),
+    employeeId: v.id("employees"),
+    rate: v.number(),
+    date: v.string(),
+    mode: claimExchangeMode,
+    provider: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { runId, employeeId, rate, date, mode, provider }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:manage");
+    const { run, slip } = await requireEditablePayslip(
+      ctx,
+      orgId,
+      runId,
+      employeeId,
+    );
+    if (slip.currency === run.currency) {
+      throw new Error("This employee is paid in the base currency.");
+    }
+    if (!Number.isFinite(rate) || rate <= 0) {
+      throw new Error("Exchange rate must be greater than zero.");
+    }
+    await ctx.db.patch(slip._id, {
+      exchangeRate: rate,
+      exchangeRateDate: date,
+      exchangeMode: mode,
+      exchangeProvider: provider ?? (mode === "manual" ? "manual" : undefined),
+    });
     await recomputeRunTotals(ctx, runId);
     return null;
   },
@@ -883,6 +1131,7 @@ export const addEmployeeToRun = mutation({
       [],
       proration,
       settings,
+      undefined,
     );
     await ctx.db.insert("payslips", {
       orgId,
@@ -898,6 +1147,8 @@ export const addEmployeeToRun = mutation({
       employerCpfCents: slip.employerCpfCents,
       netCents: slip.netCents,
       cpfStatus: slip.cpfStatus,
+      prYear: slip.prYear ?? undefined,
+      ...seedExchangeFields(run.currency, comp),
       lines: slip.lines,
       status: "draft",
       proration: slip.proration,
@@ -1079,6 +1330,10 @@ export const getRunWorkspace = query({
           departmentName: dept?.name ?? null,
           currency: s.currency,
           baseCents: s.baseCents,
+          fullBaseCents: comp?.baseMonthlyCents ?? s.baseCents,
+          payType: comp?.payType ?? "fixed",
+          hourlyRateCents: comp?.hourlyRateCents ?? null,
+          hoursWorked: s.hoursWorked ?? null,
           allowances: comp?.allowances ?? [],
           grossCents: s.grossCents,
           cpfableWageCents: s.cpfableWageCents,
@@ -1086,6 +1341,12 @@ export const getRunWorkspace = query({
           employerCpfCents: s.employerCpfCents,
           netCents: s.netCents,
           cpfStatus: s.cpfStatus,
+          prYear: s.prYear ?? null,
+          baseCurrency: s.baseCurrency ?? null,
+          exchangeRate: s.exchangeRate ?? null,
+          exchangeRateDate: s.exchangeRateDate ?? null,
+          exchangeMode: s.exchangeMode ?? null,
+          exchangeProvider: s.exchangeProvider ?? null,
           proration: s.proration ?? null,
           lines: s.lines,
           adjustments: adjustments
@@ -1455,10 +1716,18 @@ export const getPayslip = query({
     if (!slip || slip.orgId !== orgCtx.orgId) throw new Error("Payslip not found.");
 
     const canManage = ctxHasPermission(orgCtx, "payroll:manage");
-    if (!canManage) {
+    // An approver on this payslip's chain may preview it while it's pending, so
+    // they can verify before signing.
+    const isApprover = (slip.approvalChain ?? []).some((s) =>
+      s.approverUserIds.includes(orgCtx.userId),
+    );
+    let isOwnPaid = false;
+    if (!canManage && !isApprover) {
       const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+      isOwnPaid =
+        !!own && slip.employeeId === own._id && slip.status === "paid";
       // Employees may only view their own, released (paid) payslip.
-      if (!own || slip.employeeId !== own._id || slip.status !== "paid") {
+      if (!isOwnPaid) {
         throw new Error("Not authorized to view this payslip.");
       }
     }
@@ -1473,14 +1742,23 @@ export const getPayslip = query({
       orgCtx.orgId,
       run?.templateId,
     );
-    const signatures = await Promise.all(
-      (slip.signatures ?? []).map(async (s) => ({
-        role: s.role,
-        name: s.name,
-        url: await ctx.storage.getUrl(s.signatureStorageId),
-        signedAt: s.signedAt,
-      })),
-    );
+    // Employees only see signatures on their own payslip when the org opts in.
+    // HR/payroll managers and approvers always see them.
+    let showSignatures = true;
+    if (!canManage && !isApprover && isOwnPaid) {
+      const settings = await getPayrollSettings(ctx, orgCtx.orgId);
+      showSignatures = settings.showSignaturesToEmployees === true;
+    }
+    const signatures = showSignatures
+      ? await Promise.all(
+          (slip.signatures ?? []).map(async (s) => ({
+            role: s.role,
+            name: s.name,
+            url: await ctx.storage.getUrl(s.signatureStorageId),
+            signedAt: s.signedAt,
+          })),
+        )
+      : [];
     return {
       _id: slip._id,
       _creationTime: slip._creationTime,
@@ -1496,6 +1774,12 @@ export const getPayslip = query({
       employerCpfCents: slip.employerCpfCents,
       netCents: slip.netCents,
       cpfStatus: slip.cpfStatus,
+      prYear: slip.prYear ?? null,
+      baseCurrency: slip.baseCurrency ?? null,
+      exchangeRate: slip.exchangeRate ?? null,
+      exchangeRateDate: slip.exchangeRateDate ?? null,
+      exchangeMode: slip.exchangeMode ?? null,
+      exchangeProvider: slip.exchangeProvider ?? null,
       lines: slip.lines,
       status: slip.status,
       proration: slip.proration ?? null,
@@ -1509,5 +1793,77 @@ export const getPayslip = query({
       payPeriodEnd: periodEndDate(slip.periodMonth),
       payDate: run?.payDate ?? null,
     };
+  },
+});
+
+// Every payslip in a run, in the same shape as `getPayslip`, so the client can
+// render the exact employee-facing payslip document for each employee (used by
+// the bulk payslip → PDF export). Payroll-manager only; signatures always shown.
+export const getRunPayslipsForPrint = query({
+  args: { runId: v.id("payrollRuns") },
+  returns: v.array(payslipDetail),
+  handler: async (ctx, { runId }) => {
+    const { orgId, org } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
+    const template = await resolveTemplateConfig(ctx, orgId, run.templateId);
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+
+    return await Promise.all(
+      slips.map(async (slip) => {
+        const emp = await ctx.db.get(slip.employeeId);
+        const [dept, position] = await Promise.all([
+          emp?.departmentId
+            ? ctx.db.get(emp.departmentId)
+            : Promise.resolve(null),
+          emp?.positionId ? ctx.db.get(emp.positionId) : Promise.resolve(null),
+        ]);
+        const signatures = await Promise.all(
+          (slip.signatures ?? []).map(async (s) => ({
+            role: s.role,
+            name: s.name,
+            url: await ctx.storage.getUrl(s.signatureStorageId),
+            signedAt: s.signedAt,
+          })),
+        );
+        return {
+          _id: slip._id,
+          _creationTime: slip._creationTime,
+          employeeId: slip.employeeId,
+          employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
+          periodMonth: slip.periodMonth,
+          currency: slip.currency,
+          baseCents: slip.baseCents,
+          allowancesCents: slip.allowancesCents,
+          grossCents: slip.grossCents,
+          cpfableWageCents: slip.cpfableWageCents,
+          employeeCpfCents: slip.employeeCpfCents,
+          employerCpfCents: slip.employerCpfCents,
+          netCents: slip.netCents,
+          cpfStatus: slip.cpfStatus,
+          prYear: slip.prYear ?? null,
+          baseCurrency: slip.baseCurrency ?? null,
+          exchangeRate: slip.exchangeRate ?? null,
+          exchangeRateDate: slip.exchangeRateDate ?? null,
+          exchangeMode: slip.exchangeMode ?? null,
+          exchangeProvider: slip.exchangeProvider ?? null,
+          lines: slip.lines,
+          status: slip.status,
+          proration: slip.proration ?? null,
+          template,
+          signatures,
+          companyName: org.name,
+          employeeNumber: emp?.employeeNumber ?? "—",
+          departmentName: dept?.name ?? null,
+          positionTitle: position?.title ?? null,
+          payPeriodStart: `${slip.periodMonth}-01`,
+          payPeriodEnd: periodEndDate(slip.periodMonth),
+          payDate: run.payDate ?? null,
+        };
+      }),
+    );
   },
 });

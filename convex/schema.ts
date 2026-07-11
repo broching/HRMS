@@ -41,6 +41,7 @@ import {
   claimAssigneeGroup,
   claimPayrollMode,
   claimChainStep,
+  claimSignature,
   claimExchangeMode,
   claimEditEntry,
   officeMileageSettings,
@@ -54,6 +55,8 @@ import {
   correctionStatus,
   shiftStatus,
   cpfStatus,
+  cpfConfig,
+  payType,
   payrollStatus,
   payslipLine,
   allowanceItem,
@@ -67,6 +70,8 @@ import {
   payslipApprovalStep,
   payslipSignature,
   payslipTemplateShow,
+  payslipLayoutBlock,
+  payslipDensity,
   payrollAdjustmentKind,
   payrollAdjustmentSource,
   overtimeMeta,
@@ -529,6 +534,9 @@ export default defineSchema({
     transactionValidityMonths: v.optional(v.number()), // undefined = no limit
     hrApproverUserIds: v.array(v.id("users")),
     financeApproverUserIds: v.array(v.id("users")),
+    // When on, finance must clock a signature to approve the finance stage.
+    // Absent = false. (Per-approver-step signatures live on the workflow steps.)
+    financeRequiresSignature: v.optional(v.boolean()),
     // Custom assignee groups (beyond the built-in HR/Finance) that approval
     // workflow steps can target by id. Absent on orgs configured before groups.
     assigneeGroups: v.optional(v.array(claimAssigneeGroup)),
@@ -603,6 +611,9 @@ export default defineSchema({
     // Queued for payroll reimbursement (auto-set on approval when the org's
     // payroll connection is "automatic"; toggled manually otherwise).
     sentToPayroll: v.optional(v.boolean()),
+    // Approver signatures clocked at approval steps (and finance), appended as
+    // each signing approver acts. Rendered on claim Excel exports.
+    signatures: v.optional(v.array(claimSignature)),
     // Audit trail of approver edits (append-only). Absent until first edited.
     edits: v.optional(v.array(claimEditEntry)),
     // When this claim is a resubmission, the id of the original rejected claim
@@ -720,9 +731,22 @@ export default defineSchema({
     employeeId: v.id("employees"),
     effectiveDate: v.string(), // ISO date
     currency: v.string(),
+    // How base pay is defined. Absent = "fixed" (legacy records). For "hourly",
+    // `hourlyRateCents` drives pay (× hours entered per run) and
+    // `baseMonthlyCents` is unused (stored 0).
+    payType: v.optional(payType),
     baseMonthlyCents: v.number(),
+    hourlyRateCents: v.optional(v.number()),
     allowances: v.array(allowanceItem),
     cpfStatus: cpfStatus,
+    // For PR employees: the date they obtained Permanent Resident status. Used
+    // to derive their CPF contribution year (graduated in years 1–2).
+    prStartDate: v.optional(v.string()),
+    // When the pay `currency` differs from the org base currency, how the
+    // conversion rate is obtained by default: "auto" (live FX) or "manual".
+    // `manualRate` (base units per 1 pay unit) seeds a manual default.
+    exchangeMode: v.optional(claimExchangeMode),
+    manualRate: v.optional(v.number()),
     // Working weekdays (0=Sun … 6=Sat) used to prorate pay for unpaid leave and
     // incomplete months. Absent = default Mon–Fri.
     workingDays: v.optional(v.array(v.number())),
@@ -771,8 +795,14 @@ export default defineSchema({
     orgId: v.id("organizations"),
     shgFunds: v.array(shgFundConfig),
     sdl: sdlConfig,
+    // Org-configurable CPF rate tables (age bands, OW ceiling, PR graduated
+    // rates). Absent → seeded SG defaults.
+    cpf: v.optional(cpfConfig),
     approval: payrollApprovalConfig,
     defaultTemplateId: v.optional(v.id("payslipTemplates")),
+    // When on, signatures are rendered on payslips employees view/download
+    // themselves. HR/payroll and approvers always see signatures.
+    showSignaturesToEmployees: v.optional(v.boolean()),
   }).index("by_org", ["orgId"]),
 
   // A configurable payslip template. An org can have several; each run picks one.
@@ -786,6 +816,13 @@ export default defineSchema({
     headerText: v.optional(v.string()),
     footerText: v.optional(v.string()),
     show: payslipTemplateShow,
+    // Drag-and-drop block layout. When present it drives the payslip render
+    // (order + visibility + custom blocks); absent → legacy `show` layout.
+    layout: v.optional(v.array(payslipLayoutBlock)),
+    // Body text colour (CSS), overall font-size scale, and vertical density.
+    textColor: v.optional(v.string()),
+    fontScale: v.optional(v.number()), // 1 = default; ~0.85–1.25
+    density: v.optional(payslipDensity),
   }).index("by_org", ["orgId"]),
 
   // One-off line items entered or pulled while a run is in `draft`. The
@@ -830,10 +867,30 @@ export default defineSchema({
     employerCpfCents: v.number(),
     netCents: v.number(),
     cpfStatus: cpfStatus,
+    // For PR payslips, the contribution year applied (1 | 2 | 3), snapshotted.
+    prYear: v.optional(v.number()),
+    // Multi-currency: `currency` is the pay currency. When it differs from
+    // `baseCurrency` (org), `exchangeRate` (base units per 1 pay unit) converts
+    // amounts to base for run totals / exports. Captured/edited during the run.
+    baseCurrency: v.optional(v.string()),
+    exchangeRate: v.optional(v.number()),
+    exchangeRateDate: v.optional(v.string()),
+    exchangeMode: v.optional(claimExchangeMode),
+    exchangeProvider: v.optional(v.string()),
     lines: v.array(payslipLine),
     status: payrollStatus,
+    // For hourly-paid employees: the hours worked this period, entered at the
+    // adjust stage. Base pay = hourlyRate × hoursWorked. Absent for fixed pay.
+    hoursWorked: v.optional(v.number()),
     // Proration snapshot (base pay was reduced for unpaid leave / partial month).
     proration: v.optional(prorationMeta),
+    // HR-entered override of the proration day counts (survives recompute).
+    prorationOverride: v.optional(
+      v.object({
+        daysWorked: v.number(),
+        totalWorkingDays: v.number(),
+      }),
+    ),
     // Approval chain snapshotted at run completion; the payslip is at
     // `currentStepIndex` while pending. Each approver signs individually.
     approvalChain: v.optional(v.array(payslipApprovalStep)),

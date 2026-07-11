@@ -303,7 +303,19 @@ type ChainStep = {
   approverUserId?: Id<"users">;
   approverUserIds?: Id<"users">[];
   label: string;
+  requiresSignature?: boolean;
 };
+
+// Resolve a user's display name (for approver signatures). Username-only
+// accounts have an empty `name`, so fall back so signatures never render blank.
+async function userDisplayName(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+): Promise<string> {
+  const u = await ctx.db.get(userId);
+  if (!u) return "Unknown";
+  return u.name?.trim() || u.username || u.email || "Unknown";
+}
 
 // Everyone eligible to act on a resolved step. Group steps carry the full
 // member set in `approverUserIds`; single-approver steps use `approverUserId`.
@@ -344,6 +356,16 @@ async function callerCanActOnManagerStep(
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const employee = await ctx.db.get(claim.employeeId);
   return !!(own && employee && employee.managerId === own._id);
+}
+
+// Whether a `pending_manager` claim's current chain step requires a signature.
+// Used by bulk approval to skip (rather than reject) signature-gated claims when
+// no signature was supplied.
+function managerStepRequiresSignature(claim: Doc<"claims">): boolean {
+  if (claim.status !== "pending_manager") return false;
+  const chain = claim.approvalChain ?? [];
+  const step = chain[claim.currentStepIndex ?? 0];
+  return !!step?.requiresSignature;
 }
 
 // Resolve the members of an assignee group referenced by a workflow step. The
@@ -470,6 +492,7 @@ async function buildApprovalChain(
         approverUserId: members[0],
         approverUserIds: members,
         label: groupLabel(settings, step.value),
+        requiresSignature: step.requiresSignature ?? false,
       });
       continue;
     }
@@ -510,6 +533,7 @@ async function buildApprovalChain(
       workflowIndex: wi,
       approverUserId,
       label: name ? `${posLabel} — ${name}` : posLabel,
+      requiresSignature: step.requiresSignature ?? false,
     });
   }
 
@@ -537,6 +561,7 @@ async function buildApprovalChain(
         approverUserId: hrMembers[0],
         approverUserIds: hrMembers,
         label: "HR",
+        requiresSignature: false,
       });
     }
   }
@@ -956,6 +981,7 @@ async function advanceManagerStep(
   orgCtx: OrgContext,
   claim: Doc<"claims">,
   note?: string,
+  signatureStorageId?: Id<"_storage">,
 ) {
   const claimId = claim._id;
   const chain = claim.approvalChain;
@@ -991,6 +1017,21 @@ async function advanceManagerStep(
   if (!isApprover && !ctxHasPermission(orgCtx, "claims:approve:finance")) {
     throw new ConvexError("Not authorized to approve this step.");
   }
+  if (step?.requiresSignature && !signatureStorageId) {
+    throw new ConvexError("A signature is required to approve this step.");
+  }
+
+  // Append this approver's signature when they signed (required or optional).
+  const signatures = [...(claim.signatures ?? [])];
+  if (signatureStorageId) {
+    signatures.push({
+      role: step?.label ?? "Approver",
+      byUserId: orgCtx.userId,
+      name: await userDisplayName(ctx, orgCtx.userId),
+      signatureStorageId,
+      signedAt: Date.now(),
+    });
+  }
 
   const updatedChain = chain.map((s, i) =>
     i === idx
@@ -1006,6 +1047,7 @@ async function advanceManagerStep(
       approvalChain: updatedChain,
       currentStepIndex: nextIdx,
       decisionNote: note,
+      signatures,
     });
     await notifyStep(
       ctx,
@@ -1024,6 +1066,7 @@ async function advanceManagerStep(
       currentStepIndex: nextIdx,
       managerApproverUserId: orgCtx.userId,
       decisionNote: note,
+      signatures,
     });
     await notify(
       ctx,
@@ -1046,6 +1089,7 @@ async function advanceManagerStep(
       decidedAt: Date.now(),
       decisionNote: note,
       sentToPayroll: settings.payrollMode === "automatic" ? true : undefined,
+      signatures,
     });
     await notify(
       ctx,
@@ -1077,14 +1121,26 @@ async function doFinanceApprove(
   userId: Id<"users">,
   claim: Doc<"claims">,
   note?: string,
+  signatureStorageId?: Id<"_storage">,
 ) {
   const settings = await resolveClaimSettings(ctx, orgId);
+  const signatures = [...(claim.signatures ?? [])];
+  if (signatureStorageId) {
+    signatures.push({
+      role: "Finance",
+      byUserId: userId,
+      name: await userDisplayName(ctx, userId),
+      signatureStorageId,
+      signedAt: Date.now(),
+    });
+  }
   await ctx.db.patch(claim._id, {
     status: "approved",
     financeApproverUserId: userId,
     decidedAt: Date.now(),
     decisionNote: note,
     sentToPayroll: settings.payrollMode === "automatic" ? true : undefined,
+    signatures,
   });
   const emp = await ctx.db.get(claim.employeeId);
   await notify(
@@ -1109,9 +1165,13 @@ async function doFinanceApprove(
 // approver, or hands off to finance once the chain is complete. (Named
 // `managerApprove` for backward compatibility with the approval queue UI.)
 export const managerApprove = mutation({
-  args: { claimId: v.id("claims"), note: v.optional(v.string()) },
+  args: {
+    claimId: v.id("claims"),
+    note: v.optional(v.string()),
+    signatureStorageId: v.optional(v.id("_storage")),
+  },
   returns: v.null(),
-  handler: async (ctx, { claimId, note }) => {
+  handler: async (ctx, { claimId, note, signatureStorageId }) => {
     const orgCtx = await requireOrg(ctx);
     const claim = await ctx.db.get(claimId);
     if (!claim || claim.orgId !== orgCtx.orgId) throw new ConvexError("Claim not found.");
@@ -1123,15 +1183,19 @@ export const managerApprove = mutation({
         "This claim is waiting for the rest of its batch to reach this approval stage.",
       );
     }
-    await advanceManagerStep(ctx, orgCtx, claim, note);
+    await advanceManagerStep(ctx, orgCtx, claim, note, signatureStorageId);
     return null;
   },
 });
 
 export const financeApprove = mutation({
-  args: { claimId: v.id("claims"), note: v.optional(v.string()) },
+  args: {
+    claimId: v.id("claims"),
+    note: v.optional(v.string()),
+    signatureStorageId: v.optional(v.id("_storage")),
+  },
   returns: v.null(),
-  handler: async (ctx, { claimId, note }) => {
+  handler: async (ctx, { claimId, note, signatureStorageId }) => {
     const { orgId, userId } = await requirePermission(
       ctx,
       "claims:approve:finance",
@@ -1146,7 +1210,11 @@ export const financeApprove = mutation({
         "This claim is waiting for the rest of its batch to reach the finance stage.",
       );
     }
-    await doFinanceApprove(ctx, orgId, userId, claim, note);
+    const settings = await resolveClaimSettings(ctx, orgId);
+    if (settings.financeRequiresSignature && !signatureStorageId) {
+      throw new ConvexError("A signature is required to approve as finance.");
+    }
+    await doFinanceApprove(ctx, orgId, userId, claim, note, signatureStorageId);
     return null;
   },
 });
@@ -1162,15 +1230,17 @@ export const approveAllForEmployee = mutation({
     employeeId: v.id("employees"),
     month: v.optional(v.string()),
     note: v.optional(v.string()),
+    signatureStorageId: v.optional(v.id("_storage")),
   },
   returns: v.object({ approved: v.number() }),
-  handler: async (ctx, { employeeId, month, note }) => {
+  handler: async (ctx, { employeeId, month, note, signatureStorageId }) => {
     const orgCtx = await requireOrg(ctx);
     const employee = await ctx.db.get(employeeId);
     if (!employee || employee.orgId !== orgCtx.orgId) {
       throw new ConvexError("Employee not found.");
     }
     const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
+    const settings = await resolveClaimSettings(ctx, orgCtx.orgId);
     const claims = await ctx.db
       .query("claims")
       .withIndex("by_employee", (q) => q.eq("employeeId", employeeId))
@@ -1185,22 +1255,43 @@ export const approveAllForEmployee = mutation({
       if (claim.status === "pending_manager") {
         if (!(await callerCanActOnManagerStep(ctx, orgCtx, claim, isFinance)))
           continue;
-        await advanceManagerStep(ctx, orgCtx, claim, note);
+        // Signature-gated step with no signature supplied → skip, don't reject.
+        if (managerStepRequiresSignature(claim) && !signatureStorageId) continue;
+        await advanceManagerStep(ctx, orgCtx, claim, note, signatureStorageId);
         approved++;
         // If it dropped into the finance stage and the caller is finance, clear
-        // it in the same pass so "approve all" fully approves.
-        if (isFinance) {
+        // it in the same pass so "approve all" fully approves — unless finance
+        // needs a signature that wasn't supplied.
+        if (
+          isFinance &&
+          !(settings.financeRequiresSignature && !signatureStorageId)
+        ) {
           const updated = await ctx.db.get(claim._id);
           if (
             updated &&
             updated.status === "pending_finance" &&
             (await claimAtGroupFrontier(ctx, updated))
           ) {
-            await doFinanceApprove(ctx, orgCtx.orgId, orgCtx.userId, updated, note);
+            await doFinanceApprove(
+              ctx,
+              orgCtx.orgId,
+              orgCtx.userId,
+              updated,
+              note,
+              signatureStorageId,
+            );
           }
         }
       } else if (claim.status === "pending_finance" && isFinance) {
-        await doFinanceApprove(ctx, orgCtx.orgId, orgCtx.userId, claim, note);
+        if (settings.financeRequiresSignature && !signatureStorageId) continue;
+        await doFinanceApprove(
+          ctx,
+          orgCtx.orgId,
+          orgCtx.userId,
+          claim,
+          note,
+          signatureStorageId,
+        );
         approved++;
       }
     }
@@ -1690,6 +1781,17 @@ export const get = query({
     if (isPendingStage && !atFrontier) canApprove = false;
     const waitingForBatch = isPendingStage && !atFrontier;
 
+    // Does approving the current stage require a signature from the viewer?
+    let needsSignature = false;
+    if (canApprove) {
+      if (claim.status === "pending_finance") {
+        const settings = await resolveClaimSettings(ctx, orgCtx.orgId);
+        needsSignature = settings.financeRequiresSignature;
+      } else if (claim.status === "pending_manager") {
+        needsSignature = managerStepRequiresSignature(claim);
+      }
+    }
+
     const base = await hydrateClaim(ctx, claim);
     const receipts = await resolveReceipts(ctx, claim.receiptStorageIds);
     const isPending =
@@ -1752,6 +1854,7 @@ export const get = query({
       approvalChain,
       waitingForBatch,
       sentToPayroll: claim.sentToPayroll ?? false,
+      needsSignature,
     };
   },
 });
@@ -2205,6 +2308,7 @@ export const approvalClaimsForGroup = query({
     if (!group || group.orgId !== orgCtx.orgId) return [];
     const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const settings = await resolveClaimSettings(ctx, orgCtx.orgId);
     const claims = await ctx.db
       .query("claims")
       .withIndex("by_group", (q) => q.eq("groupId", groupId))
@@ -2216,6 +2320,7 @@ export const approvalClaimsForGroup = query({
         canAct: boolean;
         currentApprover: string | null;
         waitingForBatch: boolean;
+        needsSignature: boolean;
       }
     > = [];
     for (const c of claims) {
@@ -2240,6 +2345,11 @@ export const approvalClaimsForGroup = query({
           pending &&
           activeLevel !== null &&
           claimGroupLevel(c) !== activeLevel,
+        needsSignature:
+          view === "awaiting" &&
+          (c.status === "pending_finance"
+            ? settings.financeRequiresSignature
+            : managerStepRequiresSignature(c)),
       });
     }
     out.sort((a, b) => (a.incurredDate < b.incurredDate ? 1 : -1));
@@ -2342,6 +2452,7 @@ export const allClaimsForGroup = query({
     if (!group || group.orgId !== orgCtx.orgId) return [];
     const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const settings = await resolveClaimSettings(ctx, orgCtx.orgId);
     const claims = await ctx.db
       .query("claims")
       .withIndex("by_group", (q) => q.eq("groupId", groupId))
@@ -2353,6 +2464,7 @@ export const allClaimsForGroup = query({
         canAct: boolean;
         currentApprover: string | null;
         waitingForBatch: boolean;
+        needsSignature: boolean;
       }
     > = [];
     for (const c of claims) {
@@ -2375,6 +2487,11 @@ export const allClaimsForGroup = query({
           pending &&
           activeLevel !== null &&
           claimGroupLevel(c) !== activeLevel,
+        needsSignature:
+          view === "awaiting" &&
+          (c.status === "pending_finance"
+            ? settings.financeRequiresSignature
+            : managerStepRequiresSignature(c)),
       });
     }
     out.sort((a, b) => (a.incurredDate < b.incurredDate ? 1 : -1));
@@ -2476,18 +2593,185 @@ export const exportRows = query({
   },
 });
 
+// One employee's claim-form export bundle: their claims for the period, grouped
+// by employee, with resolved approver signatures. Powers the per-employee claim
+// form, the bulk (all-employee) forms ZIP, and the monthly totals listing.
+const claimFormGroup = v.object({
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  department: v.union(v.string(), v.null()),
+  designation: v.union(v.string(), v.null()),
+  periodMonth: v.string(),
+  currency: v.string(),
+  claims: v.array(
+    v.object({
+      incurredDate: v.string(),
+      description: v.string(),
+      claimType: v.string(),
+      category: claimCategory,
+      amountCents: v.number(),
+      taxAmountCents: v.union(v.number(), v.null()),
+      remarks: v.union(v.string(), v.null()),
+      status: claimStatus,
+    }),
+  ),
+  totalCents: v.number(),
+  signatures: v.array(
+    v.object({
+      role: v.string(),
+      name: v.string(),
+      url: v.union(v.string(), v.null()),
+      signedAt: v.number(),
+    }),
+  ),
+});
+
+export const exportForms = query({
+  args: {
+    source: v.union(v.literal("mine"), v.literal("all")),
+    month: v.optional(v.string()),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+    employeeId: v.optional(v.id("employees")),
+  },
+  returns: v.array(claimFormGroup),
+  handler: async (ctx, { source, employeeId, ...filters }) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) return [];
+    if (source === "all" && !orgCtx.permissions.has("claims:read:all")) {
+      return [];
+    }
+    const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
+    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+
+    let claims = (
+      await ctx.db
+        .query("claims")
+        .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+        .collect()
+    ).filter((c) => c.groupId != null);
+    if (employeeId) claims = claims.filter((c) => c.employeeId === employeeId);
+    claims = await applyApprovalFilters(ctx, claims, filters);
+
+    if (source === "mine") {
+      const visible: Doc<"claims">[] = [];
+      for (const c of claims) {
+        const view = await approverClaimView(ctx, orgCtx, c, isFinance, own);
+        if (view !== "hidden") visible.push(c);
+      }
+      claims = visible;
+    }
+
+    // Group by employee.
+    const byEmployee = new Map<Id<"employees">, Doc<"claims">[]>();
+    for (const c of claims) {
+      const arr = byEmployee.get(c.employeeId) ?? [];
+      arr.push(c);
+      byEmployee.set(c.employeeId, arr);
+    }
+
+    const typeCache = new Map<Id<"claimTypes">, Doc<"claimTypes"> | null>();
+    const getType = async (id: Id<"claimTypes">) => {
+      let t = typeCache.get(id);
+      if (t === undefined) {
+        t = await ctx.db.get(id);
+        typeCache.set(id, t);
+      }
+      return t;
+    };
+
+    const groups = await Promise.all(
+      [...byEmployee.entries()].map(async ([empId, empClaims]) => {
+        const emp = await ctx.db.get(empId);
+        const dept = emp?.departmentId
+          ? await ctx.db.get(emp.departmentId)
+          : null;
+        const position = emp?.positionId
+          ? await ctx.db.get(emp.positionId)
+          : null;
+        const designation = position?.title ?? null;
+        empClaims.sort((a, b) => (a.incurredDate < b.incurredDate ? -1 : 1));
+
+        const rows = await Promise.all(
+          empClaims.map(async (c) => {
+            const t = await getType(c.claimTypeId);
+            return {
+              incurredDate: c.incurredDate,
+              description: c.description,
+              claimType: t?.name ?? "—",
+              category: t?.category ?? ("custom" as const),
+              amountCents: c.amountCents,
+              taxAmountCents: c.taxAmountCents ?? null,
+              remarks: c.remarks ?? null,
+              status: c.status,
+            };
+          }),
+        );
+
+        // De-dupe signatures across the employee's claims by signer + role.
+        const seen = new Map<
+          string,
+          { role: string; name: string; storageId: Id<"_storage">; signedAt: number }
+        >();
+        for (const c of empClaims) {
+          for (const sig of c.signatures ?? []) {
+            const key = `${sig.byUserId}:${sig.role}`;
+            if (!seen.has(key)) {
+              seen.set(key, {
+                role: sig.role,
+                name: sig.name,
+                storageId: sig.signatureStorageId,
+                signedAt: sig.signedAt,
+              });
+            }
+          }
+        }
+        const signatures = await Promise.all(
+          [...seen.values()]
+            .sort((a, b) => a.signedAt - b.signedAt)
+            .map(async (s) => ({
+              role: s.role,
+              name: s.name,
+              url: await ctx.storage.getUrl(s.storageId),
+              signedAt: s.signedAt,
+            })),
+        );
+
+        return {
+          employeeId: empId,
+          employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
+          department: dept?.name ?? null,
+          designation,
+          periodMonth: filters.month ?? empClaims[0].incurredDate.slice(0, 7),
+          currency: empClaims[0].currency,
+          claims: rows,
+          totalCents: empClaims.reduce((s, c) => s + c.amountCents, 0),
+          signatures,
+        };
+      }),
+    );
+    groups.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+    return groups;
+  },
+});
+
 // Bulk-approve every claim in one group that awaits the caller (the group's
 // "approve all" action). Mirrors approveAllForEmployee but scoped to a group.
 export const approveAllForGroup = mutation({
-  args: { groupId: v.id("claimGroups"), note: v.optional(v.string()) },
+  args: {
+    groupId: v.id("claimGroups"),
+    note: v.optional(v.string()),
+    signatureStorageId: v.optional(v.id("_storage")),
+  },
   returns: v.object({ approved: v.number() }),
-  handler: async (ctx, { groupId, note }) => {
+  handler: async (ctx, { groupId, note, signatureStorageId }) => {
     const orgCtx = await requireOrg(ctx);
     const group = await ctx.db.get(groupId);
     if (!group || group.orgId !== orgCtx.orgId) {
       throw new ConvexError("Claim group not found.");
     }
     const isFinance = ctxHasPermission(orgCtx, "claims:approve:finance");
+    const settings = await resolveClaimSettings(ctx, orgCtx.orgId);
     const claims = await ctx.db
       .query("claims")
       .withIndex("by_group", (q) => q.eq("groupId", groupId))
@@ -2500,23 +2784,43 @@ export const approveAllForGroup = mutation({
       if (claim.status === "pending_manager") {
         if (!(await callerCanActOnManagerStep(ctx, orgCtx, claim, isFinance)))
           continue;
-        await advanceManagerStep(ctx, orgCtx, claim, note);
+        // Signature-gated step with no signature supplied → skip, don't reject.
+        if (managerStepRequiresSignature(claim) && !signatureStorageId) continue;
+        await advanceManagerStep(ctx, orgCtx, claim, note, signatureStorageId);
         approved++;
         // Only clear into finance in the same pass when the claim is STILL at
         // the (now-recomputed) frontier — otherwise a short-chain claim would
         // leap through finance while a sibling is stuck at an earlier approver.
-        if (isFinance) {
+        if (
+          isFinance &&
+          !(settings.financeRequiresSignature && !signatureStorageId)
+        ) {
           const updated = await ctx.db.get(claim._id);
           if (
             updated &&
             updated.status === "pending_finance" &&
             (await claimAtGroupFrontier(ctx, updated))
           ) {
-            await doFinanceApprove(ctx, orgCtx.orgId, orgCtx.userId, updated, note);
+            await doFinanceApprove(
+              ctx,
+              orgCtx.orgId,
+              orgCtx.userId,
+              updated,
+              note,
+              signatureStorageId,
+            );
           }
         }
       } else if (claim.status === "pending_finance" && isFinance) {
-        await doFinanceApprove(ctx, orgCtx.orgId, orgCtx.userId, claim, note);
+        if (settings.financeRequiresSignature && !signatureStorageId) continue;
+        await doFinanceApprove(
+          ctx,
+          orgCtx.orgId,
+          orgCtx.userId,
+          claim,
+          note,
+          signatureStorageId,
+        );
         approved++;
       }
     }

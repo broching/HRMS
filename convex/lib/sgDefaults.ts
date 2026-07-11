@@ -328,6 +328,24 @@ export const SG_SDL_DEFAULT = {
   active: true,
 };
 
+// Default Singapore CPF settings (representative 2025 figures — verify against
+// the current CPF Board tables before running live payroll). `maxAge` uses 200
+// as the "and above" sentinel since Convex numbers must be finite. Citizens and
+// PRs from their 3rd year use these age-banded rates; PRs in years 1–2 use the
+// graduated rates below. Rates are fractions (0.17 = 17%).
+export const SG_CPF_DEFAULT = {
+  owCeilingCents: 800_000, // S$8,000 OW ceiling (from 2026)
+  bands: [
+    { maxAge: 55, employeeRate: 0.2, employerRate: 0.17 },
+    { maxAge: 60, employeeRate: 0.17, employerRate: 0.155 },
+    { maxAge: 65, employeeRate: 0.115, employerRate: 0.12 },
+    { maxAge: 70, employeeRate: 0.075, employerRate: 0.09 },
+    { maxAge: 200, employeeRate: 0.05, employerRate: 0.075 },
+  ],
+  prYear1: { employeeRate: 0.05, employerRate: 0.04 },
+  prYear2: { employeeRate: 0.15, employerRate: 0.09 },
+};
+
 // Default payslip template appearance (mirrors the current hard-coded layout).
 export const DEFAULT_PAYSLIP_TEMPLATE = {
   name: "Default",
