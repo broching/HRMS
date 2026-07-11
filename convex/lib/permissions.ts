@@ -22,6 +22,7 @@ export const PERMISSIONS = [
   "leave:approve", // Team → Team Calendar + Leave Approvals
   "claims:approve", // Team → Claim Approvals (approver view)
   "claims:approve:finance", // finance/HR claim approval + reimbursement
+  "payment_requests:approve", // Team → Payment Requests (approver view)
   "payroll:approve", // Team → Payroll Approvals (sign + approve payslips)
   "attendance:team", // Team → Team Attendance
   "scheduling:roster", // Team → Roster (build + publish team schedule)
@@ -33,6 +34,7 @@ export const PERMISSIONS = [
   "leave:config", // leave types, holidays
   "leave:approve:all", // approve any leave request in the org
   "claims:read:all", // HR Lounge → all-headcount claims oversight
+  "payment_requests:read:all", // HR Lounge → payment-request oversight + config
   "payroll:manage", // payroll runs + compensation
   "recruitment:manage", // jobs, candidates, job board
   "performance:manage", // review cycles + org-wide appraisals
@@ -86,6 +88,11 @@ export const PERMISSION_META: Record<
     description: "Approve the finance stage and mark claims reimbursed.",
     module: "Team workspace",
   },
+  "payment_requests:approve": {
+    label: "Payment request approvals",
+    description: "Act on payment requests awaiting you in Team → Payment Requests.",
+    module: "Team workspace",
+  },
   "payroll:approve": {
     label: "Payroll approvals",
     description: "Sign and approve payslips assigned to you before release.",
@@ -135,6 +142,11 @@ export const PERMISSION_META: Record<
   "claims:read:all": {
     label: "Expense Claims (all headcount)",
     description: "See and export every employee's claims in the HR Lounge.",
+    module: "HR Lounge",
+  },
+  "payment_requests:read:all": {
+    label: "Payment Requests (all headcount)",
+    description: "Configure, review and export every payment request in the HR Lounge.",
     module: "HR Lounge",
   },
   "payroll:manage": {
@@ -202,6 +214,7 @@ const FINANCE_PERMISSIONS: Permission[] = [
   "team:access",
   "claims:approve",
   "claims:approve:finance",
+  "payment_requests:approve",
   "payroll:approve",
   "employees:read:all",
   "reports:view",
@@ -213,6 +226,7 @@ const MANAGER_PERMISSIONS: Permission[] = [
   "team:access",
   "leave:approve",
   "claims:approve",
+  "payment_requests:approve",
   "payroll:approve",
   "attendance:team",
   "scheduling:roster",

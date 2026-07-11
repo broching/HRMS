@@ -7,6 +7,7 @@ import {
   IconCalendarStats,
   IconChevronRight,
   IconReceipt2,
+  IconFileInvoice,
   IconSearch,
   IconStars,
   IconUserPlus,
@@ -74,6 +75,12 @@ const CARDS: TeamCard[] = [
     description: "Check and approve your team's claims",
     icon: IconReceipt2,
     href: "/claims/requests",
+  },
+  {
+    title: "Payment Requests",
+    description: "Review and approve payment requests",
+    icon: IconFileInvoice,
+    href: "/payment-requests/requests",
   },
 ]
 

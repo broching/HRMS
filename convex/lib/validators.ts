@@ -657,6 +657,20 @@ export const claimSettingsValue = v.object({
   payrollItem: v.union(v.string(), v.null()),
 })
 
+// Org payment-request settings (return of paymentRequestSettings.get) — resolved
+// with defaults so the form always has a complete shape to bind to. Reuses the
+// claim approval structures; `paymentRequestSettings.options` reuses
+// `claimSettingsOptions` (same members/offices/roles shape).
+export const paymentRequestSettingsValue = v.object({
+  hrApproverUserIds: v.array(v.id("users")),
+  financeApproverUserIds: v.array(v.id("users")),
+  financeRequiresSignature: v.boolean(),
+  assigneeGroups: v.array(claimAssigneeGroup),
+  approvalWorkflow: v.array(claimApproverStep),
+  approvalFlows: v.array(claimApprovalFlow),
+  defaultTemplateId: v.union(v.id("paymentRequestTemplates"), v.null()),
+})
+
 // Pickers for the claim settings form (members for assignees/approvers,
 // offices for threshold rules). Each member carries enough role/permission
 // context for the HR/Finance assignee guardrail: whether they can already act

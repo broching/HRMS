@@ -11,6 +11,7 @@ import {
   IconCalendarTime,
   IconChartBar,
   IconFileDollar,
+  IconFileInvoice,
   type Icon,
 } from "@tabler/icons-react"
 import type { Permission } from "@/convex/lib/permissions"
@@ -57,6 +58,7 @@ export const SECTIONS: NavSection[] = [
       { title: "Home", url: "/dashboard" },
       { title: "My Leave", url: "/leave" },
       { title: "Claims", url: "/claims" },
+      { title: "Payment Requests", url: "/payment-requests" },
       { title: "Attendance", url: "/attendance" },
       { title: "My Schedule", url: "/scheduling" },
       { title: "Payslips", url: "/payslips" },
@@ -90,6 +92,12 @@ export const SECTIONS: NavSection[] = [
         url: "/claims/requests",
         icon: IconReceipt2,
         permission: "claims:approve",
+      },
+      {
+        title: "Payment Requests",
+        url: "/payment-requests/requests",
+        icon: IconFileInvoice,
+        permission: "payment_requests:approve",
       },
       {
         title: "Payslip Approvals",

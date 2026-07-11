@@ -44,6 +44,9 @@ import {
   claimSignature,
   claimExchangeMode,
   claimEditEntry,
+  paymentRequestStatus,
+  paymentRequestField,
+  paymentRequestShow,
   officeMileageSettings,
   jobStatus,
   candidateStage,
@@ -632,6 +635,102 @@ export default defineSchema({
     authorUserId: v.id("users"),
     body: v.string(),
   }).index("by_claim", ["claimId"]),
+
+  // ─── Payment requests ──────────────────────────────────────────────────────
+
+  // A reusable payment-request form template. An org can have several; the form
+  // shows one (chosen at submit, defaulting to `isDefault`). `fields` are the
+  // org-defined custom fields shown on the form on top of the core fields.
+  paymentRequestTemplates: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    // Heading rendered on the printable document (e.g. "REQUEST FOR PAYMENT").
+    headerText: v.optional(v.string()),
+    isDefault: v.boolean(),
+    active: v.boolean(),
+    order: v.number(),
+    fields: v.array(paymentRequestField),
+    // Document styling (mirrors payslip templates). All optional — absent falls
+    // back to sensible defaults in the renderer.
+    accentColor: v.optional(v.string()), // heading colour
+    fontFamily: v.optional(v.string()),
+    textColor: v.optional(v.string()), // body text colour
+    fontScale: v.optional(v.number()), // 1 = default (~0.85–1.25)
+    density: v.optional(payslipDensity),
+    show: v.optional(paymentRequestShow), // which sections are visible
+  }).index("by_org", ["orgId"]),
+
+  // Org-wide payment-request configuration (one row per org). Mirrors the claim
+  // approval structure (assignee groups + workflow + per-claimant flows + HR /
+  // Finance stages) but is INDEPENDENT of claim settings, so payment requests can
+  // route to different approvers. No cut-off / payroll connection (claims-only).
+  paymentRequestSettings: defineTable({
+    orgId: v.id("organizations"),
+    hrApproverUserIds: v.array(v.id("users")),
+    financeApproverUserIds: v.array(v.id("users")),
+    // When on, finance must clock a signature to approve the finance stage.
+    financeRequiresSignature: v.optional(v.boolean()),
+    assigneeGroups: v.optional(v.array(claimAssigneeGroup)),
+    approvalWorkflow: v.array(claimApproverStep),
+    approvalFlows: v.optional(v.array(claimApprovalFlow)),
+    // Template applied by default in the submit form.
+    defaultTemplateId: v.optional(v.id("paymentRequestTemplates")),
+  }).index("by_org", ["orgId"]),
+
+  paymentRequests: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    // The template this request was filled from (drives the custom fields shown
+    // in detail / on the printed document). Absent on legacy/template-less rows.
+    templateId: v.optional(v.id("paymentRequestTemplates")),
+    // Per-org running sequence, for a human-friendly reference (e.g. "PR-0007").
+    requestNumber: v.number(),
+    // Core fields (always present).
+    purpose: v.string(),
+    amountCents: v.number(),
+    currency: v.string(),
+    payeeName: v.string(),
+    requestDate: v.string(), // ISO date the request is for
+    incurredMonth: v.string(), // "YYYY-MM" derived from requestDate, for filters
+    // Org-defined custom-field values, keyed by `paymentRequestField.key`. All
+    // stored as strings (numbers/dates serialized) for a uniform render.
+    fieldValues: v.optional(v.record(v.string(), v.string())),
+    // Supporting documents (invoices, quotes, …), up to 10.
+    attachmentStorageIds: v.array(v.id("_storage")),
+    remarks: v.optional(v.string()),
+    status: paymentRequestStatus,
+    // Settings-driven approval chain (resolved at submit), reusing the claim
+    // chain-step shape. While `pending_manager` the request walks the chain at
+    // `currentStepIndex`; a completed chain moves to `pending_finance` when
+    // finance approvers exist, otherwise straight to `approved`. No group barrier
+    // (individual submission), so `workflowIndex` on steps is unused.
+    approvalChain: v.optional(v.array(claimChainStep)),
+    currentStepIndex: v.optional(v.number()),
+    rejectedStepIndex: v.optional(v.number()),
+    requiresFinance: v.optional(v.boolean()),
+    // Optional signature the requestor clocks at submission ("Requested by").
+    requestorSignatureStorageId: v.optional(v.id("_storage")),
+    // Approver signatures clocked at approval steps (and finance).
+    signatures: v.optional(v.array(claimSignature)),
+    managerApproverUserId: v.optional(v.id("users")),
+    financeApproverUserId: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    paidAt: v.optional(v.number()),
+    decisionNote: v.optional(v.string()),
+    edits: v.optional(v.array(claimEditEntry)),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_employee", ["employeeId"])
+    .index("by_org_month", ["orgId", "incurredMonth"]),
+
+  paymentRequestComments: defineTable({
+    orgId: v.id("organizations"),
+    requestId: v.id("paymentRequests"),
+    authorUserId: v.id("users"),
+    body: v.string(),
+  }).index("by_request", ["requestId"]),
 
   // ─── Attendance (PWA QR + GPS) ───────────────────────────────────────────
 

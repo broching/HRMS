@@ -8,6 +8,7 @@ import {
   IconClockHour4,
   IconId,
   IconReceipt,
+  IconFileInvoice,
   IconTargetArrow,
   IconFileDollar,
   type Icon,
@@ -60,6 +61,12 @@ export function HomeTiles() {
       description: "Submit your expenses",
       icon: IconReceipt,
       href: "/claims",
+    },
+    {
+      title: "Payment Requests",
+      description: "Raise a request for payment",
+      icon: IconFileInvoice,
+      href: "/payment-requests",
     },
     {
       title: "Attendance",

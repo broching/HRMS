@@ -10,6 +10,7 @@ import {
   IconCash,
   IconCoin,
   IconReceipt2,
+  IconFileInvoice,
   IconChartBar,
   IconReportAnalytics,
   IconSitemap,
@@ -74,6 +75,12 @@ const ITEMS: Item[] = [
     icon: IconReceipt2,
     href: "/hr-lounge/claims",
     permission: "claims:read:all",
+  },
+  {
+    label: "Payment Requests",
+    icon: IconFileInvoice,
+    href: "/hr-lounge/payment-requests",
+    permission: "payment_requests:read:all",
   },
   {
     label: "Recruitment",

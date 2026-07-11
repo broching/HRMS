@@ -17,7 +17,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { PayslipDocument } from "./payslip-document"
-import { printPayslip, splitPeriod } from "@/features/payroll/lib/labels"
+import { splitPeriod } from "@/features/payroll/lib/labels"
+import { downloadPayslipPdf } from "@/features/payroll/lib/payslip-pdf"
 
 const DOC_TYPES = [
   { value: "payslip", label: "Payslip", enabled: true },
@@ -30,6 +31,7 @@ export function MyPayslips() {
 
   const [year, setYear] = React.useState<string>("")
   const [period, setPeriod] = React.useState<string>("") // "YYYY-MM"
+  const [downloading, setDownloading] = React.useState(false)
 
   // Available years (desc) and the months within the selected year.
   const years = React.useMemo(() => {
@@ -67,6 +69,22 @@ export function MyPayslips() {
     selected ? { payslipId: selected._id as Id<"payslips"> } : "skip",
   )
   const employeeName = slips?.[0]?.employeeName ?? "My"
+
+  async function handleDownload() {
+    if (!payslip || !selected) return
+    setDownloading(true)
+    try {
+      const { monthName, year } = splitPeriod(selected.periodMonth)
+      await downloadPayslipPdf(
+        payslip,
+        `${employeeName} — ${monthName} ${year}.pdf`,
+      )
+    } catch {
+      toast.error("Couldn't build the payslip PDF")
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   if (slips === undefined) {
     return (
@@ -157,9 +175,9 @@ export function MyPayslips() {
                 ? `${employeeName} — ${splitPeriod(selected.periodMonth).monthName.slice(0, 3)} ${splitPeriod(selected.periodMonth).year}`
                 : ""}
             </p>
-            <Button onClick={printPayslip} disabled={!payslip}>
+            <Button onClick={handleDownload} disabled={!payslip || downloading}>
               <IconDownload className="size-4" />
-              Download payslip
+              {downloading ? "Preparing…" : "Download payslip"}
             </Button>
           </div>
 

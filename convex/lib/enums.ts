@@ -532,6 +532,87 @@ export const claimEditEntry = v.object({
   summary: v.string(),
 });
 
+// ─── Payment requests module ─────────────────────────────────────────────
+
+// Workflow mirrors claims (draft → pending_manager → pending_finance? →
+// approved → paid); `rejected` is terminal. Unlike claims, payment requests are
+// submitted and approved INDIVIDUALLY — there is no batch/group barrier. The
+// approval chain reuses the claim chain-step shape (`claimChainStep`), and the
+// two implicit stages (HR then Finance) work exactly as in claims, driven by a
+// separate `paymentRequestSettings` config of the same structure.
+export const paymentRequestStatus = v.union(
+  v.literal("draft"),
+  v.literal("pending_manager"),
+  v.literal("pending_finance"),
+  v.literal("approved"),
+  v.literal("rejected"),
+  v.literal("paid"),
+);
+export type PaymentRequestStatus =
+  | "draft"
+  | "pending_manager"
+  | "pending_finance"
+  | "approved"
+  | "rejected"
+  | "paid";
+
+// A custom field an org adds to its payment-request form through a template.
+// The always-present core fields (purpose, amount, currency, payee, date) are
+// hardcoded on the form; everything else (bank name, account no., swift code,
+// invoice date, requestor position, …) is an org-defined custom field whose
+// value is stored on the request under `fieldValues[key]`.
+export const paymentRequestFieldType = v.union(
+  v.literal("text"),
+  v.literal("textarea"),
+  v.literal("number"),
+  v.literal("date"),
+  v.literal("select"),
+);
+export type PaymentRequestFieldType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "date"
+  | "select";
+
+export const paymentRequestField = v.object({
+  key: v.string(), // stable client-generated key, referenced by fieldValues
+  label: v.string(),
+  type: paymentRequestFieldType,
+  required: v.boolean(),
+  options: v.optional(v.array(v.string())), // choices for "select"
+  placeholder: v.optional(v.string()),
+});
+export type PaymentRequestField = {
+  key: string;
+  label: string;
+  type: PaymentRequestFieldType;
+  required: boolean;
+  options?: string[];
+  placeholder?: string;
+};
+
+// Which sections of the printed payment-request document are shown. Absent →
+// everything visible. Core fields (purpose/amount/payee/date/custom) always show.
+export const paymentRequestShow = v.object({
+  logo: v.boolean(),
+  heading: v.boolean(),
+  attachNote: v.boolean(), // the "Pls attach supporting document" line
+  // The whole signature area. `requestorSignature` further gates just the
+  // "Requested by" block — some orgs don't want the requestor to sign.
+  signatures: v.boolean(),
+  requestorSignature: v.boolean(),
+  footer: v.boolean(), // the reference/org line at the bottom
+});
+export type PaymentRequestShow = {
+  logo: boolean;
+  heading: boolean;
+  attachNote: boolean;
+  signatures: boolean;
+  requestorSignature: boolean;
+  footer: boolean;
+};
+
 // ─── Feed module ───────────────────────────────────────────────────────────
 
 // Who a feed post is shared with. `specific` targets an explicit employee list;

@@ -1,7 +1,9 @@
 "use client"
 
+import * as React from "react"
 import { useQuery } from "convex/react"
 import { IconDownload } from "@tabler/icons-react"
+import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Badge } from "@/components/ui/badge"
@@ -11,12 +13,13 @@ import { PageHeader } from "@/components/shared/page-header"
 import {
   PAYROLL_STATUS_BADGE,
   PAYROLL_STATUS_LABELS,
-  printPayslip,
 } from "@/features/payroll/lib/labels"
+import { downloadPayslipPdf } from "@/features/payroll/lib/payslip-pdf"
 import { PayslipDocument } from "./payslip-document"
 
 export function PayslipDetail({ payslipId }: { payslipId: Id<"payslips"> }) {
   const slip = useQuery(api.payroll.getPayslip, { payslipId })
+  const [downloading, setDownloading] = React.useState(false)
 
   if (slip === undefined) {
     return (
@@ -24,6 +27,18 @@ export function PayslipDetail({ payslipId }: { payslipId: Id<"payslips"> }) {
         <Skeleton className="h-80 w-full max-w-2xl" />
       </div>
     )
+  }
+
+  async function handleDownload() {
+    if (!slip) return
+    setDownloading(true)
+    try {
+      await downloadPayslipPdf(slip, `${slip.employeeName} — ${slip.periodMonth}.pdf`)
+    } catch {
+      toast.error("Couldn't build the payslip PDF")
+    } finally {
+      setDownloading(false)
+    }
   }
 
   return (
@@ -35,9 +50,9 @@ export function PayslipDetail({ payslipId }: { payslipId: Id<"payslips"> }) {
         <Badge variant={PAYROLL_STATUS_BADGE[slip.status]}>
           {PAYROLL_STATUS_LABELS[slip.status]}
         </Badge>
-        <Button onClick={printPayslip}>
+        <Button onClick={handleDownload} disabled={downloading}>
           <IconDownload className="size-4" />
-          Download
+          {downloading ? "Preparing…" : "Download"}
         </Button>
       </PageHeader>
 

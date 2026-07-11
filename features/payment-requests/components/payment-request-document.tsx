@@ -1,0 +1,215 @@
+import type { FunctionReturnType } from "convex/server"
+import type { api } from "@/convex/_generated/api"
+import type { PaymentRequestShow } from "@/convex/lib/enums"
+import { formatMoney, requestRef } from "@/features/payment-requests/lib/labels"
+
+export type PaymentRequestPrint = FunctionReturnType<
+  typeof api.paymentRequests.getForPrint
+>[number]
+
+// Style knobs a template can set (mirrors payslip templates). All optional; the
+// resolver below fills sensible defaults so old templates keep rendering.
+export type PaymentRequestStyle = {
+  accentColor: string | null
+  fontFamily: string | null
+  textColor: string | null
+  fontScale: number | null
+  density: "compact" | "normal" | "relaxed" | null
+  show: PaymentRequestShow | null
+}
+
+const DEFAULT_SHOW: PaymentRequestShow = {
+  logo: true,
+  heading: true,
+  attachNote: true,
+  signatures: true,
+  requestorSignature: true,
+  footer: true,
+}
+
+// Vertical gaps (px) between the field rows and between signature blocks, per
+// density.
+const DENSITY_GAP: Record<
+  "compact" | "normal" | "relaxed",
+  { fields: number; sig: number }
+> = {
+  compact: { fields: 4, sig: 16 },
+  normal: { fields: 6, sig: 22 },
+  relaxed: { fields: 9, sig: 30 },
+}
+
+export function resolveStyle(style?: PaymentRequestStyle | null) {
+  const density = style?.density ?? "normal"
+  return {
+    accentColor: style?.accentColor || "#111827",
+    fontFamily: style?.fontFamily || "Arial, Helvetica, sans-serif",
+    textColor: style?.textColor || "#111827",
+    fontScale: style?.fontScale || 1,
+    density,
+    gap: DENSITY_GAP[density],
+    show: { ...DEFAULT_SHOW, ...(style?.show ?? {}) },
+  }
+}
+
+// The printable "Request for Payment" business document. Styled by the template
+// (fonts, colours, density, hidden sections) and rasterized to PDF. `styleOverride`
+// lets the settings preview drive styling without a saved template.
+export function PaymentRequestDocument({
+  req,
+  styleOverride,
+}: {
+  req: PaymentRequestPrint
+  styleOverride?: PaymentRequestStyle
+}) {
+  const s = resolveStyle(styleOverride ?? req.style)
+  const base = 14 * s.fontScale
+
+  const blocks: { role: string; name: string; url: string | null; date?: number }[] = [
+    // The requestor's "Requested by" block is optional — some orgs don't need it.
+    ...(s.show.requestorSignature
+      ? [{ role: "Requested by", name: req.employeeName, url: req.requestorSignatureUrl }]
+      : []),
+    ...req.signatures.map((sig) => ({
+      role: labelFor(sig.role),
+      name: sig.name,
+      url: sig.url,
+      date: sig.signedAt,
+    })),
+  ]
+
+  return (
+    <div
+      style={{
+        fontFamily: s.fontFamily,
+        color: s.textColor,
+        background: "#ffffff",
+        padding: "8px 12px",
+        fontSize: base,
+        lineHeight: 1.55,
+      }}
+    >
+      {/* Header */}
+      {(s.show.logo || s.show.heading) && (
+        <div style={{ textAlign: "center", marginBottom: 8 }}>
+          {s.show.logo && req.logoUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={req.logoUrl}
+              alt={req.orgName}
+              style={{ maxHeight: 56, maxWidth: 220, objectFit: "contain", margin: "0 auto 6px" }}
+            />
+          )}
+          {s.show.heading && (
+            <div
+              style={{
+                fontSize: 22 * s.fontScale,
+                fontWeight: 700,
+                textDecoration: "underline",
+                letterSpacing: 0.5,
+                color: s.accentColor,
+              }}
+            >
+              {req.headerText}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Fields */}
+      <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: s.gap.fields }}>
+        <Field label="Date" value={req.requestDate} />
+        <Field label="Requestor's Name" value={req.employeeName} />
+        <Field label="Purpose of Request" value={req.purpose} />
+        <Field label="Amount Requested" value={formatMoney(req.amountCents, req.currency)} />
+        <Field label="Account / Payee Name" value={req.payeeName} />
+        {req.templateFields.map((f) => {
+          const val = req.fieldValues[f.key]
+          if (!val) return null
+          return <Field key={f.key} label={f.label} value={val} />
+        })}
+        {req.remarks && <Field label="Remarks" value={req.remarks} />}
+      </div>
+
+      {s.show.attachNote && (
+        <div style={{ marginTop: 12, fontStyle: "italic" }}>
+          Pls attach supporting document with the form.
+        </div>
+      )}
+
+      {/* Signature blocks — the requestor's ("Requested by") first, then each
+          approver. The signature image sits above the line inside a fixed-height
+          box so it rasterizes reliably (nothing overflows its container). */}
+      {s.show.signatures && blocks.length > 0 && (
+        <div style={{ marginTop: 26, display: "flex", flexDirection: "column", gap: s.gap.sig }}>
+          {blocks.map((b, i) => (
+            <div key={i}>
+              <div style={{ fontWeight: 600 }}>{b.role}:</div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 8, marginTop: 2 }}>
+                <span>Signature:</span>
+                <span
+                  style={{
+                    position: "relative",
+                    display: "inline-block",
+                    minWidth: 220,
+                    height: 44,
+                  }}
+                >
+                  {b.url && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={b.url}
+                      alt="signature"
+                      style={{
+                        position: "absolute",
+                        bottom: 4,
+                        left: 16,
+                        maxHeight: 38,
+                        maxWidth: 180,
+                        objectFit: "contain",
+                      }}
+                    />
+                  )}
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      borderBottom: "1px solid #111827",
+                    }}
+                  />
+                </span>
+              </div>
+              <div>Name: {b.name}</div>
+              <div>
+                Date: {b.date ? new Date(b.date).toISOString().slice(0, 10) : req.requestDate}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {s.show.footer && (
+        <div style={{ marginTop: 24, fontSize: 11, color: "#6b7280" }}>
+          {requestRef(req.requestNumber)} · {req.orgName}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Map an approver step label ("Manager — Jane", "Finance") to the printed role
+// line. Keeps the more descriptive step label but drops any resolved name suffix.
+function labelFor(role: string): string {
+  if (role === "Finance") return "Verified by"
+  return "Approved by"
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span style={{ fontWeight: 400 }}>{label}: </span>
+      <span>{value}</span>
+    </div>
+  )
+}

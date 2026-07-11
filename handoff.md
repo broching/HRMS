@@ -234,6 +234,94 @@ payroll access.
   (`hidden sm:flex`) to a **kebab `DropdownMenu`** on mobile (drafts only; other
   rows open on row tap).
 
+## Payment Requests (new module)
+
+A "Request for Payment" workflow (pay a vendor/payee), modelled on the sample
+Deye forms. Submitted from **Team → Payment Requests** (`/payment-requests`) and
+configured/overseen in **HR Lounge → Payment Requests** (`/hr-lounge/payment-requests`).
+Reuses the claim approval structures but is **independent** of claim settings and
+approves **individually** (no monthly batch / group barrier).
+
+- **Schema** (`convex/schema.ts`): `paymentRequestTemplates` (org form templates:
+  `fields: paymentRequestField[]` + `headerText`/`isDefault`/`active`),
+  `paymentRequestSettings` (one/org: HR/Finance approvers, `financeRequiresSignature`,
+  `assigneeGroups`, `approvalWorkflow` + `approvalFlows`, `defaultTemplateId`),
+  `paymentRequests` (core fields purpose/amountCents/currency/payeeName/requestDate +
+  `incurredMonth` for the monthly filter; `fieldValues` record for template custom
+  fields; `attachmentStorageIds` ≤10; `approvalChain` reusing `claimChainStep`;
+  `requestorSignatureStorageId` + `signatures` reusing `claimSignature`; `requestNumber`
+  per-org sequence rendered as `PR-0007`), `paymentRequestComments`. Statuses
+  (`convex/lib/enums.ts` `paymentRequestStatus`): draft → pending_manager →
+  pending_finance? → approved → paid, plus rejected.
+- **Permissions** (`convex/lib/permissions.ts`): `payment_requests:approve` (Team
+  approver — Manager/Finance/HR/admin) and `payment_requests:read:all` (HR Lounge
+  config + oversight — HR/admin). Finance's stage is gated by membership of
+  `financeApproverUserIds` (or read:all), mirroring how claims Finance works.
+- **Engine** (`convex/paymentRequests.ts`): `buildApprovalChain` is a copy of the
+  claims resolver (flow selection person>role>default, thresholds, group steps,
+  implicit-HR append, dedupe) **without** the `workflowIndex`/group barrier. Key
+  fns: `create({andSubmit})` (draft or route immediately), `submitRequest`,
+  `approve` (handles both the chain and the finance stage, appends signatures),
+  `reject` (reason required, records `rejectedStepIndex`), `editRequest`,
+  `deleteRequest` (draft owner / pending approver; rejected NOT deletable),
+  `markPaid`, `setRemarks`, `addComment`, `generateUploadUrl`. Queries: `mine`,
+  `get` (hydrated detail incl. template fields + resolved signature/attachment
+  URLs + `canApprove`/`canEdit`/`needsSignature`), `approvalQueue` (Team inbox,
+  actionable), `allRequests` (HR oversight), `exportRows` (one row/request the
+  caller can see) and `getForPrint` (full print payloads for PDF/ZIP/merge).
+  Settings/templates live in `convex/paymentRequestSettings.ts` (mirrors
+  `claimSettings.save` validation) + `convex/paymentRequestTemplates.ts`
+  (`list`/`get`/`save`/`remove`/`seedDefault` — seeds the "Request for Payment"
+  template with bank fields as custom fields).
+- **UI** (`features/payment-requests/`): `submit-payment-request-dialog` (core +
+  template-driven custom fields via `payment-request-fields` + attachments ≤10 +
+  optional requestor signature via the shared `SignatureCaptureDialog`; dialog is
+  `sm:max-w-3xl`), `my-payment-requests`, `payment-requests-approval-queue`
+  (`source: "approver" | "all"`; month nav + `PaymentRequestExportMenu`; **active**
+  requests in the main table, **completed** approved/rejected/paid tucked under a
+  chevron toggle. `approvalQueue` shows every request the caller is *involved in* —
+  eligible at any chain step, a finance approver, or the recorded approver — across
+  all statuses, so completed history is visible; drafts are never surfaced there),
+  `payment-request-detail` (chain stepper, signatures, approve/sign, reject-with-
+  reason, edit, mark-paid, delete, per-request **Download PDF** form-only /
+  form+documents), `edit-payment-request-dialog`, settings shell (Approval flow reusing
+  a self-contained copy of the claims `WorkflowEditor` + Templates tab with a
+  drag-reorder field editor). Nav wired in `components/layout/nav-config.ts` (Team +
+  Home), `features/hr-lounge/components/hr-lounge-shell.tsx`,
+  `components/layout/search-catalog.ts`, plus quick-access cards on the Home
+  (`features/dashboard/components/home-tiles.tsx`) and Team
+  (`features/team/components/team-overview.tsx`) dashboards.
+- **Template styling** (payslip-style): each template carries `accentColor`,
+  `fontFamily`, `textColor`, `fontScale`, `density` (reuses `payslipDensity` +
+  `FONT_OPTIONS`/`DENSITY_OPTIONS` from `payslip-layout.ts`) and a `show` object
+  (`logo`/`heading`/`attachNote`/`signatures`/`requestorSignature`/`footer`) for
+  "what to hide" — `convex/lib/enums.ts` `paymentRequestShow`. `getForPrint` returns
+  a resolved `style`; `payment-request-document.tsx` applies it via `resolveStyle`
+  (sensible defaults when absent). The **`requestorSignature`** toggle lets orgs that
+  don't want the requestor to sign hide the "Requested by" block — and the submit
+  form hides its signature capture when the chosen template disables it. The template
+  editor (`payment-request-templates-settings.tsx`) has font/colour/size/density
+  controls + section toggles + a **live preview** rendering `PaymentRequestDocument`
+  with a sample request.
+- **Printable doc + exports**: `payment-request-document.tsx` renders the business
+  form (logo, heading, fields, Requested/Verified/Approved-by signature blocks; the
+  requestor's own signature, if captured at submission, renders under **Requested by**).
+  `payment-request-pdf.tsx` rasterizes it to A4 via the **same iframe → `toPng` →
+  `jsPDF`** pipeline as payslips, and supports **plain PDF**, **PDF + attachments
+  merged** (image attachments become pages; PDF attachments are merged page-by-page
+  via **`pdf-lib`** — new dependency), plus a **ZIP** of either. `payment-request-excel.ts`
+  (ExcelJS) exports **one row per request** (not grouped by payee) with a grand
+  total + union of approver signatures.
+
+## Payslip individual download now uses real PDF
+
+`printPayslip` (browser print-to-PDF via `window.print` + `@media print`) is
+replaced on **both** individual download buttons — employee `my-payslips.tsx` and
+`payslip-detail.tsx` — with `downloadPayslipPdf` (`features/payroll/lib/payslip-pdf.tsx`,
+new `downloadBlob`/`downloadPayslipPdf` helpers) which rasterizes the actual
+`PayslipDocument` to a real `.pdf` (the same pipeline as the bulk ZIP). The old
+`printPayslip` export is now unused.
+
 ## Known gaps / follow-ups
 
 - No "recall" to send a `pending_approval` run back to `draft`.

@@ -3,23 +3,20 @@
 import { createRoot } from "react-dom/client"
 import { toPng } from "html-to-image"
 import { jsPDF } from "jspdf"
-import type { FunctionReturnType } from "convex/server"
-import type { api } from "@/convex/_generated/api"
-import { PayslipDocument } from "@/features/payroll/components/payslip-document"
+import { PDFDocument } from "pdf-lib"
+import {
+  PaymentRequestDocument,
+  type PaymentRequestPrint,
+} from "@/features/payment-requests/components/payment-request-document"
 import { createZip, type ZipEntry } from "@/lib/zip"
+import { requestRef } from "@/features/payment-requests/lib/labels"
 
-type Payslip = FunctionReturnType<typeof api.payroll.getPayslip>
-
-// Render width (px) of the off-document payslip before rasterizing. Matches the
-// on-screen payslip width so the exported copy looks like what employees see.
 const RENDER_WIDTH = 760
 
 function safeName(name: string): string {
   return name.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim()
 }
 
-// Wait until every <img> under `node` has finished loading (or errored), so the
-// snapshot doesn't capture half-loaded logos/signatures.
 async function waitForImages(node: HTMLElement): Promise<void> {
   const imgs = Array.from(node.querySelectorAll("img"))
   await Promise.all(
@@ -34,9 +31,6 @@ async function waitForImages(node: HTMLElement): Promise<void> {
   )
 }
 
-// Inline remote images (logo, signatures — served from Convex storage) as data
-// URLs before capture. html-to-image can taint on cross-origin images; inlining
-// first makes the raster reliable. Failures are left as-is (best effort).
 async function inlineImages(node: HTMLElement): Promise<void> {
   const imgs = Array.from(node.querySelectorAll("img"))
   await Promise.all(
@@ -55,18 +49,16 @@ async function inlineImages(node: HTMLElement): Promise<void> {
         })
         img.setAttribute("src", dataUrl)
       } catch {
-        /* best effort — leave the original src */
+        /* best effort */
       }
     }),
   )
 }
 
-// Render one payslip into an isolated, light-themed iframe and rasterize it to a
-// PNG data URL. The iframe copies the app's stylesheets so the payslip looks
-// identical to the in-app document, but without the app's dark-mode class so the
-// printed copy is always the light business document.
-async function renderPayslipPng(
-  slip: Payslip,
+// Render the request document into an isolated light-themed iframe and rasterize
+// to a PNG data URL. Mirrors the payslip PDF pipeline (handles Tailwind oklch).
+async function renderRequestPng(
+  req: PaymentRequestPrint,
 ): Promise<{ dataUrl: string; width: number; height: number }> {
   const iframe = document.createElement("iframe")
   iframe.style.position = "fixed"
@@ -84,15 +76,12 @@ async function renderPayslipPng(
     throw new Error("Couldn't create the render frame.")
   }
 
-  // Copy stylesheets so Tailwind + theme variables apply inside the frame.
   const linkLoads: Promise<void>[] = []
   for (const el of Array.from(
     document.querySelectorAll('style, link[rel="stylesheet"]'),
   )) {
     const clone = el.cloneNode(true)
     doc.head.appendChild(clone)
-    // External stylesheets (prod builds) load async — wait for them so the
-    // payslip is fully styled before we rasterize.
     if (clone instanceof HTMLLinkElement) {
       linkLoads.push(
         new Promise<void>((resolve) => {
@@ -112,15 +101,14 @@ async function renderPayslipPng(
 
   const mount = doc.createElement("div")
   mount.style.width = `${RENDER_WIDTH}px`
-  mount.style.padding = "20px"
+  mount.style.padding = "24px"
   mount.style.background = "#ffffff"
   doc.body.appendChild(mount)
 
   const root = createRoot(mount)
   try {
     await new Promise<void>((resolve) => {
-      root.render(<PayslipDocument slip={slip} />)
-      // Let React commit + the browser lay out before we measure/capture.
+      root.render(<PaymentRequestDocument req={req} />)
       setTimeout(resolve, 60)
     })
     await waitForImages(mount)
@@ -142,9 +130,8 @@ async function renderPayslipPng(
   }
 }
 
-// Fit a rasterized payslip onto A4 pages, paginating if it's taller than one
-// page, and return the PDF as a Blob.
-function payslipPdfBlob(dataUrl: string, width: number, height: number): Blob {
+// Fit a rasterized request onto A4 pages, paginating if taller than one page.
+function requestPdf(dataUrl: string, width: number, height: number): jsPDF {
   const pdf = new jsPDF({ unit: "pt", format: "a4" })
   const pageW = pdf.internal.pageSize.getWidth()
   const pageH = pdf.internal.pageSize.getHeight()
@@ -163,16 +150,85 @@ function payslipPdfBlob(dataUrl: string, width: number, height: number): Blob {
     pdf.addImage(dataUrl, "PNG", margin, position, imgW, imgH)
     heightLeft -= pageInner
   }
-  return pdf.output("blob")
+  return pdf
 }
 
-// Build a single employee's payslip PDF.
-export async function buildPayslipPdf(slip: Payslip): Promise<Blob> {
-  const { dataUrl, width, height } = await renderPayslipPng(slip)
-  return payslipPdfBlob(dataUrl, width, height)
+async function baseRequestPdfBytes(req: PaymentRequestPrint): Promise<ArrayBuffer> {
+  const { dataUrl, width, height } = await renderRequestPng(req)
+  return requestPdf(dataUrl, width, height).output("arraybuffer")
 }
 
-// Trigger a browser download for a Blob.
+// A4 in points, for laying out image attachments.
+const A4 = { w: 595.28, h: 841.89 }
+
+// Append an image attachment as its own centered page.
+async function appendImagePage(
+  out: PDFDocument,
+  bytes: ArrayBuffer,
+  contentType: string | null,
+) {
+  const isJpg = contentType?.includes("jpeg") || contentType?.includes("jpg")
+  const img = isJpg ? await out.embedJpg(bytes) : await out.embedPng(bytes)
+  const page = out.addPage([A4.w, A4.h])
+  const margin = 24
+  const maxW = A4.w - margin * 2
+  const maxH = A4.h - margin * 2
+  const scale = Math.min(maxW / img.width, maxH / img.height, 1)
+  const w = img.width * scale
+  const h = img.height * scale
+  page.drawImage(img, { x: (A4.w - w) / 2, y: (A4.h - h) / 2, width: w, height: h })
+}
+
+// Build one request PDF, optionally merging its supporting documents as trailing
+// pages (images become new pages; PDF attachments are copied page-by-page).
+export async function buildRequestPdf(
+  req: PaymentRequestPrint,
+  withAttachments: boolean,
+): Promise<Blob> {
+  const baseBytes = await baseRequestPdfBytes(req)
+  if (!withAttachments || req.attachments.length === 0) {
+    return new Blob([baseBytes], { type: "application/pdf" })
+  }
+
+  const out = await PDFDocument.load(baseBytes)
+  for (const att of req.attachments) {
+    try {
+      const res = await fetch(att.url)
+      if (!res.ok) continue
+      const bytes = await res.arrayBuffer()
+      const type = att.contentType ?? ""
+      if (type === "application/pdf") {
+        const src = await PDFDocument.load(bytes, { ignoreEncryption: true })
+        const pages = await out.copyPages(src, src.getPageIndices())
+        for (const p of pages) out.addPage(p)
+      } else if (type.startsWith("image/")) {
+        await appendImagePage(out, bytes, type)
+      }
+      // Other types can't be merged into a PDF — silently skipped.
+    } catch {
+      /* skip an attachment that won't merge */
+    }
+  }
+  const merged = await out.save()
+  return new Blob([merged], { type: "application/pdf" })
+}
+
+export async function buildRequestsPdfZip(
+  reqs: PaymentRequestPrint[],
+  withAttachments: boolean,
+  fileMonth: string,
+): Promise<Blob> {
+  const entries: ZipEntry[] = []
+  for (const req of reqs) {
+    const pdf = await buildRequestPdf(req, withAttachments)
+    entries.push({
+      name: `${requestRef(req.requestNumber)} — ${safeName(req.employeeName)} — ${fileMonth}.pdf`,
+      data: await pdf.arrayBuffer(),
+    })
+  }
+  return createZip(entries)
+}
+
 export function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement("a")
@@ -182,31 +238,4 @@ export function downloadBlob(filename: string, blob: Blob) {
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
-}
-
-// Build + download one payslip PDF (the same rasterized document employees see),
-// so individual downloads use the real PDF pipeline rather than the browser's
-// "print to PDF" dialog.
-export async function downloadPayslipPdf(
-  slip: Payslip,
-  filename: string,
-): Promise<void> {
-  const blob = await buildPayslipPdf(slip)
-  downloadBlob(filename, blob)
-}
-
-// Build a ZIP of one payslip PDF per employee, named "{Employee} — {month}.pdf".
-export async function buildPayslipsPdfZip(
-  slips: Payslip[],
-  fileMonth: string,
-): Promise<Blob> {
-  const entries: ZipEntry[] = []
-  for (const slip of slips) {
-    const pdf = await buildPayslipPdf(slip)
-    entries.push({
-      name: `${safeName(slip.employeeName)} — ${fileMonth}.pdf`,
-      data: await pdf.arrayBuffer(),
-    })
-  }
-  return createZip(entries)
 }
