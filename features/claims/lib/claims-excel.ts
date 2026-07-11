@@ -116,20 +116,42 @@ export async function buildClaimFormWorkbook(
   wb.created = new Date()
   const ws = wb.addWorksheet("Claim form")
 
-  // Only include category columns that appear in this employee's claims.
-  const present = new Set(group.claims.map((c) => c.category))
-  const categories = CATEGORY_ORDER.filter((c) => present.has(c))
+  // Build the amount columns present in this employee's claims. Fixed
+  // categories use their category label; each distinct **custom** claim type
+  // gets its OWN column headed by the claim type name (so e.g. "Parking" and
+  // "Corporate Gift" appear as their own columns rather than collapsing into a
+  // single generic "Custom" column).
+  const columnIdFor = (c: ClaimFormRow) =>
+    c.category === "custom" ? `custom:${c.claimType}` : c.category
+  const columnLabels = new Map<string, string>()
+  for (const c of group.claims) {
+    const id = columnIdFor(c)
+    if (!columnLabels.has(id)) {
+      columnLabels.set(
+        id,
+        c.category === "custom" ? c.claimType : CLAIM_CATEGORY_LABELS[c.category],
+      )
+    }
+  }
+  // Fixed categories first (stable order), then custom columns A→Z by name.
+  const fixedCols = CATEGORY_ORDER.filter(
+    (cat) => cat !== "custom" && columnLabels.has(cat),
+  )
+  const customCols = [...columnLabels.keys()]
+    .filter((id) => id.startsWith("custom:"))
+    .sort((a, b) => columnLabels.get(a)!.localeCompare(columnLabels.get(b)!))
+  const columns = [...fixedCols, ...customCols]
 
   const headers = [
     "Item No.",
     "Date",
     "Description",
-    ...categories.map((c) => CLAIM_CATEGORY_LABELS[c]),
+    ...columns.map((id) => columnLabels.get(id)!),
     "Total",
     "Remarks",
     "GST Amount",
   ]
-  const totalCol = 3 + categories.length + 1 // 1-indexed "Total" column
+  const totalCol = 3 + columns.length + 1 // 1-indexed "Total" column
   const gstCol = headers.length
 
   // Title + meta.
@@ -168,7 +190,7 @@ export async function buildClaimFormWorkbook(
       i + 1,
       c.incurredDate,
       c.description || c.claimType,
-      ...categories.map((cat) => (cat === c.category ? cents(c.amountCents) : null)),
+      ...columns.map((id) => (columnIdFor(c) === id ? cents(c.amountCents) : null)),
       cents(c.amountCents),
       c.remarks ?? "",
       c.taxAmountCents != null ? cents(c.taxAmountCents) : null,
@@ -185,16 +207,16 @@ export async function buildClaimFormWorkbook(
   })
 
   // Totals row.
-  const catTotal = (cat: ClaimCategory) =>
+  const colTotal = (id: string) =>
     group.claims
-      .filter((c) => c.category === cat)
+      .filter((c) => columnIdFor(c) === id)
       .reduce((s, c) => s + c.amountCents, 0)
   const gstTotal = group.claims.reduce((s, c) => s + (c.taxAmountCents ?? 0), 0)
   const totalsRow = ws.addRow([
     "",
     "",
     "Total",
-    ...categories.map((cat) => cents(catTotal(cat))),
+    ...columns.map((id) => cents(colTotal(id))),
     cents(group.totalCents),
     "",
     cents(gstTotal),

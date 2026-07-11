@@ -205,10 +205,34 @@ payroll access.
   row per payee + grand Total, with the union of approver signatures at the
   bottom), and **Claim form(s)** (the staff-expense claim form — one `.xlsx` when
   scoped to an employee, else a ZIP of all employees for the month via
-  `createZip`). The claim form lays out one column per claim **category** present,
-  with Total / Remarks / GST columns and signatures at the bottom. (CSV export was
+  `createZip`). The claim form lays out one column per amount bucket present:
+  fixed categories use their category label, but each distinct **custom** claim
+  type gets its **own column headed by the claim type name** (e.g. "Parking",
+  "Corporate Gift") rather than collapsing into a single generic "Custom" column.
+  Columns are keyed by `columnIdFor` (`custom:{claimType}` for custom, else the
+  category) — fixed categories first in `CATEGORY_ORDER`, then custom columns A→Z
+  — and the Total / Remarks / GST columns and signatures follow. (CSV export was
   removed; `unionSignatures` de-dupes signatures across employees for the list +
   totals workbooks.)
+
+## Claims — mobile UX (My claims)
+
+`features/claims/components/my-claims.tsx` is tuned mobile-first:
+
+- **Actions**: the claim dialog trigger is now **"Add"** (was "Submit a claim");
+  the batch submit button is **"Submit ({draftCount})"** (was "Submit all · …")
+  and is a filled **emerald** button (`bg-emerald-600`) so it pops against the
+  blue "Add". Both stretch (`flex-1`) on mobile, natural width from `sm`.
+- **Filters**: search stays visible; the two selects (type/status) collapse
+  behind a **"Filters"** toggle (`filtersOpen` state) on mobile with an active-
+  count badge, and show inline from `lg`. Selects are hidden via
+  `filtersOpen ? "flex" : "hidden lg:flex"`.
+- **Table**: gives the list ~60% of the mobile viewport (`min-h-[60vh]
+  lg:min-h-0`). The **Date** column is `hidden md:table-cell` and **Status** is
+  `hidden sm:table-cell`; both fold into a meta line under the type name on
+  small screens. Row actions collapse from inline Edit/View/Delete buttons
+  (`hidden sm:flex`) to a **kebab `DropdownMenu`** on mobile (drafts only; other
+  rows open on row tap).
 
 ## Known gaps / follow-ups
 

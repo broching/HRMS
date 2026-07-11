@@ -219,15 +219,15 @@ export function SubmitClaimDialog({ month }: { month?: string }) {
       <DialogTrigger asChild>
         <Button>
           <IconPlus className="size-4" />
-          Submit a claim
+          Add
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New claim</DialogTitle>
           <DialogDescription>
-            Saved as a draft. Review your month&rsquo;s claims, then use
-            &ldquo;Submit all&rdquo; to send them for approval.
+            Saved as a draft. Review your month&rsquo;s claims, then tap
+            &ldquo;Submit&rdquo; to send them for approval.
           </DialogDescription>
         </DialogHeader>
 

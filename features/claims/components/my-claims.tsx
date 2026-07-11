@@ -2,11 +2,12 @@
 
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
-import { IconSearch } from "@tabler/icons-react"
+import { IconSearch, IconFilter, IconDotsVertical } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { ClaimStatus } from "@/convex/lib/enums"
+import { cn } from "@/lib/utils"
 import { getErrorMessage } from "@/lib/errors"
 import { ClaimDetailDialog } from "@/features/claims/components/claim-detail"
 import { ClaimEditLauncher } from "@/features/claims/components/claim-edit-dialog"
@@ -15,6 +16,12 @@ import { MonthNav } from "@/features/claims/components/month-nav"
 import { SubmitClaimDialog } from "@/features/claims/components/submit-claim-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -63,6 +70,7 @@ export function MyClaims() {
   const [typeId, setTypeId] = React.useState(ALL)
   const [status, setStatus] = React.useState(ALL)
   const [search, setSearch] = React.useState("")
+  const [filtersOpen, setFiltersOpen] = React.useState(false)
   const [openId, setOpenId] = React.useState<Id<"claims"> | null>(null)
   const [editId, setEditId] = React.useState<Id<"claims"> | null>(null)
   const [deleteId, setDeleteId] = React.useState<Id<"claims"> | null>(null)
@@ -98,6 +106,7 @@ export function MyClaims() {
   ).length
   const monthTotal = monthClaims.reduce((s, c) => s + c.amountCents, 0)
   const monthCurrency = monthClaims[0]?.currency ?? "SGD"
+  const activeFilters = (typeId !== ALL ? 1 : 0) + (status !== ALL ? 1 : 0)
 
   // Group the month's claims by the batch (claim group) they were submitted in,
   // so the claimant sees their claims organised by submission. Drafts (no group)
@@ -194,67 +203,97 @@ export function MyClaims() {
         <MonthNav month={month} onChange={setMonth} />
         <div className="flex items-center gap-2">
           {selected.size > 0 && (
-            <Button variant="outline" onClick={() => setResubmitOpen(true)}>
-              Duplicate to resubmit ({selected.size})
-            </Button>
-          )}
-          {draftCount > 0 && (
-            <Button variant="outline" onClick={() => setSubmitAllOpen(true)}>
-              Submit all · {monthLabel(month)} ({draftCount})
+            <Button
+              variant="outline"
+              className="flex-1 sm:flex-none"
+              onClick={() => setResubmitOpen(true)}
+            >
+              Duplicate ({selected.size})
             </Button>
           )}
           <SubmitClaimDialog month={month} />
+          {draftCount > 0 && (
+            <Button
+              className="flex-1 bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 sm:flex-none"
+              onClick={() => setSubmitAllOpen(true)}
+            >
+              Submit ({draftCount})
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Filters */}
+      {/* Filters — search stays visible; the two selects collapse behind a
+          "Filters" toggle on mobile so they don't dominate the small screen. */}
       <div className="flex flex-col gap-3 px-4 lg:flex-row lg:items-center lg:px-6">
-        <Select value={typeId} onValueChange={setTypeId}>
-          <SelectTrigger className="w-full lg:w-48">
-            <SelectValue placeholder="All claim types" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All claim types</SelectItem>
-            {claimTypes.map((t) => (
-              <SelectItem key={t._id} value={t._id}>
-                {t.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-full lg:w-44">
-            <SelectValue placeholder="All status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All status</SelectItem>
-            {STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                {CLAIM_STATUS_LABELS[s]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="relative lg:max-w-xs lg:flex-1">
-          <IconSearch className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-          <Input
-            placeholder="Search type / description"
-            className="pl-8"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 lg:w-64 lg:flex-none">
+            <IconSearch className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+            <Input
+              placeholder="Search type / description"
+              className="pl-8"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <Button
+            variant="outline"
+            className="shrink-0 lg:hidden"
+            onClick={() => setFiltersOpen((v) => !v)}
+          >
+            <IconFilter className="size-4" />
+            Filters
+            {activeFilters > 0 && (
+              <span className="bg-primary text-primary-foreground ml-0.5 flex size-5 items-center justify-center rounded-full text-xs tabular-nums">
+                {activeFilters}
+              </span>
+            )}
+          </Button>
+        </div>
+        <div
+          className={cn(
+            "flex-col gap-3 sm:flex-row",
+            filtersOpen ? "flex" : "hidden lg:flex",
+          )}
+        >
+          <Select value={typeId} onValueChange={setTypeId}>
+            <SelectTrigger className="w-full sm:w-48">
+              <SelectValue placeholder="All claim types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All claim types</SelectItem>
+              {claimTypes.map((t) => (
+                <SelectItem key={t._id} value={t._id}>
+                  {t.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger className="w-full sm:w-44">
+              <SelectValue placeholder="All status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All status</SelectItem>
+              {STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {CLAIM_STATUS_LABELS[s]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
-      <div className="mx-4 rounded-lg border lg:mx-6">
+      <div className="mx-4 flex min-h-[60vh] flex-col rounded-lg border lg:mx-6 lg:min-h-0">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-10" />
+              <TableHead className="w-8" />
               <TableHead>Type</TableHead>
-              <TableHead>Amount</TableHead>
-              <TableHead>Date</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead className="text-right sm:text-left">Amount</TableHead>
+              <TableHead className="hidden md:table-cell">Date</TableHead>
+              <TableHead className="hidden sm:table-cell">Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -302,7 +341,7 @@ export function MyClaims() {
                         onClick={() => setOpenId(c._id)}
                       >
                         <TableCell
-                          className="w-10"
+                          className="w-8 pr-0"
                           onClick={(e) => e.stopPropagation()}
                         >
                           {c.status === "rejected" && (
@@ -317,24 +356,39 @@ export function MyClaims() {
                         </TableCell>
                         <TableCell>
                           <span className="font-medium">{c.claimTypeName}</span>
-                          <div className="text-muted-foreground max-w-[280px] truncate text-xs">
-                            {c.description}
+                          {c.description && (
+                            <div className="text-muted-foreground max-w-[180px] truncate text-xs sm:max-w-[280px]">
+                              {c.description}
+                            </div>
+                          )}
+                          {/* Mobile: fold the hidden Date/Status columns in here */}
+                          <div className="mt-1 flex items-center gap-2 md:hidden">
+                            <span className="text-muted-foreground text-xs tabular-nums">
+                              {c.incurredDate}
+                            </span>
+                            <Badge
+                              className="sm:hidden"
+                              variant={CLAIM_STATUS_BADGE[c.status]}
+                            >
+                              {CLAIM_STATUS_LABELS[c.status]}
+                            </Badge>
                           </div>
                         </TableCell>
-                        <TableCell className="tabular-nums">
+                        <TableCell className="text-right tabular-nums whitespace-nowrap sm:text-left">
                           {formatMoney(c.amountCents, c.currency)}
                         </TableCell>
-                        <TableCell className="text-sm">
+                        <TableCell className="hidden text-sm md:table-cell">
                           {c.incurredDate}
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="hidden sm:table-cell">
                           <Badge variant={CLAIM_STATUS_BADGE[c.status]}>
                             {CLAIM_STATUS_LABELS[c.status]}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
+                          {/* Desktop: inline action buttons */}
                           <div
-                            className="flex justify-end gap-1"
+                            className="hidden justify-end gap-1 sm:flex"
                             onClick={(e) => e.stopPropagation()}
                           >
                             {c.status === "draft" && (
@@ -346,10 +400,7 @@ export function MyClaims() {
                                 Edit
                               </Button>
                             )}
-                            <Button
-                              size="sm"
-                              onClick={() => setOpenId(c._id)}
-                            >
+                            <Button size="sm" onClick={() => setOpenId(c._id)}>
                               View
                             </Button>
                             {c.status === "draft" && (
@@ -363,6 +414,44 @@ export function MyClaims() {
                               </Button>
                             )}
                           </div>
+                          {/* Mobile: kebab menu (drafts only; other rows open on
+                              row tap) */}
+                          {c.status === "draft" && (
+                            <div
+                              className="flex justify-end sm:hidden"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    aria-label="Claim actions"
+                                  >
+                                    <IconDotsVertical className="size-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem
+                                    onClick={() => setOpenId(c._id)}
+                                  >
+                                    View
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => setEditId(c._id)}
+                                  >
+                                    Edit
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="text-destructive"
+                                    onClick={() => setDeleteId(c._id)}
+                                  >
+                                    Delete
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -405,9 +494,9 @@ export function MyClaims() {
       <ConfirmDialog
         open={submitAllOpen}
         onOpenChange={setSubmitAllOpen}
-        title="Submit all drafts?"
+        title="Submit drafts?"
         description={`Submit ${draftCount} draft claim${draftCount === 1 ? "" : "s"} for ${monthLabel(month)} into the approval workflow. You won't be able to edit them afterwards.`}
-        confirmLabel="Submit all"
+        confirmLabel="Submit"
         busy={busy}
         onConfirm={handleSubmitAll}
       />
