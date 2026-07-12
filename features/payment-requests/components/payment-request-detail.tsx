@@ -206,6 +206,9 @@ export function PaymentRequestDetailDialog({
                   }
                 />
                 <Row label="Account / payee" value={request.payeeName} />
+                {request.items && request.items.length > 0 && (
+                  <ItemsList items={request.items} currency={request.currency} />
+                )}
                 {request.country && (
                   <Row label="Country" value={countryName(request.country)} />
                 )}
@@ -527,9 +530,47 @@ export function PaymentRequestDetailDialog({
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[9rem_1fr] gap-2">
+    <div className="grid grid-cols-[6.5rem_1fr] gap-2 sm:grid-cols-[9rem_1fr]">
       <span className="text-muted-foreground">{label}</span>
       <span className="break-words">{value}</span>
+    </div>
+  )
+}
+
+// Itemised breakdown inside the detail panel. Each line shows the description
+// with a qty × unit-price sub-line, amount right-aligned; a Total closes it.
+function ItemsList({
+  items,
+  currency,
+}: {
+  items: { description: string; quantity: number; unitPriceCents: number; amountCents: number }[]
+  currency: string
+}) {
+  const total = items.reduce((sum, it) => sum + it.amountCents, 0)
+  return (
+    <div className="mt-1 rounded-lg border">
+      <p className="text-muted-foreground border-b px-3 py-2 text-xs font-medium">
+        Items ({items.length})
+      </p>
+      <ul className="divide-y">
+        {items.map((it, i) => (
+          <li key={i} className="flex items-start justify-between gap-3 px-3 py-2">
+            <div className="min-w-0">
+              <p className="break-words">{it.description}</p>
+              <p className="text-muted-foreground text-xs">
+                {it.quantity} × {formatMoney(it.unitPriceCents, currency)}
+              </p>
+            </div>
+            <span className="shrink-0 tabular-nums">
+              {formatMoney(it.amountCents, currency)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="flex items-center justify-between border-t px-3 py-2 font-semibold">
+        <span>Total</span>
+        <span className="tabular-nums">{formatMoney(total, currency)}</span>
+      </div>
     </div>
   )
 }

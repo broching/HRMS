@@ -9,6 +9,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
@@ -35,6 +36,14 @@ import {
   type Attachment,
 } from "@/features/payment-requests/components/payment-request-attachments"
 import { CustomFieldInputs } from "@/features/payment-requests/components/payment-request-fields"
+import {
+  PaymentRequestItemsEditor,
+  type ItemDraft,
+  emptyItem,
+  itemsTotalCents,
+  toPayloadItems,
+  firstInvalidItem,
+} from "@/features/payment-requests/components/payment-request-items"
 
 const today = () => new Date().toISOString().slice(0, 10)
 
@@ -58,6 +67,8 @@ export function SubmitPaymentRequestDialog({ month }: { month?: string }) {
   const [purpose, setPurpose] = React.useState("")
   const [payeeName, setPayeeName] = React.useState("")
   const [amount, setAmount] = React.useState("")
+  const [multiItem, setMultiItem] = React.useState(false)
+  const [items, setItems] = React.useState<ItemDraft[]>([])
   const [currency, setCurrency] = React.useState("")
   const [country, setCountry] = React.useState("")
   const [requestDate, setRequestDate] = React.useState(defaultDate())
@@ -86,13 +97,25 @@ export function SubmitPaymentRequestDialog({ month }: { month?: string }) {
   }, [org, country])
 
   const template = activeTemplates.find((t) => t._id === templateId)
-  const amountCents = Math.round((Number(amount) || 0) * 100)
+  const amountCents = multiItem
+    ? itemsTotalCents(items)
+    : Math.round((Number(amount) || 0) * 100)
   const noTemplates = templates !== undefined && activeTemplates.length === 0
+
+  // Turning the multi-item switch on seeds a first blank item; turning it off
+  // drops them so the single amount takes over again.
+  function toggleMultiItem(on: boolean) {
+    setMultiItem(on)
+    if (on && items.length === 0) setItems([emptyItem()])
+    if (!on) setItems([])
+  }
 
   function reset() {
     setPurpose("")
     setPayeeName("")
     setAmount("")
+    setMultiItem(false)
+    setItems([])
     setRequestDate(defaultDate())
     setCountry(org?.country ?? "")
     setFieldValues({})
@@ -104,7 +127,14 @@ export function SubmitPaymentRequestDialog({ month }: { month?: string }) {
   function missingRequiredField(): string | null {
     if (!purpose.trim()) return "Purpose of request is required."
     if (!payeeName.trim()) return "Payee / account name is required."
-    if (amountCents <= 0) return "Enter a valid amount."
+    if (multiItem) {
+      const withDesc = items.filter((it) => it.description.trim() !== "")
+      if (withDesc.length === 0) return "Add at least one item."
+      const bad = firstInvalidItem(withDesc)
+      if (bad >= 0) return `Item ${bad + 1} needs a description, quantity and price.`
+    } else if (amountCents <= 0) {
+      return "Enter a valid amount."
+    }
     for (const f of template?.fields ?? []) {
       if (f.required && !fieldValues[f.key]?.trim()) return `${f.label} is required.`
     }
@@ -122,6 +152,7 @@ export function SubmitPaymentRequestDialog({ month }: { month?: string }) {
         amountCents,
         currency: currency || undefined,
         payeeName: payeeName.trim(),
+        items: multiItem ? toPayloadItems(items) : undefined,
         country: country || undefined,
         requestDate,
         fieldValues: Object.keys(fieldValues).length ? fieldValues : undefined,
@@ -207,35 +238,78 @@ export function SubmitPaymentRequestDialog({ month }: { month?: string }) {
               />
             </div>
 
-            <div className="grid grid-cols-[1fr_7rem] gap-3">
-              <div className="grid gap-2">
-                <Label>
-                  Amount requested <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="0.00"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+            <div className="grid gap-3">
+              <div className="bg-muted/40 flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+                <div className="grid gap-0.5">
+                  <Label htmlFor="pr-multi-item" className="cursor-pointer">
+                    Multiple Items 
+                  </Label>
+                  <span className="text-muted-foreground text-xs">
+                    List several items and total them automatically
+                  </span>
+                </div>
+                <Switch
+                  id="pr-multi-item"
+                  checked={multiItem}
+                  onCheckedChange={toggleMultiItem}
                 />
               </div>
-              <div className="grid gap-2">
-                <Label>Currency</Label>
-                <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="—" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CURRENCIES.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+
+              {multiItem ? (
+                <div className="grid gap-3">
+                  <div className="grid max-w-[10rem] gap-2">
+                    <Label>Currency</Label>
+                    <Select value={currency} onValueChange={setCurrency}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="—" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCIES.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <PaymentRequestItemsEditor
+                    items={items}
+                    currency={currency}
+                    onChange={setItems}
+                  />
+                </div>
+              ) : (
+                <div className="grid grid-cols-[1fr_7rem] gap-3">
+                  <div className="grid gap-2">
+                    <Label>
+                      Amount requested <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Currency</Label>
+                    <Select value={currency} onValueChange={setCurrency}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="—" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCIES.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2">
@@ -324,15 +398,20 @@ export function SubmitPaymentRequestDialog({ month }: { month?: string }) {
           </div>
         )}
 
-        <DialogFooter className="gap-2">
+        <DialogFooter className="gap-2 sm:gap-2">
           <Button
             variant="outline"
+            className="flex-1 sm:flex-none"
             onClick={() => handleSubmit(false)}
             disabled={busy || noTemplates}
           >
             Save draft
           </Button>
-          <Button onClick={() => handleSubmit(true)} disabled={busy || noTemplates}>
+          <Button
+            className="flex-1 sm:flex-none"
+            onClick={() => handleSubmit(true)}
+            disabled={busy || noTemplates}
+          >
             {busy ? "Saving…" : "Submit"}
           </Button>
         </DialogFooter>

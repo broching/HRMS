@@ -1,6 +1,6 @@
 import type { FunctionReturnType } from "convex/server"
 import type { api } from "@/convex/_generated/api"
-import type { PaymentRequestShow } from "@/convex/lib/enums"
+import type { PaymentRequestShow, PaymentRequestItem } from "@/convex/lib/enums"
 import { formatMoney, requestRef } from "@/features/payment-requests/lib/labels"
 import { countryName } from "@/lib/countries"
 
@@ -121,7 +121,17 @@ export function PaymentRequestDocument({
         <Field label="Date" value={req.requestDate} />
         <Field label="Requestor's Name" value={req.employeeName} />
         <Field label="Purpose of Request" value={req.purpose} />
-        <Field label="Amount Requested" value={formatMoney(req.amountCents, req.currency)} />
+        {/* Itemised requests render a table; single-amount requests a plain row. */}
+        {req.items && req.items.length > 0 ? (
+          <ItemsTable
+            items={req.items}
+            currency={req.currency}
+            totalCents={req.amountCents}
+            accentColor={s.accentColor}
+          />
+        ) : (
+          <Field label="Amount Requested" value={formatMoney(req.amountCents, req.currency)} />
+        )}
         <Field label="Account / Payee Name" value={req.payeeName} />
         {req.country && <Field label="Country" value={countryName(req.country)} />}
         {req.templateFields.map((f) => {
@@ -212,6 +222,97 @@ function Field({ label, value }: { label: string; value: string }) {
     <div>
       <span style={{ fontWeight: 400 }}>{label}: </span>
       <span>{value}</span>
+    </div>
+  )
+}
+
+// Itemised breakdown for the printed form: a bordered table headed by the accent
+// colour, one row per item (#, description, qty, unit price, amount), closed by a
+// bold Total row. Inline-styled so it rasterizes cleanly to the PDF.
+function ItemsTable({
+  items,
+  currency,
+  totalCents,
+  accentColor,
+}: {
+  items: PaymentRequestItem[]
+  currency: string
+  totalCents: number
+  accentColor: string
+}) {
+  const cellBase: React.CSSProperties = {
+    padding: "5px 8px",
+    borderBottom: "1px solid #e5e7eb",
+    verticalAlign: "top",
+  }
+  const th: React.CSSProperties = {
+    padding: "6px 8px",
+    textAlign: "left",
+    fontWeight: 600,
+    color: "#ffffff",
+    background: accentColor,
+  }
+  const num: React.CSSProperties = { textAlign: "right", whiteSpace: "nowrap" }
+  return (
+    <div>
+      <div style={{ marginBottom: 4, fontWeight: 400 }}>Items:</div>
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          border: "1px solid #e5e7eb",
+          fontSize: "inherit",
+        }}
+      >
+        <thead>
+          <tr>
+            <th style={{ ...th, width: 26, textAlign: "right" }}>#</th>
+            <th style={th}>Description</th>
+            <th style={{ ...th, textAlign: "right", width: 44 }}>Qty</th>
+            <th style={{ ...th, textAlign: "right", width: 90 }}>Unit price</th>
+            <th style={{ ...th, textAlign: "right", width: 100 }}>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it, i) => (
+            <tr key={i}>
+              <td style={{ ...cellBase, ...num, color: "#6b7280" }}>{i + 1}</td>
+              <td style={cellBase}>{it.description}</td>
+              <td style={{ ...cellBase, ...num }}>{it.quantity}</td>
+              <td style={{ ...cellBase, ...num }}>
+                {formatMoney(it.unitPriceCents, currency)}
+              </td>
+              <td style={{ ...cellBase, ...num }}>
+                {formatMoney(it.amountCents, currency)}
+              </td>
+            </tr>
+          ))}
+          <tr>
+            <td
+              colSpan={4}
+              style={{
+                padding: "6px 8px",
+                textAlign: "right",
+                fontWeight: 700,
+                borderTop: "2px solid #111827",
+              }}
+            >
+              Total
+            </td>
+            <td
+              style={{
+                padding: "6px 8px",
+                textAlign: "right",
+                fontWeight: 700,
+                whiteSpace: "nowrap",
+                borderTop: "2px solid #111827",
+              }}
+            >
+              {formatMoney(totalCents, currency)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   )
 }

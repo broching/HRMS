@@ -361,6 +361,38 @@ approves **individually** (no monthly batch / group barrier).
   request, and hints to upload an org logo when none exists. (The real printed
   document already resolved the logo via `getForPrint`.)
 
+### Payment Requests — itemised line items + mobile UX
+
+- **Multiple items per request**: a request can now carry `items` (`convex/lib/enums.ts`
+  `paymentRequestItem`: `{ description, quantity, unitPriceCents, amountCents }`),
+  optional array on `paymentRequests` (`convex/schema.ts`). When present and
+  non-empty, `amountCents` is the **server-computed** sum of the line
+  `amountCents` (each line = `round(quantity × unitPriceCents)`). Single-amount
+  requests leave `items` unset. `sanitizeItems` (`convex/paymentRequests.ts`)
+  validates + recomputes each line (rejects blank description, non-finite/≤0 qty,
+  negative price, empty list, non-positive total, >50 items) and is called by both
+  `create` and `editRequest` — the client-sent total is ignored when items exist.
+  `get`/`getForPrint` return `items`; `prRow`/`hydrateRow` carry `itemCount`.
+- **Form UX** (`submit-payment-request-dialog.tsx` + `edit-payment-request-dialog.tsx`):
+  a **"Multiple items"** switch. Off → the single Amount + Currency fields. On →
+  a compact Currency select + the shared `PaymentRequestItemsEditor`
+  (`payment-request-items.tsx`), which keeps qty/unit-price as raw strings while
+  typing, shows each line's total, and a running grand **Total**. Helpers there:
+  `emptyItem`/`lineCents`/`itemsTotalCents`/`toPayloadItems`/`fromPayloadItems`/
+  `firstInvalidItem`. The edit dialog seeds the switch + rows from the saved
+  `items`. Both dialogs' footers stretch full-width on mobile.
+- **Rendering**: `payment-request-document.tsx` (the printed/PDF form) renders an
+  accent-headed **items table** (# · Description · Qty · Unit price · Amount +
+  bold Total row) in place of the single "Amount Requested" line when items
+  exist; the PDF pipeline is unchanged. The detail panel
+  (`payment-request-detail.tsx`) shows an `ItemsList` card (description + qty ×
+  unit-price sub-line + line amount, Total footer). Excel export still exports the
+  request **total** (one row per request) — items aren't itemised there.
+- **Mobile**: the requestor list (`my-payment-requests.tsx`) collapses the
+  country/status/amount filters behind a **Filters** toggle (with active-count
+  badge) < lg, keeps Search + Sort visible, and shows a "· N items" hint on the
+  row. Detail-panel label rows are narrower on phones.
+
 ## Claims — per-row Mark reimbursed
 
 In the claim-group drill-down (`claims-approval-queue.tsx` → `GroupClaims`),

@@ -8,6 +8,7 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
@@ -31,6 +32,15 @@ import {
   type Attachment,
 } from "@/features/payment-requests/components/payment-request-attachments"
 import { CustomFieldInputs } from "@/features/payment-requests/components/payment-request-fields"
+import {
+  PaymentRequestItemsEditor,
+  type ItemDraft,
+  emptyItem,
+  itemsTotalCents,
+  toPayloadItems,
+  fromPayloadItems,
+  firstInvalidItem,
+} from "@/features/payment-requests/components/payment-request-items"
 
 export function EditPaymentRequestDialog({
   requestId,
@@ -50,6 +60,8 @@ export function EditPaymentRequestDialog({
   const [purpose, setPurpose] = React.useState("")
   const [payeeName, setPayeeName] = React.useState("")
   const [amount, setAmount] = React.useState("")
+  const [multiItem, setMultiItem] = React.useState(false)
+  const [items, setItems] = React.useState<ItemDraft[]>([])
   const [currency, setCurrency] = React.useState("")
   const [country, setCountry] = React.useState("")
   const [requestDate, setRequestDate] = React.useState("")
@@ -66,6 +78,9 @@ export function EditPaymentRequestDialog({
     setPurpose(request.purpose)
     setPayeeName(request.payeeName)
     setAmount((request.amountCents / 100).toString())
+    const savedItems = request.items ?? []
+    setMultiItem(savedItems.length > 0)
+    setItems(savedItems.length > 0 ? fromPayloadItems(savedItems) : [])
     setCurrency(request.currency)
     setCountry(request.country ?? "")
     setRequestDate(request.requestDate)
@@ -80,13 +95,31 @@ export function EditPaymentRequestDialog({
     if (!open) seeded.current = null
   }, [open])
 
-  const amountCents = Math.round((Number(amount) || 0) * 100)
+  const amountCents = multiItem
+    ? itemsTotalCents(items)
+    : Math.round((Number(amount) || 0) * 100)
+
+  function toggleMultiItem(on: boolean) {
+    setMultiItem(on)
+    if (on && items.length === 0) setItems([emptyItem()])
+    if (!on) setItems([])
+  }
 
   async function save() {
     if (!request) return
     if (!purpose.trim()) return toast.error("Purpose is required.")
     if (!payeeName.trim()) return toast.error("Payee is required.")
-    if (amountCents <= 0) return toast.error("Enter a valid amount.")
+    if (multiItem) {
+      const withDesc = items.filter((it) => it.description.trim() !== "")
+      if (withDesc.length === 0) return toast.error("Add at least one item.")
+      const bad = firstInvalidItem(withDesc)
+      if (bad >= 0)
+        return toast.error(
+          `Item ${bad + 1} needs a description, quantity and price.`,
+        )
+    } else if (amountCents <= 0) {
+      return toast.error("Enter a valid amount.")
+    }
     for (const f of request.templateFields) {
       if (f.required && !fieldValues[f.key]?.trim())
         return toast.error(`${f.label} is required.`)
@@ -99,6 +132,7 @@ export function EditPaymentRequestDialog({
         amountCents,
         currency: currency || undefined,
         payeeName: payeeName.trim(),
+        items: multiItem ? toPayloadItems(items) : undefined,
         country: country || undefined,
         requestDate,
         fieldValues: Object.keys(fieldValues).length ? fieldValues : undefined,
@@ -140,32 +174,75 @@ export function EditPaymentRequestDialog({
                 onChange={(e) => setPurpose(e.target.value)}
               />
             </div>
-            <div className="grid grid-cols-[1fr_7rem] gap-3">
-              <div className="grid gap-2">
-                <Label>Amount requested</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+            <div className="grid gap-3">
+              <div className="bg-muted/40 flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+                <div className="grid gap-0.5">
+                  <Label htmlFor="pr-edit-multi-item" className="cursor-pointer">
+                    Multiple Items 
+                  </Label>
+                  <span className="text-muted-foreground text-xs">
+                    List several items and total them automatically
+                  </span>
+                </div>
+                <Switch
+                  id="pr-edit-multi-item"
+                  checked={multiItem}
+                  onCheckedChange={toggleMultiItem}
                 />
               </div>
-              <div className="grid gap-2">
-                <Label>Currency</Label>
-                <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="—" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CURRENCIES.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+
+              {multiItem ? (
+                <div className="grid gap-3">
+                  <div className="grid max-w-[10rem] gap-2">
+                    <Label>Currency</Label>
+                    <Select value={currency} onValueChange={setCurrency}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="—" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCIES.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <PaymentRequestItemsEditor
+                    items={items}
+                    currency={currency}
+                    onChange={setItems}
+                  />
+                </div>
+              ) : (
+                <div className="grid grid-cols-[1fr_7rem] gap-3">
+                  <div className="grid gap-2">
+                    <Label>Amount requested</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Currency</Label>
+                    <Select value={currency} onValueChange={setCurrency}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="—" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCIES.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
@@ -210,11 +287,20 @@ export function EditPaymentRequestDialog({
             </div>
           </div>
         )}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button
+            variant="outline"
+            className="flex-1 sm:flex-none"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
             Cancel
           </Button>
-          <Button onClick={save} disabled={busy || !request}>
+          <Button
+            className="flex-1 sm:flex-none"
+            onClick={save}
+            disabled={busy || !request}
+          >
             {busy ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>

@@ -2,10 +2,12 @@
 
 import * as React from "react"
 import { useQuery } from "convex/react"
+import { IconFilter } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { PaymentRequestStatus } from "@/convex/lib/enums"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -32,6 +34,7 @@ import {
   formatMoney,
   currentMonth,
 } from "@/features/payment-requests/lib/labels"
+import { cn } from "@/lib/utils"
 import { countryName } from "@/lib/countries"
 import { MonthNav } from "@/features/claims/components/month-nav"
 import { SubmitPaymentRequestDialog } from "@/features/payment-requests/components/submit-payment-request-dialog"
@@ -49,6 +52,7 @@ export function MyPaymentRequests() {
   const [minAmount, setMinAmount] = React.useState("")
   const [maxAmount, setMaxAmount] = React.useState("")
   const [sort, setSort] = React.useState<PrSortKey>("submitted_desc")
+  const [filtersOpen, setFiltersOpen] = React.useState(false)
   const requests = useQuery(api.paymentRequests.mine, { month })
 
   const countryOptions = React.useMemo(() => {
@@ -87,6 +91,13 @@ export function MyPaymentRequests() {
     minAmount !== "" ||
     maxAmount !== ""
 
+  // Count of active advanced filters (everything but the always-visible search),
+  // shown as a badge on the mobile Filters toggle.
+  const advancedCount =
+    (country !== ALL ? 1 : 0) +
+    (status !== ALL ? 1 : 0) +
+    (minAmount !== "" || maxAmount !== "" ? 1 : 0)
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -94,88 +105,126 @@ export function MyPaymentRequests() {
         <SubmitPaymentRequestDialog month={month} />
       </div>
 
-      {/* Search + filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          placeholder="Search ref, payee, purpose…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="h-9 w-full sm:w-64"
-        />
-        <Select value={country} onValueChange={setCountry}>
-          <SelectTrigger className="h-9 w-[9.5rem]">
-            <SelectValue placeholder="Country" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All countries</SelectItem>
-            {countryOptions.map((code) => (
-              <SelectItem key={code} value={code}>
-                {countryName(code)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="h-9 w-[9rem]">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All statuses</SelectItem>
-            {STATUS_OPTIONS.map((s) => (
-              <SelectItem key={s} value={s}>
-                {PR_STATUS_LABELS[s]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex items-center gap-1">
+      {/* Search + filters. Search + Sort stay visible; the rest collapse behind a
+          Filters toggle on mobile and sit inline from lg. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
           <Input
-            type="number"
-            min="0"
-            step="0.01"
-            placeholder="Min $"
-            value={minAmount}
-            onChange={(e) => setMinAmount(e.target.value)}
-            className="h-9 w-24"
+            placeholder="Search ref, payee, purpose…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-9 flex-1 sm:w-64 sm:flex-none"
           />
-          <span className="text-muted-foreground text-xs">–</span>
-          <Input
-            type="number"
-            min="0"
-            step="0.01"
-            placeholder="Max $"
-            value={maxAmount}
-            onChange={(e) => setMaxAmount(e.target.value)}
-            className="h-9 w-24"
-          />
-        </div>
-        <Select value={sort} onValueChange={(v) => setSort(v as PrSortKey)}>
-          <SelectTrigger className="h-9 w-[11rem]">
-            <SelectValue placeholder="Sort" />
-          </SelectTrigger>
-          <SelectContent>
-            {PR_SORT_OPTIONS.map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {hasFilters && (
-          <button
+          <Button
             type="button"
-            className="text-muted-foreground hover:text-foreground text-xs underline"
-            onClick={() => {
-              setSearch("")
-              setCountry(ALL)
-              setStatus(ALL)
-              setMinAmount("")
-              setMaxAmount("")
-            }}
+            variant="outline"
+            size="sm"
+            className="h-9 lg:hidden"
+            onClick={() => setFiltersOpen((v) => !v)}
           >
-            Clear
-          </button>
-        )}
+            <IconFilter className="size-4" />
+            Filters
+            {advancedCount > 0 && (
+              <Badge variant="secondary" className="ml-1 px-1.5">
+                {advancedCount}
+              </Badge>
+            )}
+          </Button>
+          <Select value={sort} onValueChange={(v) => setSort(v as PrSortKey)}>
+            <SelectTrigger className="hidden h-9 w-[11rem] lg:flex">
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+            <SelectContent>
+              {PR_SORT_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div
+          className={cn(
+            "flex-wrap items-center gap-2",
+            filtersOpen ? "flex" : "hidden lg:flex",
+          )}
+        >
+          <Select value={country} onValueChange={setCountry}>
+            <SelectTrigger className="h-9 w-full sm:w-[9.5rem]">
+              <SelectValue placeholder="Country" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All countries</SelectItem>
+              {countryOptions.map((code) => (
+                <SelectItem key={code} value={code}>
+                  {countryName(code)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger className="h-9 w-full sm:w-[9rem]">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All statuses</SelectItem>
+              {STATUS_OPTIONS.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {PR_STATUS_LABELS[s]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex items-center gap-1">
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Min $"
+              value={minAmount}
+              onChange={(e) => setMinAmount(e.target.value)}
+              className="h-9 w-24"
+            />
+            <span className="text-muted-foreground text-xs">–</span>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Max $"
+              value={maxAmount}
+              onChange={(e) => setMaxAmount(e.target.value)}
+              className="h-9 w-24"
+            />
+          </div>
+          <Select value={sort} onValueChange={(v) => setSort(v as PrSortKey)}>
+            <SelectTrigger className="h-9 w-[11rem] lg:hidden">
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+            <SelectContent>
+              {PR_SORT_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {hasFilters && (
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground text-xs underline"
+              onClick={() => {
+                setSearch("")
+                setCountry(ALL)
+                setStatus(ALL)
+                setMinAmount("")
+                setMaxAmount("")
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="rounded-lg border">
@@ -217,8 +266,14 @@ export function MyPaymentRequests() {
                   </TableCell>
                   <TableCell className="max-w-[16rem] truncate">
                     {r.purpose}
+                    {r.itemCount > 0 && (
+                      <span className="text-muted-foreground ml-2 hidden text-xs sm:inline">
+                        · {r.itemCount} items
+                      </span>
+                    )}
                     <span className="text-muted-foreground block text-xs sm:hidden">
                       {r.payeeName} · {PR_STATUS_LABELS[r.status]}
+                      {r.itemCount > 0 && ` · ${r.itemCount} items`}
                     </span>
                   </TableCell>
                   <TableCell className="hidden max-w-[12rem] truncate sm:table-cell">

@@ -613,6 +613,23 @@ export type PaymentRequestShow = {
   footer: boolean;
 };
 
+// A single line item on a payment request that itemises several things being
+// paid for in one request. When a request carries `items`, its `amountCents`
+// total is the sum of the line `amountCents` (server-computed, authoritative).
+// `amountCents` = round(quantity × unitPriceCents).
+export const paymentRequestItem = v.object({
+  description: v.string(),
+  quantity: v.number(),
+  unitPriceCents: v.number(),
+  amountCents: v.number(),
+});
+export type PaymentRequestItem = {
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+  amountCents: number;
+};
+
 // ─── Feed module ───────────────────────────────────────────────────────────
 
 // Who a feed post is shared with. `specific` targets an explicit employee list;

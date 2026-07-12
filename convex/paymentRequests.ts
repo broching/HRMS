@@ -14,6 +14,8 @@ import {
   CLAIM_GROUP_HR,
   CLAIM_GROUP_FINANCE,
   paymentRequestStatus,
+  paymentRequestItem,
+  PaymentRequestItem,
 } from "./lib/enums";
 import {
   resolvePaymentRequestSettings,
@@ -22,6 +24,42 @@ import {
 
 // Maximum supporting documents per payment request.
 const MAX_ATTACHMENTS = 10;
+// Maximum itemised line items per payment request.
+const MAX_ITEMS = 50;
+
+// Validate + normalise submitted line items and compute the request total. Each
+// line's `amountCents` is re-derived server-side as round(quantity ×
+// unitPriceCents) so the client can't misreport it. Rejects empty/negative/
+// non-finite values. Returns null when there are no items (single-amount mode).
+function sanitizeItems(
+  items: PaymentRequestItem[] | undefined,
+): { items: PaymentRequestItem[]; totalCents: number } | null {
+  if (!items || items.length === 0) return null;
+  if (items.length > MAX_ITEMS) {
+    throw new ConvexError(
+      `A payment request can have at most ${MAX_ITEMS} items.`,
+    );
+  }
+  const clean: PaymentRequestItem[] = [];
+  let totalCents = 0;
+  for (const raw of items) {
+    const description = raw.description.trim();
+    if (!description) throw new ConvexError("Each item needs a description.");
+    const quantity = raw.quantity;
+    const unitPriceCents = Math.round(raw.unitPriceCents);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new ConvexError(`"${description}" needs a quantity above zero.`);
+    }
+    if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) {
+      throw new ConvexError(`"${description}" has an invalid unit price.`);
+    }
+    const amountCents = Math.round(quantity * unitPriceCents);
+    clean.push({ description, quantity, unitPriceCents, amountCents });
+    totalCents += amountCents;
+  }
+  if (totalCents <= 0) throw new ConvexError("Item total must be positive.");
+  return { items: clean, totalCents };
+}
 
 function formatMoneyCents(cents: number, currency: string): string {
   try {
@@ -380,6 +418,7 @@ async function hydrateRow(
     invoiceDate: r.fieldValues?.invoiceDate ?? null,
     status: r.status,
     attachmentCount: r.attachmentStorageIds.length,
+    itemCount: r.items?.length ?? 0,
     currentApprover: currentApproverLabel(r),
     canMarkPaid: canMarkPaid && r.status === "approved",
   };
@@ -515,6 +554,7 @@ export const create = mutation({
     amountCents: v.number(),
     currency: v.optional(v.string()),
     payeeName: v.string(),
+    items: v.optional(v.array(paymentRequestItem)),
     country: v.optional(v.string()),
     requestDate: v.string(),
     fieldValues: v.optional(v.record(v.string(), v.string())),
@@ -529,7 +569,10 @@ export const create = mutation({
     const own = await employeeByUserId(ctx, orgId, userId);
     if (!own) throw new ConvexError("You don't have an employee profile yet.");
 
-    if (args.amountCents <= 0) throw new ConvexError("Amount must be positive.");
+    // When itemised, the total is the sum of the line items (authoritative).
+    const sanitized = sanitizeItems(args.items);
+    const amountCents = sanitized ? sanitized.totalCents : args.amountCents;
+    if (amountCents <= 0) throw new ConvexError("Amount must be positive.");
     if (!args.purpose.trim()) throw new ConvexError("Purpose is required.");
     if (!args.payeeName.trim()) throw new ConvexError("Payee is required.");
     if (args.attachmentStorageIds.length > MAX_ATTACHMENTS) {
@@ -559,9 +602,10 @@ export const create = mutation({
       templateId: args.templateId,
       requestNumber,
       purpose: args.purpose.trim(),
-      amountCents: args.amountCents,
+      amountCents,
       currency,
       payeeName: args.payeeName.trim(),
+      items: sanitized?.items,
       country: args.country?.trim().toUpperCase() || org.country,
       requestDate: args.requestDate,
       incurredMonth: args.requestDate.slice(0, 7),
@@ -851,6 +895,7 @@ export const editRequest = mutation({
     amountCents: v.number(),
     currency: v.optional(v.string()),
     payeeName: v.string(),
+    items: v.optional(v.array(paymentRequestItem)),
     country: v.optional(v.string()),
     requestDate: v.string(),
     fieldValues: v.optional(v.record(v.string(), v.string())),
@@ -880,7 +925,9 @@ export const editRequest = mutation({
       (isOwner && (request.status === "draft" || isPending || isRejected)) ||
       canApprover;
     if (!canEdit) throw new ConvexError("You can't edit this payment request.");
-    if (args.amountCents <= 0) throw new ConvexError("Amount must be positive.");
+    const sanitized = sanitizeItems(args.items);
+    const amountCents = sanitized ? sanitized.totalCents : args.amountCents;
+    if (amountCents <= 0) throw new ConvexError("Amount must be positive.");
     if (args.attachmentStorageIds.length > MAX_ATTACHMENTS) {
       throw new ConvexError(
         `A payment request can have at most ${MAX_ATTACHMENTS} attachments.`,
@@ -889,9 +936,9 @@ export const editRequest = mutation({
 
     const currency = args.currency ?? request.currency;
     const changes: string[] = [];
-    if (request.amountCents !== args.amountCents || request.currency !== currency) {
+    if (request.amountCents !== amountCents || request.currency !== currency) {
       changes.push(
-        `amount ${formatMoneyCents(request.amountCents, request.currency)} → ${formatMoneyCents(args.amountCents, currency)}`,
+        `amount ${formatMoneyCents(request.amountCents, request.currency)} → ${formatMoneyCents(amountCents, currency)}`,
       );
     }
     if (request.purpose !== args.purpose.trim()) changes.push("purpose");
@@ -908,9 +955,10 @@ export const editRequest = mutation({
 
     await ctx.db.patch(args.requestId, {
       purpose: args.purpose.trim(),
-      amountCents: args.amountCents,
+      amountCents,
       currency,
       payeeName: args.payeeName.trim(),
+      items: sanitized?.items,
       country: args.country?.trim().toUpperCase() || request.country,
       requestDate: args.requestDate,
       incurredMonth: args.requestDate.slice(0, 7),
@@ -1069,6 +1117,7 @@ const prRow = v.object({
   invoiceDate: v.union(v.string(), v.null()),
   status: paymentRequestStatus,
   attachmentCount: v.number(),
+  itemCount: v.number(),
   currentApprover: v.union(v.string(), v.null()),
   canMarkPaid: v.boolean(),
 });
@@ -1240,6 +1289,7 @@ export const get = query({
       amountCents: request.amountCents,
       currency: request.currency,
       payeeName: request.payeeName,
+      items: request.items ?? [],
       country: request.country ?? null,
       requestDate: request.requestDate,
       fieldValues: request.fieldValues ?? {},
@@ -1382,6 +1432,7 @@ export const getForPrint = query({
         amountCents: r.amountCents,
         currency: r.currency,
         payeeName: r.payeeName,
+        items: r.items ?? [],
         country: r.country ?? null,
         requestDate: r.requestDate,
         status: r.status,

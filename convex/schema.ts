@@ -47,6 +47,7 @@ import {
   paymentRequestStatus,
   paymentRequestField,
   paymentRequestShow,
+  paymentRequestItem,
   officeMileageSettings,
   jobStatus,
   candidateStage,
@@ -701,6 +702,10 @@ export default defineSchema({
     amountCents: v.number(),
     currency: v.string(),
     payeeName: v.string(),
+    // Itemised line items when the request pays for several things at once. When
+    // present and non-empty, `amountCents` is the sum of the line `amountCents`.
+    // Absent/empty means a single-amount request (the common case).
+    items: v.optional(v.array(paymentRequestItem)),
     // Country the payment relates to (ISO-3166 alpha-2, e.g. "SG"). A built-in
     // field on every request; defaults to the org country. Optional for legacy
     // rows created before it existed.
