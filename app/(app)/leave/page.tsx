@@ -10,14 +10,16 @@ export default function LeavePage() {
       <PageHeader
         title="My leave"
         description="Your requests, the team's calendar, and your balances."
-      >
-        <ApplyLeaveDialog />
-      </PageHeader>
+      />
 
-      {/* Primary: the leaves you've applied for. */}
+      {/* Primary: the leaves you've applied for. The Apply action lives with the
+          list controls so, on mobile, search + filters sit above it and the
+          request table keeps more of the screen. */}
       <section className="flex flex-col gap-2">
         <h2 className="px-4 text-sm font-medium lg:px-6">My requests</h2>
-        <MyLeaveRequests />
+        <MyLeaveRequests
+          action={<ApplyLeaveDialog className="w-full lg:w-auto" />}
+        />
       </section>
 
       {/* Team calendar — approved leave and public holidays across the org. */}

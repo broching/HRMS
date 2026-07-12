@@ -100,14 +100,18 @@ export function MyPaymentRequests() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      {/* Month + New request. On mobile this drops below the search/filters
+          (order-2) so the request table sits higher; inline padding keeps the
+          controls off the screen edge. */}
+      <div className="order-2 flex flex-wrap items-center justify-between gap-2 px-4 lg:order-1 lg:px-6">
         <MonthNav month={month} onChange={setMonth} />
         <SubmitPaymentRequestDialog month={month} />
       </div>
 
       {/* Search + filters. Search + Sort stay visible; the rest collapse behind a
-          Filters toggle on mobile and sit inline from lg. */}
-      <div className="flex flex-col gap-2">
+          Filters toggle on mobile and sit inline from lg. Pinned to the top on
+          mobile (order-1). */}
+      <div className="order-1 flex flex-col gap-2 px-4 lg:order-2 lg:px-6">
         <div className="flex items-center gap-2">
           <Input
             placeholder="Search ref, payee, purpose…"
@@ -227,7 +231,7 @@ export function MyPaymentRequests() {
         </div>
       </div>
 
-      <div className="rounded-lg border">
+      <div className="order-3 mx-4 rounded-lg border lg:mx-6">
         <Table>
           <TableHeader>
             <TableRow>

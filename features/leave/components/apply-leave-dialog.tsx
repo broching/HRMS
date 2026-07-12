@@ -35,7 +35,7 @@ const HALF = [
   { value: "pm", label: "Afternoon (PM)" },
 ]
 
-export function ApplyLeaveDialog() {
+export function ApplyLeaveDialog({ className }: { className?: string }) {
   const leaveTypes = useQuery(api.leaveTypes.list, {})
   const balances = useQuery(api.leaveBalances.myBalances, {})
   const apply = useMutation(api.leaveRequests.apply)
@@ -106,7 +106,7 @@ export function ApplyLeaveDialog() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button>
+        <Button className={className}>
           <IconPlus className="size-4" />
           Apply for leave
         </Button>

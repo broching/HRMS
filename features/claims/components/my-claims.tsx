@@ -211,8 +211,9 @@ export function MyClaims() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Month + batch actions */}
-      <div className="flex flex-col gap-3 px-4 sm:flex-row sm:items-center sm:justify-between lg:px-6">
+      {/* Month + batch actions. On mobile this drops below the search/filters
+          (order-2) so the claims table sits higher on the screen. */}
+      <div className="order-2 flex flex-col gap-3 px-4 sm:flex-row sm:items-center sm:justify-between lg:order-1 lg:px-6">
         <MonthNav month={month} onChange={setMonth} />
         <div className="flex items-center gap-2">
           {selected.size > 0 && (
@@ -237,8 +238,9 @@ export function MyClaims() {
       </div>
 
       {/* Filters — search stays visible; the two selects collapse behind a
-          "Filters" toggle on mobile so they don't dominate the small screen. */}
-      <div className="flex flex-col gap-3 px-4 lg:flex-row lg:items-center lg:px-6">
+          "Filters" toggle on mobile so they don't dominate the small screen.
+          Pinned to the top on mobile (order-1). */}
+      <div className="order-1 flex flex-col gap-3 px-4 lg:order-2 lg:flex-row lg:items-center lg:px-6">
         <div className="flex items-center gap-2">
           <div className="relative flex-1 lg:w-64 lg:flex-none">
             <IconSearch className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
@@ -298,7 +300,7 @@ export function MyClaims() {
         </div>
       </div>
 
-      <div className="mx-4 flex min-h-[65vh] flex-col rounded-lg border lg:mx-6 lg:min-h-0">
+      <div className="order-3 mx-4 flex min-h-[65vh] flex-col rounded-lg border lg:mx-6 lg:min-h-0">
         <Table>
           <TableHeader>
             <TableRow>

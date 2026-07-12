@@ -62,7 +62,7 @@ const STATUSES: LeaveStatus[] = [
 
 type Request = FunctionReturnType<typeof api.leaveRequests.mine>[number]
 
-export function MyLeaveRequests() {
+export function MyLeaveRequests({ action }: { action?: React.ReactNode }) {
   const requests = useQuery(api.leaveRequests.mine)
   const leaveTypes = useQuery(api.leaveTypes.list, {}) ?? []
   const cancel = useMutation(api.leaveRequests.cancel)
@@ -218,6 +218,7 @@ export function MyLeaveRequests() {
             )}
           </div>
         </div>
+        {action && <div className="lg:ml-auto">{action}</div>}
       </div>
 
       <div className="mx-4 flex min-h-[65vh] flex-col rounded-lg border lg:mx-6 lg:min-h-0">
