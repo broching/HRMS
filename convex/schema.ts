@@ -34,6 +34,7 @@ import {
   leaveTimelineEvent,
   leaveApproverStep,
   leaveChainStep,
+  leaveSignature,
   claimCategory,
   claimStatus,
   claimApproverStep,
@@ -414,18 +415,27 @@ export default defineSchema({
     // Earned leave (accrual).
     earnedEnabled: v.boolean(),
     accrualType: v.optional(accrualType),
-    // Proration on join/exit.
+    // Proration on join/exit. `prorateRounding` rounds the prorated figure
+    // specifically (e.g. always round a mid-year joiner's days up).
     proratedEnabled: v.boolean(),
     prorateMode: v.optional(prorateMode),
-    // Carry-forward.
+    prorateRounding: v.optional(roundingMode),
+    // Carry-forward. `carryForwardExpiry` (MM-DD) is the use-by date in the
+    // following year; carried days not used by then are forfeited. Absent = the
+    // carried days never expire within the year.
     carryForwardEnabled: v.boolean(),
     maxCarryForwardDays: v.optional(v.number()),
-    // Seniority increments.
+    carryForwardExpiry: v.optional(v.string()),
+    // Seniority increments. For `seniorityEffective: "period"`, a hire whose
+    // months of service in their joining year is below
+    // `seniorityFirstYearMinMonths` doesn't count that year — their service
+    // clock starts at the next period, delaying the first increment a year.
     seniorityEnabled: v.boolean(),
     seniorityEffective: v.optional(seniorityEffective),
     seniorityIncrementMode: v.optional(incrementMode),
     seniorityRules: v.optional(v.array(seniorityRule)),
     seniorityMaxDays: v.optional(v.number()),
+    seniorityFirstYearMinMonths: v.optional(v.number()),
     // Rounding + linkage.
     rounding: roundingMode,
     linkedLeaveTypeId: v.optional(v.id("leaveTypes")),
@@ -463,6 +473,23 @@ export default defineSchema({
     .index("by_org_employee_year", ["orgId", "employeeId", "year"])
     .index("by_employee_type_year", ["employeeId", "leaveTypeId", "year"]),
 
+  // Audit trail for manual leave-balance edits made by HR (who changed whose
+  // balance, by how much, when and why). One row per adjustment; the running
+  // total lives on `leaveBalances.adjustmentDays`.
+  leaveBalanceAdjustments: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    leaveTypeId: v.id("leaveTypes"),
+    year: v.number(),
+    deltaDays: v.number(), // signed change applied this event
+    newAdjustmentDays: v.number(), // resulting adjustmentDays total
+    reason: v.optional(v.string()),
+    actorUserId: v.optional(v.id("users")),
+    at: v.number(),
+  })
+    .index("by_org_employee", ["orgId", "employeeId"])
+    .index("by_employee_year", ["orgId", "employeeId", "year"]),
+
   leaveRequests: defineTable({
     orgId: v.id("organizations"),
     employeeId: v.id("employees"),
@@ -492,6 +519,8 @@ export default defineSchema({
     secondApproverUserId: v.optional(v.id("users")),
     // Bounded audit trail shown in the detail slide-over.
     timeline: v.optional(v.array(leaveTimelineEvent)),
+    // Approver signatures clocked at signature-gated approval steps.
+    signatures: v.optional(v.array(leaveSignature)),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])

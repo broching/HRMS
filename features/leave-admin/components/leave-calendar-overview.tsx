@@ -341,7 +341,7 @@ export function LeaveCalendarOverview({
                 {(employees ?? []).map((e) => (
                   <Link
                     key={e._id}
-                    href={`/employees/${e._id}`}
+                    href={`/employees/${e._id}?tab=leave`}
                     className="hover:bg-accent/50 flex items-center gap-3 border-t px-3 py-2.5"
                   >
                     <Avatar className="size-8">

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Fira_Code, Lora } from "next/font/google";
 import "./globals.css";
 
@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ClerkProvider } from "@clerk/nextjs";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
 import { Toaster } from "@/components/ui/sonner";
+import { PwaRegister } from "@/components/pwa-register";
 
 const fontSans = Inter({
   subsets: ["latin"],
@@ -25,11 +26,27 @@ const fontMono = Fira_Code({
 export const metadata: Metadata = {
   title: "Lead Mighty HR",
   description: "Lead Mighty Human Resource Management System",
+  applicationName: "LeadMighty HR",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "LeadMighty HR",
+  },
   icons: {
     icon: "/LeadMightylogo.png", // or .ico
     shortcut: "/LeadMightylogo.png",
     apple: "/LeadMightylogo.png",
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#2563eb" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f172a" },
+  ],
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -52,6 +69,7 @@ export default function RootLayout({
             <ConvexClientProvider>
               {children}
               <Toaster />
+              <PwaRegister />
             </ConvexClientProvider>
           </ClerkProvider>
         </ThemeProvider>

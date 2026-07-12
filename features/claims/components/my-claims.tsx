@@ -86,6 +86,19 @@ export function MyClaims() {
 
   const typeNameById = new Map(claimTypes.map((t) => [t._id, t.name]))
 
+  // Show the accurate pending stage a claim actually sits at (e.g. "Pending
+  // finance" vs "Pending manager"), derived from its resolved approval chain,
+  // rather than the coarse stored status.
+  function statusLabel(c: { status: ClaimStatus; currentApprover: string | null }) {
+    if (
+      (c.status === "pending_manager" || c.status === "pending_finance") &&
+      c.currentApprover
+    ) {
+      return `Pending ${c.currentApprover}`
+    }
+    return CLAIM_STATUS_LABELS[c.status]
+  }
+
   const monthClaims = (claims ?? [])
     .filter((c) => c.incurredDate.startsWith(month))
     .filter((c) => {
@@ -285,7 +298,7 @@ export function MyClaims() {
         </div>
       </div>
 
-      <div className="mx-4 flex min-h-[60vh] flex-col rounded-lg border lg:mx-6 lg:min-h-0">
+      <div className="mx-4 flex min-h-[65vh] flex-col rounded-lg border lg:mx-6 lg:min-h-0">
         <Table>
           <TableHeader>
             <TableRow>
@@ -370,7 +383,7 @@ export function MyClaims() {
                               className="sm:hidden"
                               variant={CLAIM_STATUS_BADGE[c.status]}
                             >
-                              {CLAIM_STATUS_LABELS[c.status]}
+                              {statusLabel(c)}
                             </Badge>
                           </div>
                         </TableCell>
@@ -382,7 +395,7 @@ export function MyClaims() {
                         </TableCell>
                         <TableCell className="hidden sm:table-cell">
                           <Badge variant={CLAIM_STATUS_BADGE[c.status]}>
-                            {CLAIM_STATUS_LABELS[c.status]}
+                            {statusLabel(c)}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">

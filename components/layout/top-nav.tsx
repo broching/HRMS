@@ -55,7 +55,7 @@ export function TopNav() {
         {/* LEFT PANEL */}
         {/* ---------------------------------------------------------------- */}
 
-        <div className="relative flex w-[380px] shrink-0 items-center bg-background px-2">
+        <div className="relative flex w-auto shrink-0 items-center bg-background pl-2 pr-2 md:w-[380px] md:pr-0">
           <Link
             href="/dashboard"
             className="flex items-center gap-0 text-2xl font-extrabold tracking-tight text-foreground"
@@ -65,23 +65,27 @@ export function TopNav() {
               alt="LeadMighty Logo"
               width={56}
               height={56}
-              className="h-12 w-12"
+              className="h-10 w-10 md:h-12 md:w-12"
               priority
             />
-            <Wordmark />
+            {/* Wordmark eats horizontal room on phones — logo alone identifies us there. */}
+            <span className="hidden sm:inline">
+              <Wordmark />
+            </span>
           </Link>
 
-          <div className="mx-3 h-8 w-px bg-border" />
+          <div className="mx-2 h-8 w-px bg-border sm:mx-3" />
 
           <OrgSwitcher />
 
-          {/* Diagonal transition */}
-
+          {/* Diagonal transition — a desktop flourish; off on mobile so it can't
+              overhang the compact left area. */}
           <div
             className="
           absolute
           -right-8
           top-0
+          hidden
           h-full
           w-16
           bg-background
@@ -89,6 +93,7 @@ export function TopNav() {
           border-r
           border-border
           z-10
+          md:block
         "
           />
         </div>
@@ -103,8 +108,10 @@ export function TopNav() {
         flex
         flex-1
         items-center
-        pl-9
-        pr-5
+        pl-3
+        pr-3
+        md:pl-9
+        md:pr-5
 
         bg-gradient-to-r
         from-sky-500
@@ -142,8 +149,12 @@ export function TopNav() {
 
           {/* Right */}
 
-          <div className="ml-auto flex items-center gap-2">
-            <GlobalSearch />
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+            {/* Search hides on the narrowest phones (still on ⌘K) to leave room
+                for notifications, the user menu and the nav hamburger. */}
+            <div className="hidden sm:block">
+              <GlobalSearch />
+            </div>
 
             <div className="rounded-xl border border-white/20 bg-white/10 p-1 backdrop-blur-md">
               <NotificationCenter />

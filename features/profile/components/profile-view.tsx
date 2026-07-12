@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
 import {
   IconUser,
@@ -66,6 +66,9 @@ type SectionKey =
 
 export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
   const router = useRouter()
+  // Optional deep-link to a specific section, e.g. `/employees/<id>?tab=leave`
+  // from the HR Lounge leave dashboard (opens the person's leave balances).
+  const initialTab = useSearchParams().get("tab") as SectionKey | null
   const [deleted, setDeleted] = React.useState(false)
   // Once deleted, stop subscribing to `employees.get` — the record is gone and
   // the query would throw "Employee not found" while we navigate away.
@@ -76,7 +79,9 @@ export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
   const setMyPhoto = useMutation(api.employees.setMyPhoto)
   const setPhoto = useMutation(api.employees.setPhoto)
   const removeEmployee = useMutation(api.employees.remove)
-  const [section, setSection] = React.useState<SectionKey>("profile")
+  const [section, setSection] = React.useState<SectionKey>(
+    initialTab ?? "profile",
+  )
   const [confirmDelete, setConfirmDelete] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
 

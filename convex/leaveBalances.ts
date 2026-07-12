@@ -1,11 +1,12 @@
 import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
-import { getOrgContext, requirePermission } from "./auth";
+import { getOrgContext, requirePermission, ctxHasPermission } from "./auth";
 import { requireEmployeeAccess, employeeByUserId } from "./employees";
 import { writeAuditLog } from "./lib/audit";
 import { resolvePolicyForEmployee } from "./leavePolicies";
-import { computeEntitlement } from "./model/leavePolicy";
+import { computeEntitlement, effectiveCarryForward } from "./model/leavePolicy";
+import { leaveBalanceAdjustmentRow } from "./lib/validators";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -91,7 +92,10 @@ async function balanceSheet(
       const entitledDays = policy
         ? computeEntitlement(policy, joinDate, year, asOf)
         : t.defaultEntitlementDays;
-      const carriedForwardDays = b?.carriedForwardDays ?? 0;
+      // Carried days that lapsed their use-by date show (and count) as 0.
+      const carriedForwardDays = policy
+        ? effectiveCarryForward(policy, year, b?.carriedForwardDays ?? 0, asOf)
+        : (b?.carriedForwardDays ?? 0);
       const takenDays = b?.takenDays ?? 0;
       const pendingDays = b?.pendingDays ?? 0;
       const adjustmentDays = b?.adjustmentDays ?? 0;
@@ -182,6 +186,121 @@ export const adjust = mutation({
   },
 });
 
+// Apply a signed adjustment to an employee's balance (from their profile) and
+// record it in the audit ledger, so HR keeps a who/what/when/why trail.
+export const adjustEntitlement = mutation({
+  args: {
+    employeeId: v.id("employees"),
+    leaveTypeId: v.id("leaveTypes"),
+    year: v.number(),
+    deltaDays: v.number(),
+    reason: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { orgId, userId } = await requirePermission(ctx, "leave:config");
+    if (args.deltaDays === 0) throw new Error("Enter a non-zero adjustment.");
+    const leaveType = await ctx.db.get(args.leaveTypeId);
+    if (!leaveType || leaveType.orgId !== orgId) {
+      throw new Error("Leave type not found.");
+    }
+    const employee = await ctx.db.get(args.employeeId);
+    if (!employee || employee.orgId !== orgId) {
+      throw new Error("Employee not found.");
+    }
+    const balance = await ensureBalance(
+      ctx,
+      orgId,
+      args.employeeId,
+      leaveType,
+      args.year,
+    );
+    const newAdjustmentDays = balance.adjustmentDays + args.deltaDays;
+    await ctx.db.patch(balance._id, { adjustmentDays: newAdjustmentDays });
+    const reason = args.reason?.trim() || undefined;
+    await ctx.db.insert("leaveBalanceAdjustments", {
+      orgId,
+      employeeId: args.employeeId,
+      leaveTypeId: args.leaveTypeId,
+      year: args.year,
+      deltaDays: args.deltaDays,
+      newAdjustmentDays,
+      reason,
+      actorUserId: userId,
+      at: Date.now(),
+    });
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "leaveBalance.adjustEntitlement",
+      entity: "leaveBalances",
+      entityId: balance._id,
+      after: { deltaDays: args.deltaDays, newAdjustmentDays, reason },
+    });
+    return null;
+  },
+});
+
+// Manual-adjustment audit timeline for an employee (most recent first). Gated on
+// `leave:config`; requires access to the employee via requireEmployeeAccess so a
+// manager viewing their own report can't read balance edits without the perm.
+export const adjustmentHistory = query({
+  args: { employeeId: v.id("employees"), year: v.optional(v.number()) },
+  returns: v.array(leaveBalanceAdjustmentRow),
+  handler: async (ctx, { employeeId, year }) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) return [];
+    if (!ctxHasPermission(orgCtx, "leave:config")) return [];
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgCtx.orgId) return [];
+    const rows = await ctx.db
+      .query("leaveBalanceAdjustments")
+      .withIndex("by_org_employee", (q) =>
+        q.eq("orgId", orgCtx.orgId).eq("employeeId", employeeId),
+      )
+      .collect();
+    const filtered = year != null ? rows.filter((r) => r.year === year) : rows;
+    filtered.sort((a, b) => b.at - a.at);
+    const typeCache = new Map<
+      string,
+      { name: string; color: string } | null
+    >();
+    const userCache = new Map<string, string | null>();
+    const out = [];
+    for (const r of filtered) {
+      let t = typeCache.get(r.leaveTypeId);
+      if (t === undefined) {
+        const doc = await ctx.db.get(r.leaveTypeId);
+        t = doc ? { name: doc.name, color: doc.color } : null;
+        typeCache.set(r.leaveTypeId, t);
+      }
+      let actorName: string | null = null;
+      if (r.actorUserId) {
+        const cached = userCache.get(r.actorUserId);
+        if (cached === undefined) {
+          const u = await ctx.db.get(r.actorUserId);
+          actorName = u?.name ?? u?.email ?? null;
+          userCache.set(r.actorUserId, actorName);
+        } else {
+          actorName = cached;
+        }
+      }
+      out.push({
+        _id: r._id,
+        at: r.at,
+        leaveTypeId: r.leaveTypeId,
+        leaveTypeName: t?.name ?? "—",
+        color: t?.color ?? "#6b7280",
+        deltaDays: r.deltaDays,
+        newAdjustmentDays: r.newAdjustmentDays,
+        reason: r.reason ?? null,
+        actorName,
+      });
+    }
+    return out;
+  },
+});
+
 // Tools → Initial Balances: set the starting carried-forward and/or manual
 // adjustment days for an employee+type+year (e.g. migrating from another HRIS).
 export const initialBalances = mutation({
@@ -258,9 +377,16 @@ export async function carryForwardForOrg(
         )
         .unique();
       const entitled = computeEntitlement(policy, emp.joinDate, fromYear, asOf);
+      // Carried days that lapsed their use-by date this year don't roll onward.
+      const carried = effectiveCarryForward(
+        policy,
+        fromYear,
+        bal?.carriedForwardDays ?? 0,
+        asOf,
+      );
       const available =
         entitled +
-        (bal?.carriedForwardDays ?? 0) +
+        carried +
         (bal?.adjustmentDays ?? 0) -
         (bal?.takenDays ?? 0) -
         (bal?.pendingDays ?? 0);

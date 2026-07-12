@@ -332,13 +332,16 @@ export const leavePolicyDoc = v.object({
   accrualType: v.optional(accrualType),
   proratedEnabled: v.boolean(),
   prorateMode: v.optional(prorateMode),
+  prorateRounding: v.optional(roundingMode),
   carryForwardEnabled: v.boolean(),
   maxCarryForwardDays: v.optional(v.number()),
+  carryForwardExpiry: v.optional(v.string()),
   seniorityEnabled: v.boolean(),
   seniorityEffective: v.optional(seniorityEffective),
   seniorityIncrementMode: v.optional(incrementMode),
   seniorityRules: v.optional(v.array(seniorityRule)),
   seniorityMaxDays: v.optional(v.number()),
+  seniorityFirstYearMinMonths: v.optional(v.number()),
   rounding: roundingMode,
   linkedLeaveTypeId: v.optional(v.id("leaveTypes")),
   useWorkingDays: v.boolean(),
@@ -360,6 +363,19 @@ export const leavePolicyAssignmentRow = v.object({
   employeeId: v.id("employees"),
   employeeName: v.string(),
   policyId: v.id("leavePolicies"),
+});
+
+// One manual leave-balance adjustment event (employee profile audit timeline).
+export const leaveBalanceAdjustmentRow = v.object({
+  _id: v.id("leaveBalanceAdjustments"),
+  at: v.number(),
+  leaveTypeId: v.id("leaveTypes"),
+  leaveTypeName: v.string(),
+  color: v.string(),
+  deltaDays: v.number(),
+  newAdjustmentDays: v.number(),
+  reason: v.union(v.string(), v.null()),
+  actorName: v.union(v.string(), v.null()),
 });
 
 export const holidayDoc = v.object({
@@ -394,6 +410,31 @@ const leaveRequestRowFields = {
 
 export const leaveRequestRow = v.object(leaveRequestRowFields);
 
+// One step of a leave request's resolved approval chain, for the stepper UI.
+// State is relative to the request's progress; `note` is the approver's remark.
+export const leaveApprovalChainStep = v.object({
+  label: v.string(),
+  approverName: v.union(v.string(), v.null()),
+  state: v.union(
+    v.literal("approved"),
+    v.literal("current"),
+    v.literal("upcoming"),
+    v.literal("rejected"),
+  ),
+  note: v.union(v.string(), v.null()),
+  decidedAt: v.union(v.number(), v.null()),
+});
+
+// Richer "My leave" row: the base row plus the resolved approval-chain stepper,
+// the attachment's content type (so the popup can render it inline), and the
+// name of the approver the request currently sits with.
+export const myLeaveRequestRow = v.object({
+  ...leaveRequestRowFields,
+  attachmentContentType: v.union(v.string(), v.null()),
+  currentApproverName: v.union(v.string(), v.null()),
+  approvalChain: v.array(leaveApprovalChainStep),
+});
+
 // Dashboard calendar row — adds the department/office labels used for chips
 // and filtering in the HR Lounge leave calendar.
 export const leaveDashboardRow = v.object({
@@ -420,20 +461,7 @@ export const leaveRequestDetail = v.object({
   // Resolved approval chain for the stepper. Each item is one step with its
   // display label, primary approver name, and state relative to the request's
   // progress. Empty for auto-approved requests with no chain.
-  approvalChain: v.array(
-    v.object({
-      label: v.string(),
-      approverName: v.union(v.string(), v.null()),
-      state: v.union(
-        v.literal("approved"),
-        v.literal("current"),
-        v.literal("upcoming"),
-        v.literal("rejected"),
-      ),
-      note: v.union(v.string(), v.null()),
-      decidedAt: v.union(v.number(), v.null()),
-    }),
-  ),
+  approvalChain: v.array(leaveApprovalChainStep),
   timeline: v.array(
     v.object({
       at: v.number(),
@@ -445,6 +473,8 @@ export const leaveRequestDetail = v.object({
   // Resolved server-side for the caller.
   canApprove: v.boolean(),
   canManage: v.boolean(),
+  // Whether approving the current step requires the caller to clock a signature.
+  needsSignature: v.boolean(),
 });
 
 // An employee in the dashboard's right-rail Employees list.
@@ -514,6 +544,10 @@ const claimRowFields = {
   description: v.string(),
   remarks: v.optional(v.string()),
   status: claimStatus,
+  // The approver a pending claim currently sits with (its chain step label, or
+  // "Finance"), null once terminal. Lets list views show the accurate pending
+  // stage rather than the coarse `pending_manager`/`pending_finance` status.
+  currentApprover: v.union(v.string(), v.null()),
   receiptCount: v.number(),
   decisionNote: v.optional(v.string()),
   mileageDistanceKm: v.optional(v.number()),
@@ -631,9 +665,8 @@ export const claimGroupApprovalItem = v.object({
   ...claimRowFields,
   receipts: v.array(claimReceipt),
   canAct: v.boolean(),
-  // The approver this claim currently sits with (chain step label, or "Finance"),
-  // null once terminal — drives the "chain flow" hint in the group drill-down.
-  currentApprover: v.union(v.string(), v.null()),
+  // `currentApprover` (inherited from claimRowFields) is the approver this claim
+  // currently sits with (chain step label, or "Finance"), null once terminal.
   // Pending but parked ahead of the batch: the group barrier is holding it until
   // the slower claims reach the same approver level.
   waitingForBatch: v.boolean(),

@@ -53,6 +53,7 @@ export type LeaveStepForm = {
   userIds: Id<"users">[]
   thresholdEnabled: boolean
   daysMoreThan: string
+  requiresSignature: boolean
 }
 
 export function newLeaveStepKey() {
@@ -309,6 +310,16 @@ export function LeaveApprovalChainEditor({
                       Enable threshold
                     </label>
 
+                    <label className="ml-28 flex w-fit items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={step.requiresSignature}
+                        onCheckedChange={(c) =>
+                          patchStep(i, { requiresSignature: c === true })
+                        }
+                      />
+                      Require signature to approve
+                    </label>
+
                     {step.thresholdEnabled && (
                       <div className="border-primary/40 bg-muted/40 ml-28 flex flex-wrap items-end gap-3 border-l-2 p-3 text-sm">
                         <div className="flex flex-col gap-1">
@@ -347,6 +358,7 @@ export function LeaveApprovalChainEditor({
               userIds: [],
               thresholdEnabled: false,
               daysMoreThan: "",
+              requiresSignature: false,
             },
           ])
         }

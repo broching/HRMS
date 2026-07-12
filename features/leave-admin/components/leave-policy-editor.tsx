@@ -31,8 +31,8 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { ConfirmDialog } from "@/components/shared/confirm-dialog"
-import { AssignPolicyDialog } from "./assign-policy-dialog"
 import { InitialBalancesDialog } from "./initial-balances-dialog"
+import { PolicyAvailabilityAssign } from "./policy-availability-assign"
 import {
   LeaveApprovalChainEditor,
   newLeaveStepKey,
@@ -47,24 +47,23 @@ type Form = {
   description: string
   availability: "all" | "groups"
   approvalChain: LeaveStepForm[]
-  entitlementMode: "fixed" | "upon_request"
   entitlementDays: number
   toleranceDays: number | undefined
-  earnedEnabled: boolean
-  accrualType: "daily" | "monthly"
   proratedEnabled: boolean
   prorateMode: "started" | "completed" | "partial"
+  prorateRounding: "none" | "up" | "down" | "nearest_half"
   carryForwardEnabled: boolean
   maxCarryForwardDays: number | undefined
+  carryForwardExpiry: string // "MM-DD" or ""
   seniorityEnabled: boolean
   seniorityEffective: "period" | "anniversary"
   seniorityIncrementMode: "fixed" | "variable"
   seniorityRules: { afterYears: number; addDays: number }[]
   seniorityMaxDays: number | undefined
+  seniorityFirstYearMinMonths: number | undefined
   rounding: "none" | "up" | "down" | "nearest_half"
   linkedLeaveTypeId: string
   useWorkingDays: boolean
-  allowApplyInPast: boolean
   minAdvanceDays: number | undefined
   maxAdvanceDays: number | undefined
   maxConsecutiveDays: number | undefined
@@ -84,6 +83,7 @@ function policyChainToForm(p: Policy): LeaveStepForm[] {
     userIds: s.userIds ?? [],
     thresholdEnabled: s.thresholdEnabled,
     daysMoreThan: s.daysMoreThan != null ? String(s.daysMoreThan) : "",
+    requiresSignature: s.requiresSignature ?? false,
   }))
 }
 
@@ -117,15 +117,14 @@ function toForm(p: Policy): Form {
     description: p.description ?? "",
     availability: p.availability,
     approvalChain: policyChainToForm(p),
-    entitlementMode: p.entitlementMode,
     entitlementDays: p.entitlementDays,
     toleranceDays: p.toleranceDays,
-    earnedEnabled: p.earnedEnabled,
-    accrualType: p.accrualType ?? "monthly",
     proratedEnabled: p.proratedEnabled,
     prorateMode: p.prorateMode ?? "partial",
+    prorateRounding: p.prorateRounding ?? p.rounding ?? "none",
     carryForwardEnabled: p.carryForwardEnabled,
     maxCarryForwardDays: p.maxCarryForwardDays,
+    carryForwardExpiry: p.carryForwardExpiry ?? "",
     seniorityEnabled: p.seniorityEnabled,
     seniorityEffective: p.seniorityEffective ?? "period",
     seniorityIncrementMode: p.seniorityIncrementMode ?? "fixed",
@@ -134,10 +133,10 @@ function toForm(p: Policy): Form {
         ? p.seniorityRules
         : [{ afterYears: 1, addDays: 1 }],
     seniorityMaxDays: p.seniorityMaxDays,
+    seniorityFirstYearMinMonths: p.seniorityFirstYearMinMonths ?? 4,
     rounding: p.rounding,
     linkedLeaveTypeId: p.linkedLeaveTypeId ?? "none",
     useWorkingDays: p.useWorkingDays,
-    allowApplyInPast: p.allowApplyInPast,
     minAdvanceDays: p.minAdvanceDays,
     maxAdvanceDays: p.maxAdvanceDays,
     maxConsecutiveDays: p.maxConsecutiveDays,
@@ -155,13 +154,11 @@ export function LeavePolicyEditor({
   const createPolicy = useMutation(api.leavePolicies.create)
   const updatePolicy = useMutation(api.leavePolicies.update)
   const removePolicy = useMutation(api.leavePolicies.remove)
-  const updateType = useMutation(api.leaveTypes.update)
 
   const leaveType = leaveTypes?.find((t) => t._id === leaveTypeId)
   const [selectedId, setSelectedId] = React.useState<Id<"leavePolicies"> | null>(
     null,
   )
-  const [assignOpen, setAssignOpen] = React.useState(false)
   const [balancesOpen, setBalancesOpen] = React.useState(false)
   const [addOpen, setAddOpen] = React.useState(false)
   const [newName, setNewName] = React.useState("")
@@ -216,20 +213,6 @@ export function LeavePolicyEditor({
             />
             Leave type — {leaveType?.name ?? "…"}
           </h2>
-          {leaveType && (
-            <label className="flex items-center gap-2 text-sm">
-              Auto assign
-              <Switch
-                checked={leaveType.autoAssign ?? false}
-                onCheckedChange={(v) =>
-                  updateType({ id: leaveTypeId, autoAssign: v }).then(
-                    () => toast.success(v ? "Auto-assign on" : "Auto-assign off"),
-                    () => toast.error("Could not update"),
-                  )
-                }
-              />
-            </label>
-          )}
         </div>
       </div>
 
@@ -240,12 +223,6 @@ export function LeavePolicyEditor({
           body="Set starting carried-forward and adjustment days per employee."
           action="Initial Balances"
           onClick={() => setBalancesOpen(true)}
-        />
-        <ToolCard
-          title="Assign Policy"
-          body="Assign a group policy to the relevant employees."
-          action="Assign Policy"
-          onClick={() => setAssignOpen(true)}
         />
       </div>
 
@@ -282,7 +259,7 @@ export function LeavePolicyEditor({
           <PolicyForm
             key={selected._id}
             policy={selected}
-            leaveTypes={leaveTypes.filter((t) => t._id !== leaveTypeId)}
+            leaveTypeId={leaveTypeId}
             roleOpts={(approverOptions?.roles ?? []).map((r) => ({
               value: r._id as string,
               label: r.name,
@@ -308,12 +285,6 @@ export function LeavePolicyEditor({
         )}
       </div>
 
-      <AssignPolicyDialog
-        open={assignOpen}
-        onOpenChange={setAssignOpen}
-        leaveTypeId={leaveTypeId}
-        policies={policies}
-      />
       <InitialBalancesDialog
         open={balancesOpen}
         onOpenChange={setBalancesOpen}
@@ -486,16 +457,202 @@ function NumberField({
   )
 }
 
+// ─── Proration ─────────────────────────────────────────────────────────────
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+]
+const MONTH_DAYS_2026 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+function roundDays(mode: Form["prorateRounding"], value: number): number {
+  switch (mode) {
+    case "up":
+      return Math.ceil(value)
+    case "down":
+      return Math.floor(value)
+    case "nearest_half":
+      return Math.round(value * 2) / 2
+    default:
+      return Math.round(value * 100) / 100
+  }
+}
+
+// Mirrors convex/model/leavePolicy.ts prorationFactor for a live preview.
+function prorationFactor(
+  mode: Form["prorateMode"],
+  jm: number,
+  jd: number,
+): number {
+  if (mode === "started") return (13 - jm) / 12
+  if (mode === "completed") return (12 - jm) / 12
+  const dim = MONTH_DAYS_2026[jm - 1]
+  const worked = dim - jd + 1
+  return Math.min(1, Math.max(0, (worked / dim + (12 - jm)) / 12))
+}
+
+// A worked example so HR can see exactly how the formula behaves. Uses a
+// mid-year hire (15 September) against the current entitlement.
+function ProrationConfig({
+  entitlementDays,
+  mode,
+  onModeChange,
+  rounding,
+  onRoundingChange,
+}: {
+  entitlementDays: number
+  mode: Form["prorateMode"]
+  onModeChange: (v: Form["prorateMode"]) => void
+  rounding: Form["prorateRounding"]
+  onRoundingChange: (v: Form["prorateRounding"]) => void
+}) {
+  const exM = 9
+  const exD = 15
+  const factor = prorationFactor(mode, exM, exD)
+  const raw = entitlementDays * factor
+  const rounded = roundDays(rounding, raw)
+  const monthsLabel =
+    mode === "started"
+      ? `${13 - exM}/12 months (join month counts)`
+      : mode === "completed"
+        ? `${12 - exM}/12 months (join month excluded)`
+        : `${(factor * 12).toFixed(2)}/12 months (by days worked)`
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap gap-4">
+        <div className="grid gap-1.5">
+          <Label className="text-xs">Basis</Label>
+          <Select
+            value={mode}
+            onValueChange={(v) => onModeChange(v as Form["prorateMode"])}
+          >
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="started">Count the joining month</SelectItem>
+              <SelectItem value="completed">Exclude the joining month</SelectItem>
+              <SelectItem value="partial">By days worked that month</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1.5">
+          <Label className="text-xs">Round prorated days</Label>
+          <Select
+            value={rounding}
+            onValueChange={(v) =>
+              onRoundingChange(v as Form["prorateRounding"])
+            }
+          >
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No rounding</SelectItem>
+              <SelectItem value="up">Round up</SelectItem>
+              <SelectItem value="down">Round down</SelectItem>
+              <SelectItem value="nearest_half">Nearest half day</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="bg-muted/40 rounded-md border p-3 text-sm">
+        <p className="text-muted-foreground mb-1 text-xs font-medium">
+          Example — joins 15 September
+        </p>
+        <p className="tabular-nums">
+          {entitlementDays} days × {monthsLabel} = {raw.toFixed(2)}{" "}
+          <span className="text-muted-foreground">→ rounds to</span>{" "}
+          <span className="font-semibold">{rounded} days</span>
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// A compact MM-DD picker (month dropdown + day number), producing "MM-DD".
+function MonthDayField({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (v: string) => void
+}) {
+  const [mm, dd] = value ? value.split("-") : ["", ""]
+  const month = mm ? Number(mm) : undefined
+  const day = dd ? Number(dd) : undefined
+  const emit = (m: number | undefined, d: number | undefined) => {
+    if (!m || !d) {
+      onChange("")
+      return
+    }
+    onChange(`${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`)
+  }
+  const maxDay = month ? MONTH_DAYS_2026[month - 1] : 31
+  return (
+    <div className="flex items-center gap-2">
+      <Select
+        value={month ? String(month) : ""}
+        onValueChange={(v) => emit(Number(v), day ?? 1)}
+      >
+        <SelectTrigger className="w-40">
+          <SelectValue placeholder="Month" />
+        </SelectTrigger>
+        <SelectContent>
+          {MONTH_NAMES.map((n, i) => (
+            <SelectItem key={n} value={String(i + 1)}>
+              {n}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Input
+        type="number"
+        min="1"
+        max={maxDay}
+        className="w-20"
+        placeholder="Day"
+        value={day ?? ""}
+        onChange={(e) =>
+          emit(
+            month,
+            e.target.value === ""
+              ? undefined
+              : Math.min(maxDay, Math.max(1, Number(e.target.value))),
+          )
+        }
+      />
+      {value && (
+        <Button variant="ghost" size="sm" onClick={() => onChange("")}>
+          Clear
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function seniorityFirstYearHint(minMonths: number): string {
+  if (minMonths <= 0) {
+    return "Every joining year counts toward seniority, even a December hire."
+  }
+  const firstExcluded = 14 - minMonths
+  if (firstExcluded > 12) return "Every joining year counts toward seniority."
+  return `A hire joining ${MONTH_NAMES[firstExcluded - 1]} or later (fewer than ${minMonths} month${
+    minMonths === 1 ? "" : "s"
+  } of service that year) starts their seniority clock the next January.`
+}
+
 function PolicyForm({
   policy,
-  leaveTypes,
+  leaveTypeId,
   roleOpts,
   memberOpts,
   onSave,
   onDelete,
 }: {
   policy: Policy
-  leaveTypes: { _id: Id<"leaveTypes">; name: string }[]
+  leaveTypeId: Id<"leaveTypes">
   roleOpts: { value: string; label: string }[]
   memberOpts: { value: string; label: string }[]
   onSave: (patch: Record<string, unknown>) => void
@@ -526,33 +683,41 @@ function PolicyForm({
         s.thresholdEnabled && s.daysMoreThan !== ""
           ? Number(s.daysMoreThan)
           : undefined,
+      requiresSignature: s.requiresSignature,
     }))
     onSave({
       name: f.name,
       description: f.description || undefined,
       availability: f.availability,
       approvalChain,
-      entitlementMode: f.entitlementMode,
+      // Entitlement is always "fixed" now; a 0-day policy (e.g. unpaid leave)
+      // stays untracked so it remains applicable without a balance.
+      entitlementMode: f.entitlementDays > 0 ? "fixed" : "upon_request",
       entitlementDays: f.entitlementDays,
       toleranceDays: f.toleranceDays,
-      earnedEnabled: f.earnedEnabled,
-      accrualType: f.accrualType,
+      // Earned/accrual leave has been removed — entitlement is credited up front.
+      earnedEnabled: false,
       proratedEnabled: f.proratedEnabled,
       prorateMode: f.prorateMode,
+      prorateRounding: f.prorateRounding,
       carryForwardEnabled: f.carryForwardEnabled,
       maxCarryForwardDays: f.maxCarryForwardDays,
+      carryForwardExpiry: f.carryForwardEnabled
+        ? f.carryForwardExpiry || undefined
+        : undefined,
       seniorityEnabled: f.seniorityEnabled,
       seniorityEffective: f.seniorityEffective,
       seniorityIncrementMode: f.seniorityIncrementMode,
       seniorityRules: f.seniorityRules,
       seniorityMaxDays: f.seniorityMaxDays,
+      seniorityFirstYearMinMonths: f.seniorityFirstYearMinMonths,
       rounding: f.rounding,
-      linkedLeaveTypeId:
-        f.linkedLeaveTypeId === "none"
-          ? undefined
-          : (f.linkedLeaveTypeId as Id<"leaveTypes">),
+      // Cross-type balance linkage has been removed from the editor; clear any
+      // legacy link on save so booked leave always deducts its own balance.
+      linkedLeaveTypeId: undefined,
       useWorkingDays: f.useWorkingDays,
-      allowApplyInPast: f.allowApplyInPast,
+      // Backdated leave is no longer permitted for any policy.
+      allowApplyInPast: false,
       minAdvanceDays: f.minAdvanceDays,
       maxAdvanceDays: f.maxAdvanceDays,
       maxConsecutiveDays: f.maxConsecutiveDays,
@@ -580,14 +745,28 @@ function PolicyForm({
         title="Policy availability"
         description="Restricted policies apply only to assigned employees."
       >
-        <Segmented
-          value={f.availability}
-          onChange={(v) => set("availability", v)}
-          options={[
-            { value: "all", label: "All employees" },
-            { value: "groups", label: "Certain groups" },
-          ]}
-        />
+        <div className="flex flex-col gap-3">
+          <Segmented
+            value={f.availability}
+            onChange={(v) => set("availability", v)}
+            options={[
+              { value: "all", label: "All employees" },
+              { value: "groups", label: "Certain groups" },
+            ]}
+          />
+          {!policy.isDefault && f.availability === "groups" && (
+            <PolicyAvailabilityAssign
+              leaveTypeId={leaveTypeId}
+              policyId={policy._id}
+            />
+          )}
+          {policy.isDefault && (
+            <p className="text-muted-foreground text-sm">
+              The default policy applies to every employee who isn&apos;t assigned
+              a specific group policy.
+            </p>
+          )}
+        </div>
       </Section>
 
       <Section
@@ -602,71 +781,38 @@ function PolicyForm({
         />
       </Section>
 
-      <Section title="Entitlement">
-        <div className="flex flex-col gap-3">
-          <Segmented
-            value={f.entitlementMode}
-            onChange={(v) => set("entitlementMode", v)}
-            options={[
-              { value: "fixed", label: "Fixed entitlement" },
-              { value: "upon_request", label: "Upon request" },
-            ]}
+      <Section
+        title="Entitlement"
+        description="Days credited up front each leave year for this policy. Set 0 for untracked leave (e.g. unpaid), which stays applicable without a balance."
+      >
+        <div className="flex flex-wrap gap-4">
+          <NumberField
+            label="Entitlement amount (days)"
+            value={f.entitlementDays}
+            onChange={(v) => set("entitlementDays", v ?? 0)}
           />
-          {f.entitlementMode === "fixed" && (
-            <div className="flex flex-wrap gap-4">
-              <NumberField
-                label="Entitlement amount (days)"
-                value={f.entitlementDays}
-                onChange={(v) => set("entitlementDays", v ?? 0)}
-              />
-              <NumberField
-                label="Tolerance (allowed overdraw)"
-                value={f.toleranceDays}
-                onChange={(v) => set("toleranceDays", v)}
-              />
-            </div>
-          )}
+          <NumberField
+            label="Tolerance (allowed overdraw)"
+            value={f.toleranceDays}
+            onChange={(v) => set("toleranceDays", v)}
+          />
         </div>
       </Section>
 
       <Section
-        title="Earned leave"
-        description="Accrue this leave through the year instead of crediting it all up front."
-        enabled={f.earnedEnabled}
-        onToggle={(v) => set("earnedEnabled", v)}
-      >
-        {f.earnedEnabled && (
-          <Segmented
-            value={f.accrualType}
-            onChange={(v) => set("accrualType", v)}
-            options={[
-              { value: "daily", label: "Daily basis" },
-              { value: "monthly", label: "Monthly basis" },
-            ]}
-          />
-        )}
-      </Section>
-
-      <Section
         title="Prorated leave"
-        description="Prorate the entitlement for employees who join mid-year."
+        description="Prorate the entitlement for employees who join part-way through the year."
         enabled={f.proratedEnabled}
         onToggle={(v) => set("proratedEnabled", v)}
       >
         {f.proratedEnabled && (
-          <Select
-            value={f.prorateMode}
-            onValueChange={(v) => set("prorateMode", v as Form["prorateMode"])}
-          >
-            <SelectTrigger className="w-48">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="started">Started month</SelectItem>
-              <SelectItem value="completed">Completed month</SelectItem>
-              <SelectItem value="partial">Partial month</SelectItem>
-            </SelectContent>
-          </Select>
+          <ProrationConfig
+            entitlementDays={f.entitlementDays}
+            mode={f.prorateMode}
+            onModeChange={(v) => set("prorateMode", v)}
+            rounding={f.prorateRounding}
+            onRoundingChange={(v) => set("prorateRounding", v)}
+          />
         )}
       </Section>
 
@@ -677,11 +823,24 @@ function PolicyForm({
         onToggle={(v) => set("carryForwardEnabled", v)}
       >
         {f.carryForwardEnabled && (
-          <NumberField
-            label="Max carry-forward days"
-            value={f.maxCarryForwardDays}
-            onChange={(v) => set("maxCarryForwardDays", v)}
-          />
+          <div className="flex flex-col gap-4">
+            <NumberField
+              label="Max carry-forward days"
+              value={f.maxCarryForwardDays}
+              onChange={(v) => set("maxCarryForwardDays", v)}
+            />
+            <div className="grid gap-1.5">
+              <Label className="text-xs">Expires by (next year)</Label>
+              <MonthDayField
+                value={f.carryForwardExpiry}
+                onChange={(v) => set("carryForwardExpiry", v)}
+              />
+              <p className="text-muted-foreground text-xs">
+                Carried days not used by this date next year are forfeited. Leave
+                blank to let them last the whole year.
+              </p>
+            </div>
+          </div>
         )}
       </Section>
 
@@ -700,8 +859,8 @@ function PolicyForm({
                   value={f.seniorityEffective}
                   onChange={(v) => set("seniorityEffective", v)}
                   options={[
-                    { value: "period", label: "Beginning of period" },
-                    { value: "anniversary", label: "Anniversary" },
+                    { value: "period", label: "Start of leave year" },
+                    { value: "anniversary", label: "Join anniversary" },
                   ]}
                 />
               </div>
@@ -717,6 +876,45 @@ function PolicyForm({
                 />
               </div>
             </div>
+
+            {f.seniorityEffective === "period" ? (
+              <div className="bg-muted/40 flex flex-col gap-2 rounded-md border p-3">
+                <p className="text-muted-foreground text-xs">
+                  Service is counted in whole leave years and increments take
+                  effect on 1 January. A new hire must work at least this many
+                  months in their joining year for that year to count — otherwise
+                  their service clock starts the next January, delaying the first
+                  increment by a year.
+                </p>
+                <div className="flex items-center gap-2 text-sm">
+                  Count the joining year only if the employee worked at least
+                  <input
+                    type="number"
+                    min="0"
+                    max="12"
+                    className="border-input w-16 rounded-md border px-2 py-1"
+                    value={f.seniorityFirstYearMinMonths ?? 0}
+                    onChange={(e) =>
+                      set(
+                        "seniorityFirstYearMinMonths",
+                        e.target.value === ""
+                          ? undefined
+                          : Number(e.target.value),
+                      )
+                    }
+                  />
+                  month(s).
+                </div>
+                <p className="text-muted-foreground text-xs">
+                  {seniorityFirstYearHint(f.seniorityFirstYearMinMonths ?? 0)}
+                </p>
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-xs">
+                Increments take effect on the employee&apos;s work anniversary,
+                based on continuous years of service.
+              </p>
+            )}
 
             {f.seniorityIncrementMode === "fixed" ? (
               <div className="text-sm">
@@ -835,28 +1033,6 @@ function PolicyForm({
         </Select>
       </Section>
 
-      <Section
-        title="Link to another leave type"
-        description="Leave booked here is deducted from the linked type's balance."
-      >
-        <Select
-          value={f.linkedLeaveTypeId}
-          onValueChange={(v) => set("linkedLeaveTypeId", v)}
-        >
-          <SelectTrigger className="w-56">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">None</SelectItem>
-            {leaveTypes.map((t) => (
-              <SelectItem key={t._id} value={t._id}>
-                {t.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Section>
-
       <Section title="Advance settings">
         <div className="flex flex-col gap-4">
           <label className="flex items-center justify-between text-sm">
@@ -869,18 +1045,6 @@ function PolicyForm({
             <Switch
               checked={f.useWorkingDays}
               onCheckedChange={(v) => set("useWorkingDays", v)}
-            />
-          </label>
-          <label className="flex items-center justify-between text-sm">
-            <span>
-              Allow applying for past dates
-              <span className="text-muted-foreground block text-xs">
-                Useful for sick / medical leave.
-              </span>
-            </span>
-            <Switch
-              checked={f.allowApplyInPast}
-              onCheckedChange={(v) => set("allowApplyInPast", v)}
             />
           </label>
           <div className="flex flex-wrap gap-4">

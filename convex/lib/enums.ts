@@ -245,6 +245,9 @@ export const leaveApproverStep = v.object({
   userIds: v.optional(v.array(v.id("users"))), // for "specific"
   thresholdEnabled: v.boolean(),
   daysMoreThan: v.optional(v.number()),
+  // When on, the approver must clock a signature to approve this step. Absent on
+  // steps saved before leave signatures existed (treated as false).
+  requiresSignature: v.optional(v.boolean()),
 });
 
 // One resolved step of a leave request's approval chain, snapshotted at apply
@@ -259,6 +262,18 @@ export const leaveChainStep = v.object({
   decidedByUserId: v.optional(v.id("users")),
   decidedAt: v.optional(v.number()),
   note: v.optional(v.string()),
+  // Snapshotted from the policy step: this step's approver must sign to approve.
+  requiresSignature: v.optional(v.boolean()),
+});
+
+// A signature applied to a leave request by an approver at an approval step.
+// `signatureStorageId` is a PNG in Convex storage. Mirrors `claimSignature`.
+export const leaveSignature = v.object({
+  role: v.string(), // the approval step label
+  byUserId: v.id("users"),
+  name: v.string(),
+  signatureStorageId: v.id("_storage"),
+  signedAt: v.number(),
 });
 
 // `fixed` credits a set number of days; `upon_request` tracks no balance (e.g.

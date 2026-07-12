@@ -7,9 +7,13 @@ import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { ensureBalance } from "./leaveBalances";
 import { resolvePolicyForEmployee } from "./leavePolicies";
-import { computeEntitlement } from "./model/leavePolicy";
+import { computeEntitlement, effectiveCarryForward } from "./model/leavePolicy";
 import { countLeaveDays, eachDateISO } from "./model/leaveCalc";
-import { leaveRequestRow, leaveRequestDetail } from "./lib/validators";
+import {
+  leaveRequestRow,
+  leaveRequestDetail,
+  myLeaveRequestRow,
+} from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
 import { pushNotification } from "./model/notify";
 
@@ -72,6 +76,7 @@ type ResolvedLeaveStep = {
   decidedByUserId?: Id<"users">;
   decidedAt?: number;
   note?: string;
+  requiresSignature?: boolean;
 };
 
 // A member's effective role document id: the explicitly assigned `roleId`, else
@@ -197,6 +202,7 @@ async function buildLeaveApprovalChain(
       approverUserId: ids[0],
       approverUserIds: ids,
       label,
+      requiresSignature: step.requiresSignature ?? false,
     });
   }
   return chain;
@@ -287,6 +293,71 @@ async function userName(
   if (!userId) return null;
   const u = await ctx.db.get(userId);
   return u?.name ?? null;
+}
+
+// Append the approving user's signature to the request's signature list, tagged
+// with the current step's label. Returns the updated array, or undefined when no
+// signature was supplied (so callers can skip patching the field).
+async function appendSignature(
+  ctx: MutationCtx,
+  req: Doc<"leaveRequests">,
+  step: ResolvedLeaveStep | undefined,
+  userId: Id<"users">,
+  signatureStorageId: Id<"_storage"> | undefined,
+): Promise<Doc<"leaveRequests">["signatures"] | undefined> {
+  if (!signatureStorageId) return undefined;
+  const u = await ctx.db.get(userId);
+  const name = u?.name?.trim() || u?.username || u?.email || "Approver";
+  return [
+    ...(req.signatures ?? []),
+    {
+      role: step?.label ?? "Approver",
+      byUserId: userId,
+      name,
+      signatureStorageId,
+      signedAt: Date.now(),
+    },
+  ];
+}
+
+// Resolve a request's approval chain into the stepper view (label + primary
+// approver name + state relative to the request's progress). Shared by the
+// detail slide-over and the requester's "My leave" popup.
+async function resolveChainView(ctx: QueryCtx, req: Doc<"leaveRequests">) {
+  if (!req.approvalChain) return [];
+  const curIndex = req.currentStepIndex ?? 0;
+  return await Promise.all(
+    req.approvalChain.map(async (s, idx) => {
+      let state: "approved" | "current" | "upcoming" | "rejected";
+      if (req.status === "approved") state = "approved";
+      else if (req.status === "rejected")
+        state =
+          idx < curIndex ? "approved" : idx === curIndex ? "rejected" : "upcoming";
+      else
+        state =
+          idx < curIndex ? "approved" : idx === curIndex ? "current" : "upcoming";
+      return {
+        label: s.label,
+        approverName: await userName(ctx, s.approverUserId),
+        state,
+        note: s.note ?? null,
+        decidedAt: s.decidedAt ?? null,
+      };
+    }),
+  );
+}
+
+// Whether the caller must clock a signature to approve the request's current
+// step (chain step flagged `requiresSignature`, and the caller can act now).
+function currentStepNeedsSignature(
+  req: Doc<"leaveRequests">,
+  userId: Id<"users">,
+): boolean {
+  if (!req.approvalChain || req.approvalChain.length === 0) return false;
+  if (req.status !== "pending" && req.status !== "info_requested") return false;
+  const step = req.approvalChain[req.currentStepIndex ?? 0];
+  if (!step?.requiresSignature) return false;
+  return currentStepApprovers(req).ids.includes(userId);
 }
 
 async function assertCanApprove(
@@ -421,10 +492,10 @@ export const apply = mutation({
       throw new Error("No bookable days in the selected range.");
     }
 
-    // Advance-booking rules from the policy.
+    // Advance-booking rules from the policy. Backdated leave is never allowed.
     const today = todayISO();
-    if (!policy.allowApplyInPast && args.startDate < today) {
-      throw new Error("This leave type can't be applied for past dates.");
+    if (args.startDate < today) {
+      throw new Error("Leave can't be applied for past dates.");
     }
     const lead = diffDays(today, args.startDate);
     if (policy.minAdvanceDays != null && lead < policy.minAdvanceDays) {
@@ -460,9 +531,15 @@ export const apply = mutation({
     if (tracked) {
       const bal = await ensureBalance(ctx, orgId, own._id, leaveType, year);
       const entitled = computeEntitlement(policy, own.joinDate, year, today);
+      const carried = effectiveCarryForward(
+        policy,
+        year,
+        bal.carriedForwardDays,
+        today,
+      );
       const available =
         entitled +
-        bal.carriedForwardDays +
+        carried +
         bal.adjustmentDays -
         bal.takenDays -
         bal.pendingDays;
@@ -527,9 +604,13 @@ export const apply = mutation({
 });
 
 export const approve = mutation({
-  args: { requestId: v.id("leaveRequests"), note: v.optional(v.string()) },
+  args: {
+    requestId: v.id("leaveRequests"),
+    note: v.optional(v.string()),
+    signatureStorageId: v.optional(v.id("_storage")),
+  },
   returns: v.null(),
-  handler: async (ctx, { requestId, note }) => {
+  handler: async (ctx, { requestId, note, signatureStorageId }) => {
     const orgCtx = await requireOrg(ctx);
     const req = await ctx.db.get(requestId);
     if (!req || req.orgId !== orgCtx.orgId) throw new Error("Request not found.");
@@ -542,6 +623,17 @@ export const approve = mutation({
     if (req.approvalChain && req.approvalChain.length > 0) {
       const i = req.currentStepIndex ?? 0;
       const now = Date.now();
+      const step = req.approvalChain[i];
+      if (step?.requiresSignature && !signatureStorageId) {
+        throw new Error("A signature is required to approve this step.");
+      }
+      const signatures = await appendSignature(
+        ctx,
+        req,
+        step,
+        orgCtx.userId,
+        signatureStorageId,
+      );
       const chain = req.approvalChain.map((s, idx) =>
         idx === i
           ? { ...s, decidedByUserId: orgCtx.userId, decidedAt: now, note }
@@ -554,6 +646,7 @@ export const approve = mutation({
           approvalChain: chain,
           currentStepIndex: nextIndex,
           status: "pending",
+          ...(signatures ? { signatures } : {}),
           timeline: pushTimeline(req, {
             at: now,
             actorUserId: orgCtx.userId,
@@ -608,6 +701,7 @@ export const approve = mutation({
         approverUserId: orgCtx.userId,
         decidedAt: now,
         decisionNote: note,
+        ...(signatures ? { signatures } : {}),
         timeline: pushTimeline(req, {
           at: now,
           actorUserId: orgCtx.userId,
@@ -900,8 +994,8 @@ export const respond = mutation({
     if (totalDays <= 0) throw new Error("No bookable days in the selected range.");
 
     const today = todayISO();
-    if (!policy.allowApplyInPast && startDate < today) {
-      throw new Error("This leave type can't be applied for past dates.");
+    if (startDate < today) {
+      throw new Error("Leave can't be applied for past dates.");
     }
     if (
       policy.maxConsecutiveDays != null &&
@@ -939,9 +1033,15 @@ export const respond = mutation({
         year,
       );
       const entitled = computeEntitlement(policy, own.joinDate, year, today);
+      const carried = effectiveCarryForward(
+        policy,
+        year,
+        bal.carriedForwardDays,
+        today,
+      );
       const available =
         entitled +
-        bal.carriedForwardDays +
+        carried +
         bal.adjustmentDays -
         bal.takenDays -
         bal.pendingDays;
@@ -1173,7 +1273,7 @@ export const generateUploadUrl = mutation({
 
 export const mine = query({
   args: {},
-  returns: v.array(leaveRequestRow),
+  returns: v.array(myLeaveRequestRow),
   handler: async (ctx) => {
     const orgCtx = await getOrgContext(ctx);
     if (!orgCtx) return [];
@@ -1184,7 +1284,27 @@ export const mine = query({
       .withIndex("by_employee", (q) => q.eq("employeeId", own._id))
       .collect();
     reqs.sort((a, b) => (a.startDate < b.startDate ? 1 : -1));
-    return await Promise.all(reqs.map((r) => hydrate(ctx, r)));
+    return await Promise.all(
+      reqs.map(async (r) => {
+        const base = await hydrate(ctx, r);
+        const approvalChain = await resolveChainView(ctx, r);
+        const curIndex = r.currentStepIndex ?? 0;
+        const meta = r.attachmentStorageId
+          ? await ctx.db.system.get(r.attachmentStorageId)
+          : null;
+        return {
+          ...base,
+          attachmentContentType: meta?.contentType ?? null,
+          currentApproverName:
+            r.status === "pending" || r.status === "info_requested"
+              ? (approvalChain[curIndex]?.approverName ??
+                approvalChain[curIndex]?.label ??
+                null)
+              : null,
+          approvalChain,
+        };
+      }),
+    );
   },
 });
 
@@ -1261,24 +1381,7 @@ export const get = query({
     // Resolve the chain for the stepper. Legacy in-flight requests (no chain)
     // still report their two-step approver names below.
     const curIndex = req.currentStepIndex ?? 0;
-    const approvalChainView = req.approvalChain
-      ? await Promise.all(
-          req.approvalChain.map(async (s, idx) => {
-            let state: "approved" | "current" | "upcoming" | "rejected";
-            if (req.status === "approved") state = "approved";
-            else if (req.status === "rejected")
-              state = idx < curIndex ? "approved" : idx === curIndex ? "rejected" : "upcoming";
-            else state = idx < curIndex ? "approved" : idx === curIndex ? "current" : "upcoming";
-            return {
-              label: s.label,
-              approverName: await userName(ctx, s.approverUserId),
-              state,
-              note: s.note ?? null,
-              decidedAt: s.decidedAt ?? null,
-            };
-          }),
-        )
-      : [];
+    const approvalChainView = await resolveChainView(ctx, req);
 
     const [firstApproverName, secondApproverName] = await Promise.all([
       userName(ctx, req.firstApproverUserId),
@@ -1338,6 +1441,7 @@ export const get = query({
           : canManage || canActNow) &&
         (req.status === "pending" || req.status === "info_requested"),
       canManage,
+      needsSignature: currentStepNeedsSignature(req, orgCtx.userId),
     };
   },
 });

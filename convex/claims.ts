@@ -195,6 +195,7 @@ async function hydrateClaim(ctx: QueryCtx, claim: Doc<"claims">) {
     description: claim.description,
     remarks: claim.remarks,
     status: claim.status,
+    currentApprover: currentApproverLabel(claim),
     receiptCount: claim.receiptStorageIds.length,
     decisionNote: claim.decisionNote,
     mileageDistanceKm: claim.mileageDistanceKm,

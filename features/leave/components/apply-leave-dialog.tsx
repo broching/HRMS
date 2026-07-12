@@ -157,6 +157,7 @@ export function ApplyLeaveDialog() {
               <Input
                 type="date"
                 value={startDate}
+                min={today()}
                 onChange={(e) => {
                   setStartDate(e.target.value)
                   if (endDate < e.target.value) setEndDate(e.target.value)

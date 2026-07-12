@@ -27,6 +27,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { ConfirmDialog } from "@/components/shared/confirm-dialog"
+import { SignatureCaptureDialog } from "@/features/payroll/components/signature-pad"
 import {
   LEAVE_STATUS_LABELS,
   LEAVE_STATUS_BADGE,
@@ -61,12 +62,14 @@ export function LeaveDetailPanel({
   const requireInfo = useMutation(api.leaveRequests.requireInfo)
   const cancel = useMutation(api.leaveRequests.cancel)
   const remove = useMutation(api.leaveRequests.deleteRequest)
+  const getUploadUrl = useMutation(api.leaveRequests.generateUploadUrl)
 
   const [mode, setMode] = React.useState<"reject" | "info" | null>(null)
   const [note, setNote] = React.useState("")
   const [busy, setBusy] = React.useState(false)
   const [editOpen, setEditOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [signOpen, setSignOpen] = React.useState(false)
 
   React.useEffect(() => {
     // Reset transient action state when switching requests.
@@ -238,13 +241,16 @@ export function LeaveDetailPanel({
                           className="bg-emerald-600 hover:bg-emerald-700"
                           disabled={busy}
                           onClick={() =>
-                            run(
-                              approve({ requestId: detail._id }),
-                              "Leave approved",
-                            )
+                            detail.needsSignature
+                              ? setSignOpen(true)
+                              : run(
+                                  approve({ requestId: detail._id }),
+                                  "Leave approved",
+                                )
                           }
                         >
-                          <IconCheck className="size-4" /> Approve
+                          <IconCheck className="size-4" />{" "}
+                          {detail.needsSignature ? "Approve & sign" : "Approve"}
                         </Button>
                         <Button
                           variant="destructive"
@@ -362,6 +368,25 @@ export function LeaveDetailPanel({
               onConfirm={() =>
                 run(remove({ requestId: detail._id }), "Leave deleted", true)
               }
+            />
+
+            <SignatureCaptureDialog
+              open={signOpen}
+              onOpenChange={setSignOpen}
+              title="Sign to approve"
+              description="Your signature is recorded against this leave request as your approval."
+              confirmLabel="Approve & sign"
+              getUploadUrl={getUploadUrl}
+              onSigned={async (signatureStorageId) => {
+                await run(
+                  approve({
+                    requestId: detail._id,
+                    signatureStorageId: signatureStorageId as Id<"_storage">,
+                  }),
+                  "Leave approved",
+                )
+                setSignOpen(false)
+              }}
             />
           </>
         )}

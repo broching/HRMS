@@ -58,6 +58,39 @@ export function yearsOfService(joinIso: string, asOfIso: string): number {
   return Math.floor(completedMonths(joinIso, asOfIso) / 12);
 }
 
+/** Default months an employee must work in their joining year for that year to
+ * count toward seniority (a hire in the last 3 months of the year doesn't). */
+export const DEFAULT_SENIORITY_MIN_MONTHS = 4;
+
+/**
+ * Years of service used for seniority increments in `year`.
+ *
+ * `anniversary` — measured continuously from the join date (increments land on
+ * the work anniversary). `period` — measured in whole leave-year periods: the
+ * service clock is anchored to the start of the joining year, so at each period
+ * start (year boundary) it ticks up by one. A hire whose months of service in
+ * their joining year fall below `seniorityFirstYearMinMonths` doesn't count that
+ * year — their clock starts at the next period, delaying the first increment by
+ * a full year (e.g. someone joining in October waits until the year after next).
+ */
+export function seniorityYearsOfService(
+  policy: LeavePolicy,
+  joinIso: string,
+  year: number,
+  asOfIso: string,
+): number {
+  if ((policy.seniorityEffective ?? "period") === "anniversary") {
+    return yearsOfService(joinIso, asOfIso);
+  }
+  const join = parse(joinIso);
+  const minMonths =
+    policy.seniorityFirstYearMinMonths ?? DEFAULT_SENIORITY_MIN_MONTHS;
+  // Months worked in the joining calendar year (the join month counts).
+  const monthsWorkedJoinYear = 13 - join.m;
+  const anchorYear = monthsWorkedJoinYear >= minMonths ? join.y : join.y + 1;
+  return Math.max(0, year - anchorYear);
+}
+
 // ─── Engine pieces ─────────────────────────────────────────────────────────
 
 /**
@@ -128,40 +161,29 @@ export function applyRounding(
 }
 
 /**
- * Fraction (0..1) of the year's entitlement that has *vested* as of a date,
- * for earned (accrual) leave. Accrues linearly over the period the employee is
- * active that year (from max(join, Jan 1) to Dec 31). 1 when not earned.
+ * Days carried into `year` that are still usable as of `asOfIso`. Carried-
+ * forward days expire on `carryForwardExpiry` (MM-DD) of the leave year — after
+ * that date they're forfeited. No expiry configured → they last the whole year.
  */
-export function vestedFraction(
+export function effectiveCarryForward(
   policy: LeavePolicy,
-  joinIso: string,
   year: number,
+  carriedDays: number,
   asOfIso: string,
 ): number {
-  if (!policy.earnedEnabled) return 1;
-  const join = parse(joinIso);
-  const startIso =
-    join.y === year ? joinIso : join.y < year ? `${year}-01-01` : null;
-  if (!startIso) return 0; // not joined yet this year
-  const endIso = `${year}-12-31`;
-  // Clamp asOf into the active window.
-  let asOf = asOfIso;
-  if (asOf < startIso) return 0;
-  if (asOf > endIso) asOf = endIso;
-  if ((policy.accrualType ?? "monthly") === "monthly") {
-    const total = completedMonths(startIso, endIso) || 1;
-    // +1 so the first month vests at month end of the join month onward.
-    const elapsed = completedMonths(startIso, asOf) + 1;
-    return Math.min(1, elapsed / (total + 1));
+  if (!carriedDays || carriedDays <= 0) return carriedDays || 0;
+  if (!policy.carryForwardEnabled || !policy.carryForwardExpiry) {
+    return carriedDays;
   }
-  const total = inclusiveDays(startIso, endIso);
-  const elapsed = inclusiveDays(startIso, asOf);
-  return Math.min(1, elapsed / total);
+  const expiryIso = `${year}-${policy.carryForwardExpiry}`;
+  return asOfIso > expiryIso ? 0 : carriedDays;
 }
 
 /**
  * Days entitled under this policy for `year`, as of `asOfIso`. `upon_request`
  * policies are untracked (return 0 — availability is enforced as "always").
+ * Entitlement = (fixed days + seniority increments), prorated for a mid-year
+ * join when enabled, then rounded (proration has its own rounding option).
  */
 export function computeEntitlement(
   policy: LeavePolicy,
@@ -171,18 +193,12 @@ export function computeEntitlement(
 ): number {
   if (policy.entitlementMode === "upon_request") return 0;
 
-  // Seniority is measured at the start of the reference period, or on the
-  // employee's anniversary within the year.
-  const refIso =
-    (policy.seniorityEffective ?? "period") === "anniversary"
-      ? asOfIso
-      : `${year}-01-01`;
-  const yos = yearsOfService(joinIso, refIso);
+  const yos = seniorityYearsOfService(policy, joinIso, year, asOfIso);
+  const base = policy.entitlementDays + seniorityDays(policy, yos);
 
-  const annual =
-    (policy.entitlementDays + seniorityDays(policy, yos)) *
-    prorationFactor(policy, joinIso, year);
-
-  const vested = annual * vestedFraction(policy, joinIso, year, asOfIso);
-  return applyRounding(policy.rounding, vested);
+  if (policy.proratedEnabled) {
+    const prorated = base * prorationFactor(policy, joinIso, year);
+    return applyRounding(policy.prorateRounding ?? policy.rounding, prorated);
+  }
+  return applyRounding(policy.rounding, base);
 }

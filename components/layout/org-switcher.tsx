@@ -86,9 +86,9 @@ export function OrgSwitcher() {
   // Single-org users get a plain, non-interactive display.
   if (!canSwitch) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2">
+      <div className="flex items-center gap-2 px-2 py-2 sm:px-3">
         <OrgLogo name={name} imageUrl={org?.imageUrl} />
-        <span className="text-foreground truncate text-sm font-semibold">
+        <span className="text-foreground max-w-[32vw] truncate text-sm font-semibold sm:max-w-none">
           {name}
         </span>
       </div>
@@ -99,13 +99,13 @@ export function OrgSwitcher() {
     <DropdownMenu>
       <DropdownMenuTrigger
         disabled={switching}
-        className="hover:bg-accent flex items-center gap-2 rounded-xl px-3 py-2 outline-none transition"
+        className="hover:bg-accent flex items-center gap-2 rounded-xl px-2 py-2 outline-none transition sm:px-3"
       >
         <OrgLogo name={name} imageUrl={org?.imageUrl} />
-        <span className="text-foreground truncate text-sm font-semibold">
+        <span className="text-foreground max-w-[28vw] truncate text-sm font-semibold sm:max-w-none">
           {name}
         </span>
-        <IconChevronDown className="text-muted-foreground size-4" />
+        <IconChevronDown className="text-muted-foreground size-4 shrink-0" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-60">
         {memberships.map((m) => {

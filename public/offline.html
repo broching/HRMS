@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Offline · Lead Mighty HR</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: #f8fafc;
+        color: #0f172a;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0f172a; color: #e2e8f0; }
+      }
+      .card { text-align: center; padding: 2rem; max-width: 22rem; }
+      img { width: 56px; height: 56px; }
+      h1 { font-size: 1.25rem; margin: 1rem 0 0.25rem; }
+      p { margin: 0; color: #64748b; font-size: 0.9rem; }
+      button {
+        margin-top: 1.25rem;
+        border: 0;
+        border-radius: 0.75rem;
+        background: #2563eb;
+        color: #fff;
+        padding: 0.6rem 1.25rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <img src="/LeadMightylogo.png" alt="Lead Mighty HR" />
+      <h1>You're offline</h1>
+      <p>Lead Mighty HR needs a connection to load your latest data. Reconnect and try again.</p>
+      <button onclick="location.reload()">Retry</button>
+    </div>
+  </body>
+</html>
