@@ -130,6 +130,8 @@ function TemplateEditor({
     api.paymentRequestTemplates.get,
     open && templateId ? { templateId } : "skip",
   )
+  // The org's own logo/name, so the preview mirrors the real printed document.
+  const org = useQuery(api.organizations.current, open ? {} : "skip")
   const save = useMutation(api.paymentRequestTemplates.save)
 
   const [name, setName] = React.useState("")
@@ -273,8 +275,8 @@ function TemplateEditor({
   const sampleReq = {
     _id: "preview",
     requestNumber: 7,
-    orgName: "Your Company",
-    logoUrl: null,
+    orgName: org?.name ?? "Your Company",
+    logoUrl: org?.imageUrl ?? null,
     headerText: headerText || "REQUEST FOR PAYMENT",
     style: null,
     employeeName: "Muhammad Falikh Bin Fisal",
@@ -552,6 +554,12 @@ function TemplateEditor({
                   </label>
                 ))}
               </div>
+              {show.logo && org && !org.imageUrl && (
+                <p className="text-muted-foreground text-xs">
+                  No organization logo uploaded yet — add one in Organization
+                  settings and it will appear here and on printed documents.
+                </p>
+              )}
             </div>
           </div>
 

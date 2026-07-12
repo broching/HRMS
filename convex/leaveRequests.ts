@@ -11,6 +11,7 @@ import { computeEntitlement } from "./model/leavePolicy";
 import { countLeaveDays, eachDateISO } from "./model/leaveCalc";
 import { leaveRequestRow, leaveRequestDetail } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
+import { pushNotification } from "./model/notify";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -320,14 +321,13 @@ async function notify(
   requestId: Id<"leaveRequests">,
 ) {
   if (!recipientUserId) return;
-  await ctx.db.insert("notifications", {
+  await pushNotification(ctx, {
     orgId,
     recipientUserId,
     type,
     title,
     body,
     entityRef: { table: "leaveRequests", id: requestId },
-    read: false,
   });
 }
 
@@ -1147,13 +1147,12 @@ export const nudgeApprovers = mutation({
     let nudged = 0;
     for (const [approver, count] of counts) {
       if (nudged >= 200) break;
-      await ctx.db.insert("notifications", {
+      await pushNotification(ctx, {
         orgId: orgCtx.orgId,
         recipientUserId: approver,
         type: "leave.nudge",
         title: "Leave approvals pending",
         body: `You have ${count} leave request(s) awaiting your approval.`,
-        read: false,
       });
       nudged++;
     }

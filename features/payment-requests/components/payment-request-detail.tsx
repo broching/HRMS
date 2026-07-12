@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { getErrorMessage } from "@/lib/errors"
+import { countryName } from "@/lib/countries"
 import {
   PR_STATUS_LABELS,
   PR_STATUS_BADGE,
@@ -205,6 +206,9 @@ export function PaymentRequestDetailDialog({
                   }
                 />
                 <Row label="Account / payee" value={request.payeeName} />
+                {request.country && (
+                  <Row label="Country" value={countryName(request.country)} />
+                )}
                 {request.templateFields.map((f) => {
                   const val = request.fieldValues[f.key]
                   if (!val) return null
@@ -340,6 +344,21 @@ export function PaymentRequestDetailDialog({
                   >
                     <IconSend className="size-4" />
                     Submit
+                  </Button>
+                )}
+                {request.canResubmit && (
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    onClick={() =>
+                      run(
+                        () => submitDraft({ requestId: request._id }),
+                        "Resubmitted",
+                      )
+                    }
+                  >
+                    <IconSend className="size-4" />
+                    Resubmit
                   </Button>
                 )}
                 {request.canApprove && !rejecting && (

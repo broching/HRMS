@@ -89,6 +89,17 @@ import {
   feedback360Answer,
 } from "./lib/enums";
 
+// Per-module email notification config. `enabled` gates whether emails send for
+// that module; the rest customize the email template (all optional, falling
+// back to sensible defaults at render time).
+const emailModuleConfig = v.object({
+  enabled: v.boolean(),
+  accentColor: v.optional(v.string()), // hex, e.g. "#2563eb" — header + button
+  fontFamily: v.optional(v.string()), // "system" | "serif" | "mono" | "rounded"
+  fromName: v.optional(v.string()), // display name in the From header
+  footerText: v.optional(v.string()),
+});
+
 export default defineSchema({
   // ─── Foundation: tenancy + identity ──────────────────────────────────────
 
@@ -690,6 +701,10 @@ export default defineSchema({
     amountCents: v.number(),
     currency: v.string(),
     payeeName: v.string(),
+    // Country the payment relates to (ISO-3166 alpha-2, e.g. "SG"). A built-in
+    // field on every request; defaults to the org country. Optional for legacy
+    // rows created before it existed.
+    country: v.optional(v.string()),
     requestDate: v.string(), // ISO date the request is for
     incurredMonth: v.string(), // "YYYY-MM" derived from requestDate, for filters
     // Org-defined custom-field values, keyed by `paymentRequestField.key`. All
@@ -1326,4 +1341,54 @@ export default defineSchema({
     .index("byPaymentId", ["payment_id"])
     .index("byUserId", ["userId"])
     .index("byPayerUserId", ["payer.user_id"]),
+
+  // ─── Saved signatures ────────────────────────────────────────────────────
+
+  // A reusable signature a user has saved so they can re-apply it when signing
+  // claims / payslips / payment requests instead of drawing it every time. A
+  // user may keep several (e.g. a formal and a casual one). The `storageId`
+  // points at the PNG in Convex storage; it is shared with any document the
+  // signature has been applied to, so `remove` deletes only this row (never the
+  // storage) to avoid breaking already-signed documents.
+  savedSignatures: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    storageId: v.id("_storage"),
+    label: v.string(),
+  }).index("by_org_and_user", ["orgId", "userId"]),
+
+  // ─── Email notification settings (one row per org) ───────────────────────
+
+  // Controls whether an in-app notification also fans out to a Resend email,
+  // per feature, plus the branding applied to those emails. Absent row = all
+  // email off (in-app only), matching the pre-existing behavior.
+  emailSettings: defineTable({
+    orgId: v.id("organizations"),
+    // Per-module email config: whether emails are sent for that module, plus its
+    // own template customization (accent color, font, footer, from-name). Absent
+    // module (or absent row) = email off for it.
+    modules: v.optional(
+      v.object({
+        claims: emailModuleConfig,
+        paymentRequests: emailModuleConfig,
+        payroll: emailModuleConfig,
+        leave: emailModuleConfig,
+      }),
+    ),
+    // Shared branding: a single logo used across all module emails.
+    logoStorageId: v.optional(v.id("_storage")),
+    // ── Legacy flat fields (pre per-module). Kept optional so existing rows
+    // validate; read as fallbacks when a module hasn't set its own value. ──
+    features: v.optional(
+      v.object({
+        claims: v.boolean(),
+        paymentRequests: v.boolean(),
+        payroll: v.boolean(),
+        leave: v.boolean(),
+      }),
+    ),
+    fromName: v.optional(v.string()),
+    accentColor: v.optional(v.string()),
+    footerText: v.optional(v.string()),
+  }).index("by_org", ["orgId"]),
 });

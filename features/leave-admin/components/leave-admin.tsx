@@ -8,14 +8,16 @@ import { LeaveManagement } from "./leave-management"
 import { LeavePoliciesList } from "./leave-policies-list"
 import { LeaveDetailPanel } from "./leave-detail-panel"
 import { HolidaysManager } from "./holidays-manager"
+import { ModuleEmailSettings } from "@/features/org-settings/components/email-settings"
 
-type Tab = "dashboard" | "management" | "policies" | "holidays"
+type Tab = "dashboard" | "management" | "policies" | "holidays" | "email"
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "dashboard", label: "Dashboard" },
   { key: "management", label: "Leave Management" },
   { key: "policies", label: "Leave Policies" },
   { key: "holidays", label: "Public Holidays" },
+  { key: "email", label: "Email" },
 ]
 
 export function LeaveAdmin() {
@@ -52,6 +54,12 @@ export function LeaveAdmin() {
       )}
       {tab === "policies" && <LeavePoliciesList />}
       {tab === "holidays" && <HolidaysManager />}
+      {/* ModuleEmailSettings self-pads; cancel the parent's px so it aligns. */}
+      {tab === "email" && (
+        <div className="-mx-4 lg:-mx-6">
+          <ModuleEmailSettings module="leave" />
+        </div>
+      )}
 
       <LeaveDetailPanel requestId={selected} onClose={() => setSelected(null)} />
     </div>

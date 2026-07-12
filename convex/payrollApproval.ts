@@ -9,6 +9,7 @@ import {
 } from "./auth";
 import { getPayrollSettings } from "./payrollSettings";
 import { writeAuditLog } from "./lib/audit";
+import { pushNotification } from "./model/notify";
 import { monthLabel } from "./payroll";
 
 type ChainStep = Doc<"payslips">["approvalChain"] extends
@@ -44,14 +45,13 @@ async function notifyApprovers(
     if (actorUserId && uid === actorUserId) continue;
     if (seen.has(uid)) continue;
     seen.add(uid);
-    await ctx.db.insert("notifications", {
+    await pushNotification(ctx, {
       orgId,
       recipientUserId: uid,
       type: "payroll.approval_pending",
       title: "Payslips awaiting your approval",
       body: `Payroll for ${label} has payslips awaiting your approval.`,
       entityRef: { table: "payrollRuns", id: run._id },
-      read: false,
     });
   }
 }
@@ -411,14 +411,13 @@ export const releaseRun = mutation({
       if (slip.orgId !== orgId) continue;
       const emp = await ctx.db.get(slip.employeeId);
       if (!emp?.userId) continue;
-      await ctx.db.insert("notifications", {
+      await pushNotification(ctx, {
         orgId,
         recipientUserId: emp.userId,
         type: "payroll.payslip_released",
         title: "Payslip available",
         body: `Your payslip for ${label} has been released.`,
         entityRef: { table: "payslips", id: slip._id },
-        read: false,
       });
     }
     await writeAuditLog(ctx, {

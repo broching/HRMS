@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { getErrorMessage } from "@/lib/errors"
+import { COUNTRIES } from "@/lib/countries"
 import { CURRENCIES } from "@/features/payment-requests/lib/labels"
 import {
   PaymentRequestAttachments,
@@ -50,6 +51,7 @@ export function EditPaymentRequestDialog({
   const [payeeName, setPayeeName] = React.useState("")
   const [amount, setAmount] = React.useState("")
   const [currency, setCurrency] = React.useState("")
+  const [country, setCountry] = React.useState("")
   const [requestDate, setRequestDate] = React.useState("")
   const [fieldValues, setFieldValues] = React.useState<Record<string, string>>({})
   const [attachments, setAttachments] = React.useState<Attachment[]>([])
@@ -65,6 +67,7 @@ export function EditPaymentRequestDialog({
     setPayeeName(request.payeeName)
     setAmount((request.amountCents / 100).toString())
     setCurrency(request.currency)
+    setCountry(request.country ?? "")
     setRequestDate(request.requestDate)
     setFieldValues({ ...(request.fieldValues as Record<string, string>) })
     setRemarks(request.remarks ?? "")
@@ -96,6 +99,7 @@ export function EditPaymentRequestDialog({
         amountCents,
         currency: currency || undefined,
         payeeName: payeeName.trim(),
+        country: country || undefined,
         requestDate,
         fieldValues: Object.keys(fieldValues).length ? fieldValues : undefined,
         attachmentStorageIds: attachments.map((a) => a.id),
@@ -163,9 +167,29 @@ export function EditPaymentRequestDialog({
                 </Select>
               </div>
             </div>
-            <div className="grid gap-2">
-              <Label>Account / payee name</Label>
-              <Input value={payeeName} onChange={(e) => setPayeeName(e.target.value)} />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Account / payee name</Label>
+                <Input
+                  value={payeeName}
+                  onChange={(e) => setPayeeName(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Country</Label>
+                <Select value={country} onValueChange={setCountry}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select country" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COUNTRIES.map((c) => (
+                      <SelectItem key={c.code} value={c.code}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <CustomFieldInputs
               fields={request.templateFields}

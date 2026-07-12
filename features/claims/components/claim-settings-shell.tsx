@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ClaimSettingsGeneral } from "./claim-settings-general"
 import { ClaimSettings } from "./claim-settings"
 import { ClaimGroupsSettings } from "./claim-groups-settings"
+import { ModuleEmailSettings } from "@/features/org-settings/components/email-settings"
 
 function ComingSoon({ label }: { label: string }) {
   return (
@@ -21,6 +22,7 @@ export function ClaimSettingsShell() {
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="types">Claim types</TabsTrigger>
           <TabsTrigger value="groups">Claim groups</TabsTrigger>
+          <TabsTrigger value="email">Email</TabsTrigger>
           <TabsTrigger value="custom">Custom configuration</TabsTrigger>
         </TabsList>
       </div>
@@ -33,6 +35,9 @@ export function ClaimSettingsShell() {
       </TabsContent>
       <TabsContent value="groups">
         <ClaimGroupsSettings />
+      </TabsContent>
+      <TabsContent value="email">
+        <ModuleEmailSettings module="claims" />
       </TabsContent>
       <TabsContent value="custom">
         <div className="px-4 lg:px-6">

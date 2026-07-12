@@ -1,12 +1,14 @@
 import ExcelJS from "exceljs"
 import type { PaymentRequestStatus } from "@/convex/lib/enums"
 import { PR_STATUS_LABELS, monthLabel, requestRef } from "@/features/payment-requests/lib/labels"
+import { countryName } from "@/lib/countries"
 
 export type PaymentRequestExportRow = {
   requestNumber: number
   employeeName: string
   purpose: string
   payeeName: string
+  country: string | null
   amountCents: number
   currency: string
   requestDate: string
@@ -96,6 +98,7 @@ export async function buildPaymentRequestsWorkbook(opts: {
     "Ref",
     "Requestor",
     "Payee",
+    "Country",
     "Purpose",
     "Date",
     "Amount",
@@ -117,6 +120,7 @@ export async function buildPaymentRequestsWorkbook(opts: {
       requestRef(r.requestNumber),
       r.employeeName,
       r.payeeName,
+      countryName(r.country),
       r.purpose,
       r.requestDate,
       cents(r.amountCents),
@@ -125,21 +129,22 @@ export async function buildPaymentRequestsWorkbook(opts: {
     ])
   }
 
-  const totalRow = ws.addRow(["", "", "", "", "Total", cents(grand), rows[0]?.currency ?? "", ""])
+  const totalRow = ws.addRow(["", "", "", "", "", "Total", cents(grand), rows[0]?.currency ?? "", ""])
   totalRow.font = { bold: true }
   totalRow.eachCell((cell) => {
     cell.border = { top: { style: "thin" }, bottom: { style: "double" } }
   })
 
-  ws.getColumn(6).numFmt = MONEY
+  ws.getColumn(7).numFmt = MONEY
   ws.getColumn(1).width = 12
   ws.getColumn(2).width = 24
   ws.getColumn(3).width = 26
-  ws.getColumn(4).width = 36
-  ws.getColumn(5).width = 12
-  ws.getColumn(6).width = 14
-  ws.getColumn(7).width = 10
-  ws.getColumn(8).width = 16
+  ws.getColumn(4).width = 16
+  ws.getColumn(5).width = 36
+  ws.getColumn(6).width = 12
+  ws.getColumn(7).width = 14
+  ws.getColumn(8).width = 10
+  ws.getColumn(9).width = 16
   ws.views = [{ state: "frozen", ySplit: headerRowIdx }]
 
   const signatures = unionSignatures(rows)

@@ -313,6 +313,62 @@ approves **individually** (no monthly batch / group barrier).
   (ExcelJS) exports **one row per request** (not grouped by payee) with a grand
   total + union of approver signatures.
 
+### Payment Requests — edit-after-submit, resubmit, country & filters
+
+- **Editing after submission**: `editRequest`'s `canEdit` now lets the
+  **requestor** edit their own request while `draft`, while **pending**
+  (`pending_manager`/`pending_finance`), or after it was **rejected**; eligible
+  **approvers** can still edit a pending one (`canActNow`). The same rule drives
+  `get`'s `canEdit`. The edit dialog isn't status-gated, so it just works.
+- **Resubmit after rejection**: `submitRequest` now accepts `draft` **or**
+  `rejected` (owner only). Resubmitting a rejected request first clears the
+  prior decision (`decidedAt`/`decisionNote`/`rejectedStepIndex`/
+  `financeApproverUserId`/`signatures` → undefined) then calls `routeRequest`,
+  which rebuilds the chain fresh from `currentStepIndex 0`. `get` exposes
+  `canResubmit` (`isMine && rejected`); the detail panel shows a **Resubmit**
+  button (rejected requests remain non-deletable, mirroring claims).
+- **Country (built-in field)**: `paymentRequests.country` (ISO-3166 alpha-2,
+  optional for legacy rows) is now a first-class field on every request,
+  defaulting to the org country (`org.country`) at create. Threaded through
+  `create`/`editRequest` args, `hydrateRow`/`prRow`, `get`, `exportRows`,
+  `getForPrint`. Shared country list at `lib/countries.ts` (`COUNTRIES`,
+  `countryName(code)`). Rendered on the submit + edit dialogs (Country select
+  next to payee), the detail panel, the printed document
+  (`payment-request-document.tsx`), and the Excel export (new Country column).
+- **Search + filters** (client-side over the month's rows) on **both** the
+  approver/HR queue (`payment-requests-approval-queue.tsx`) **and** the
+  requestor's own list (`my-payment-requests.tsx`): a search box (ref/payee/
+  purpose — plus requestor on the queue), plus **Country**, **Status** (all
+  `paymentRequestStatus`), and **Amount min/max** filters, with a Clear link.
+  Country options are the distinct countries present in the loaded rows. A
+  **Country** column (hidden < lg) was added to both lists.
+- **Sorting**: both lists have a **Sort** dropdown (`PR_SORT_OPTIONS` +
+  `sortPaymentRequests` in `lib/labels.ts`): Newest/Oldest (submission), Date
+  newest/oldest (`requestDate`), Invoice date newest/oldest. **Invoice date** =
+  the `invoiceDate` custom-field value ("Date of Invoice" on the default
+  template), surfaced on `prRow`/`hydrateRow` as `invoiceDate`. Rows missing the
+  chosen date sort to the bottom.
+- **Mark paid in the table**: `prRow`/`hydrateRow` now carry `canMarkPaid`
+  (true only for `approved` rows when the caller is oversight/finance —
+  computed once per query). `approved` was pulled out of the queue's
+  `COMPLETED` bucket so ready-to-pay requests stay in the **active** list with a
+  prominent green **Mark paid** button (confirm dialog → `markPaid`). The
+  requestor list passes `canMarkPaid=false`.
+- **Template preview logo fix**: the template editor preview
+  (`payment-request-templates-settings.tsx`) previously hardcoded
+  `logoUrl:null`, so the Logo toggle showed nothing. It now feeds the org's real
+  logo + name (`organizations.current` → `imageUrl`/`name`) into the sample
+  request, and hints to upload an org logo when none exists. (The real printed
+  document already resolved the logo via `getForPrint`.)
+
+## Claims — per-row Mark reimbursed
+
+In the claim-group drill-down (`claims-approval-queue.tsx` → `GroupClaims`),
+**approved** claims now show a green **Mark reimbursed** button in the row's
+Actions cell for finance (`claims:approve:finance`), with a confirm dialog →
+`api.claims.markReimbursed` (single claim). The existing footer **Mark all
+reimbursed (n)** (`markGroupReimbursed`) is unchanged.
+
 ## Payslip individual download now uses real PDF
 
 `printPayslip` (browser print-to-PDF via `window.print` + `@media print`) is
@@ -322,8 +378,114 @@ new `downloadBlob`/`downloadPayslipPdf` helpers) which rasterizes the actual
 `PayslipDocument` to a real `.pdf` (the same pipeline as the bulk ZIP). The old
 `printPayslip` export is now unused.
 
+## Saved signatures (reusable)
+
+Users can save the signatures they draw/type and re-apply them anywhere the
+shared `SignatureCaptureDialog` is used (claims, payslips, payment requests).
+
+- **Schema** (`convex/schema.ts`): `savedSignatures` (`orgId`, `userId`,
+  `storageId`, `label`), index `by_org_and_user`. Capped at 8 per user (oldest
+  dropped on overflow).
+- **Backend** (`convex/savedSignatures.ts`): `list` (newest-first, resolves
+  image URLs), `generateUploadUrl`, `save({storageId,label})`, `remove({id})`.
+  `remove` deletes **only the row, never the storage blob** — the `storageId`
+  is shared with whatever document the signature was applied to, so deleting a
+  saved signature must not break an already-signed claim/payslip.
+- **UI** (`features/payroll/components/signature-pad.tsx`): the dialog now has
+  three tabs — **Saved** (grid of saved signatures, click to select, hover-X to
+  delete; the default tab when any exist), **Draw**, **Type**. Draw/Type mode
+  has a "Save this signature for reuse" checkbox + label. On confirm with a
+  saved signature it reuses that `storageId` directly (no upload); on a fresh
+  one it uploads, optionally saves a reusable copy sharing that same
+  `storageId`, then signs. All six call sites get this for free — no prop
+  changes (the dialog talks to `api.savedSignatures` itself).
+
+## Email notifications (Resend)
+
+Every in-app notification for the four core features can now also fan out to an
+email with a CTA button that deep-links to the relevant page. Off by default
+(in-app only) until an org opts a feature in.
+
+- **Central helper** (`convex/model/notify.ts`): `pushNotification(ctx, args)`
+  inserts the `notifications` row **and** schedules the email action. Every
+  feature that used to `ctx.db.insert("notifications")` inline now routes
+  through it — `claims.ts`/`paymentRequests.ts`/`leaveRequests.ts` `notify`
+  wrappers, `leaveRequests` nudge, and `payrollApproval` (`notifyApprovers` +
+  release). New notification sites should call `pushNotification`, not insert
+  directly.
+- **Pipeline** (`convex/email.ts`): `sendNotificationEmail` (internalAction,
+  scheduled) → `buildNotificationEmail` (internalQuery). The query gates on
+  `emailSettings.features[feature]` (feature derived from the type prefix), the
+  recipient having an email, then renders the HTML and returns
+  `{to,subject,html,fromName}` or `null`. The action POSTs to the Resend API
+  (`https://api.resend.com/emails`) with `RESEND_API_KEY`; **no-ops gracefully**
+  if email is disabled or the key is unset. `fetch` runs in the default Convex
+  runtime (no `"use node"`).
+- **Feature/route/label mapping** (`convex/lib/notificationRoutes.ts`, pure,
+  kept in sync with the client `hrefFor` in `notification-center.tsx`):
+  `featureForType` (`claim.`→claims, `payment_request.`→paymentRequests,
+  `payroll.`→payroll, `leave.`→leave), `routeForNotification`, `ctaLabelForType`.
+  **Approver-facing events open the Team approval surface**, requester-facing
+  events open the requester's own list — split by the notification `type`
+  (which encodes the recipient):
+  - `claim.submitted` → `/claims/requests`; other `claim.*` → `/claims`.
+  - `payment_request.submitted` → `/payment-requests/requests`; other
+    `payment_request.*` (progressed/approved/rejected/paid, all sent to the
+    requester) → `/payment-requests`.
+  - `leave.requested`/`leave.nudge`/`leave.resubmitted` → `/leave/requests`;
+    other `leave.*` (incl. `info_requested`, which goes back to the employee) →
+    `/leave`.
+  - `payroll.approval*` → `/payroll/approvals`; payslip → `/payslips`.
+  (The client `hrefFor` previously had **no** `payment_request` case and fell
+  through to `/dashboard` — now fixed to match.)
+- **HTML template** (`convex/lib/emailTemplate.ts`, pure): table-based,
+  inline-styled, escaped; header (logo or org name on the accent colour), title,
+  body, CTA button, footer. `accentColor` is hex-validated; `fontFamily`
+  selects an email-safe stack (`system`/`serif`/`mono`/`rounded`).
+- **Per-module settings** (`convex/emailSettings.ts`, one `emailSettings`
+  row/org): each of the 4 modules has its own config —
+  `modules.{claims,paymentRequests,payroll,leave}` = `{enabled, accentColor,
+  fontFamily, fromName, footerText}` (all but `enabled` optional). A **shared
+  `logoStorageId`** is used across all modules. Legacy flat fields
+  (`features`/`fromName`/`accentColor`/`footerText`) are kept optional and read
+  as fallbacks so pre-existing rows keep working. `get` returns the resolved
+  per-module config + logo URL; `save({modules})` writes all four (admin only);
+  `buildNotificationEmail` reads `modules[feature]` (falling back to the legacy
+  flat fields) and gates on that module's `enabled`.
+- **Settings UI relocated per module**: `ModuleEmailSettings`
+  (`features/org-settings/components/email-settings.tsx`) renders **one**
+  module's config — a Send-emails switch, accent colour, font, from-name,
+  footer, the shared logo uploader, and a live preview. It's embedded as an
+  **Email tab** in each module's own settings: Claims
+  (`claim-settings-shell.tsx`), Payment requests
+  (`payment-request-settings-shell.tsx`), Payroll (`payroll-settings-tabs.tsx`),
+  and Leave (`leave-admin.tsx`). Saving preserves the other three modules
+  untouched. **No longer** on the Organization settings page.
+- **CTA links** need an absolute origin: Convex env `APP_URL` (set to
+  `http://localhost:3000` for dev — **change to the deployed app origin for
+  production**).
+- **Resend env** (dev deployment, set via Convex): `RESEND_API_KEY` (a
+  `sending_access` key named "HRMS notifications"), `RESEND_FROM`
+  (`onboarding@resend.dev`). ⚠️ **The `chatnexis.com` domain is not verified**,
+  so emails currently send from Resend's shared test sender and **only deliver
+  to the Resend account owner**. To email real recipients: verify a domain in
+  Resend and set `RESEND_FROM` to an address on it (and set the same env vars on
+  the **prod** deployment, which does not have them yet).
+
 ## Known gaps / follow-ups
 
+- `APP_URL` is dev localhost; email CTA links won't work for real recipients
+  until it (and `RESEND_API_KEY`/`RESEND_FROM`) are set on prod and a Resend
+  domain is verified.
+- Email fan-out covers the 4 core features (claims/payment requests/payroll/
+  leave), now configured per module (Claims/Payroll/Leave/Payment requests →
+  **Email** tab), each with its own accent/font/from-name/footer + a shared
+  logo. Other notification types (feed, recruitment, reviews, attendance,
+  schedules) remain in-app only — route them through `pushNotification` and add
+  a `featureForType` mapping to extend.
+- Invoice-date sorting keys off the `invoiceDate` custom-field key (the default
+  template's "Date of Invoice"); a template that renames that field's key won't
+  populate the Invoice-date sort.
 - No "recall" to send a `pending_approval` run back to `draft`.
 - Seeded SHG/SDL rate tables still need verification against the current
   published figures (flagged in the Statutory-funds settings tab).

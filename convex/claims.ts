@@ -21,6 +21,7 @@ import {
   mileageClaimSettings,
 } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
+import { pushNotification } from "./model/notify";
 import type { ClaimStatus } from "./lib/enums";
 import {
   CLAIM_GROUP_HR,
@@ -269,14 +270,13 @@ async function notify(
   claimId: Id<"claims">,
 ) {
   if (!recipientUserId) return;
-  await ctx.db.insert("notifications", {
+  await pushNotification(ctx, {
     orgId,
     recipientUserId,
     type,
     title,
     body,
     entityRef: { table: "claims", id: claimId },
-    read: false,
   });
 }
 

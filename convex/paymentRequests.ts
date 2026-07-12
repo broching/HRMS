@@ -9,6 +9,7 @@ import {
 } from "./auth";
 import { employeeByUserId } from "./employees";
 import { writeAuditLog } from "./lib/audit";
+import { pushNotification } from "./model/notify";
 import {
   CLAIM_GROUP_HR,
   CLAIM_GROUP_FINANCE,
@@ -292,14 +293,13 @@ async function notify(
   requestId: Id<"paymentRequests">,
 ) {
   if (!recipientUserId) return;
-  await ctx.db.insert("notifications", {
+  await pushNotification(ctx, {
     orgId,
     recipientUserId,
     type,
     title,
     body,
     entityRef: { table: "paymentRequests", id: requestId },
-    read: false,
   });
 }
 
@@ -354,7 +354,14 @@ async function resolveAttachments(ctx: QueryCtx, storageIds: Id<"_storage">[]) {
   return out;
 }
 
-async function hydrateRow(ctx: QueryCtx, r: Doc<"paymentRequests">) {
+// `canMarkPaid` reflects whether the *caller* may mark this row paid — passed in
+// by the query after resolving finance/oversight once, and only true for
+// approved rows. Requestor-facing lists pass false.
+async function hydrateRow(
+  ctx: QueryCtx,
+  r: Doc<"paymentRequests">,
+  canMarkPaid = false,
+) {
   const emp = await ctx.db.get(r.employeeId);
   return {
     _id: r._id,
@@ -364,12 +371,17 @@ async function hydrateRow(ctx: QueryCtx, r: Doc<"paymentRequests">) {
     employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
     purpose: r.purpose,
     payeeName: r.payeeName,
+    country: r.country ?? null,
     amountCents: r.amountCents,
     currency: r.currency,
     requestDate: r.requestDate,
+    // "Date of Invoice" custom field (key `invoiceDate` on the default
+    // template), surfaced for sorting/filtering. Null when unset.
+    invoiceDate: r.fieldValues?.invoiceDate ?? null,
     status: r.status,
     attachmentCount: r.attachmentStorageIds.length,
     currentApprover: currentApproverLabel(r),
+    canMarkPaid: canMarkPaid && r.status === "approved",
   };
 }
 
@@ -503,6 +515,7 @@ export const create = mutation({
     amountCents: v.number(),
     currency: v.optional(v.string()),
     payeeName: v.string(),
+    country: v.optional(v.string()),
     requestDate: v.string(),
     fieldValues: v.optional(v.record(v.string(), v.string())),
     attachmentStorageIds: v.array(v.id("_storage")),
@@ -549,6 +562,7 @@ export const create = mutation({
       amountCents: args.amountCents,
       currency,
       payeeName: args.payeeName.trim(),
+      country: args.country?.trim().toUpperCase() || org.country,
       requestDate: args.requestDate,
       incurredMonth: args.requestDate.slice(0, 7),
       fieldValues: args.fieldValues,
@@ -589,10 +603,28 @@ export const submitRequest = mutation({
     if (!own || request.employeeId !== own._id) {
       throw new ConvexError("Only the requestor can submit this request.");
     }
-    if (request.status !== "draft") {
-      throw new ConvexError("Only drafts can be submitted.");
+    if (request.status !== "draft" && request.status !== "rejected") {
+      throw new ConvexError("Only drafts or rejected requests can be submitted.");
+    }
+    // Resubmitting a rejected request: clear the prior decision so it routes
+    // through the approval chain fresh (routeRequest rebuilds the chain).
+    if (request.status === "rejected") {
+      await ctx.db.patch(requestId, {
+        decidedAt: undefined,
+        decisionNote: undefined,
+        rejectedStepIndex: undefined,
+        financeApproverUserId: undefined,
+        signatures: undefined,
+      });
     }
     await routeRequest(ctx, orgId, request);
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "payment_request.submit",
+      entity: "paymentRequests",
+      entityId: requestId,
+    });
     return null;
   },
 });
@@ -819,6 +851,7 @@ export const editRequest = mutation({
     amountCents: v.number(),
     currency: v.optional(v.string()),
     payeeName: v.string(),
+    country: v.optional(v.string()),
     requestDate: v.string(),
     fieldValues: v.optional(v.record(v.string(), v.string())),
     attachmentStorageIds: v.array(v.id("_storage")),
@@ -837,10 +870,15 @@ export const editRequest = mutation({
     const isPending =
       request.status === "pending_manager" ||
       request.status === "pending_finance";
+    const isRejected = request.status === "rejected";
     const settings = await resolvePaymentRequestSettings(ctx, orgId);
     const canApprover = isPending && (await canActNow(ctx, orgCtx, request, settings));
+    // The requestor can edit their own request at any pre-decision stage — a
+    // draft, while it's pending, or after it was rejected (to fix and resubmit).
+    // An eligible approver can also edit a pending request.
     const canEdit =
-      (request.status === "draft" && isOwner) || canApprover;
+      (isOwner && (request.status === "draft" || isPending || isRejected)) ||
+      canApprover;
     if (!canEdit) throw new ConvexError("You can't edit this payment request.");
     if (args.amountCents <= 0) throw new ConvexError("Amount must be positive.");
     if (args.attachmentStorageIds.length > MAX_ATTACHMENTS) {
@@ -873,6 +911,7 @@ export const editRequest = mutation({
       amountCents: args.amountCents,
       currency,
       payeeName: args.payeeName.trim(),
+      country: args.country?.trim().toUpperCase() || request.country,
       requestDate: args.requestDate,
       incurredMonth: args.requestDate.slice(0, 7),
       fieldValues: args.fieldValues,
@@ -1023,12 +1062,15 @@ const prRow = v.object({
   employeeName: v.string(),
   purpose: v.string(),
   payeeName: v.string(),
+  country: v.union(v.string(), v.null()),
   amountCents: v.number(),
   currency: v.string(),
   requestDate: v.string(),
+  invoiceDate: v.union(v.string(), v.null()),
   status: paymentRequestStatus,
   attachmentCount: v.number(),
   currentApprover: v.union(v.string(), v.null()),
+  canMarkPaid: v.boolean(),
 });
 
 // The current employee's payment requests, optionally filtered to a month.
@@ -1045,6 +1087,7 @@ export const mine = query({
       .collect();
     if (month) rows = rows.filter((r) => r.incurredMonth === month);
     rows.sort((a, b) => b._creationTime - a._creationTime);
+    // The requestor's own list never surfaces a mark-paid action.
     return await Promise.all(rows.map((r) => hydrateRow(ctx, r)));
   },
 });
@@ -1094,7 +1137,8 @@ export const approvalQueue = query({
       out.push(r);
     }
     out.sort((a, b) => b._creationTime - a._creationTime);
-    return await Promise.all(out.map((r) => hydrateRow(ctx, r)));
+    const canPay = isOversight || isFinanceApprover(settings, orgCtx.userId);
+    return await Promise.all(out.map((r) => hydrateRow(ctx, r, canPay)));
   },
 });
 
@@ -1111,7 +1155,8 @@ export const allRequests = query({
     if (month) rows = rows.filter((r) => r.incurredMonth === month);
     if (status) rows = rows.filter((r) => r.status === status);
     rows.sort((a, b) => b._creationTime - a._creationTime);
-    return await Promise.all(rows.map((r) => hydrateRow(ctx, r)));
+    // read:all is oversight — the caller may mark approved requests paid.
+    return await Promise.all(rows.map((r) => hydrateRow(ctx, r, true)));
   },
 });
 
@@ -1171,8 +1216,13 @@ export const get = query({
     const isPending =
       request.status === "pending_manager" ||
       request.status === "pending_finance";
+    const isRejected = request.status === "rejected";
     const canEdit =
-      (request.status === "draft" && isMine) || (isPending && canApprove);
+      (isMine && (request.status === "draft" || isPending || isRejected)) ||
+      (isPending && canApprove);
+    // The requestor can resubmit their own rejected request (optionally after
+    // editing it).
+    const canResubmit = isMine && isRejected;
 
     return {
       _id: request._id,
@@ -1190,6 +1240,7 @@ export const get = query({
       amountCents: request.amountCents,
       currency: request.currency,
       payeeName: request.payeeName,
+      country: request.country ?? null,
       requestDate: request.requestDate,
       fieldValues: request.fieldValues ?? {},
       remarks: request.remarks ?? null,
@@ -1203,6 +1254,7 @@ export const get = query({
       isMine,
       canApprove,
       canEdit,
+      canResubmit,
       needsSignature,
       requiresFinance: request.requiresFinance ?? false,
     };
@@ -1265,6 +1317,7 @@ export const exportRows = query({
           employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
           purpose: r.purpose,
           payeeName: r.payeeName,
+          country: r.country ?? null,
           amountCents: r.amountCents,
           currency: r.currency,
           requestDate: r.requestDate,
@@ -1329,6 +1382,7 @@ export const getForPrint = query({
         amountCents: r.amountCents,
         currency: r.currency,
         payeeName: r.payeeName,
+        country: r.country ?? null,
         requestDate: r.requestDate,
         status: r.status,
         templateFields: template?.fields ?? [],

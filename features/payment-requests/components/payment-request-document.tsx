@@ -2,6 +2,7 @@ import type { FunctionReturnType } from "convex/server"
 import type { api } from "@/convex/_generated/api"
 import type { PaymentRequestShow } from "@/convex/lib/enums"
 import { formatMoney, requestRef } from "@/features/payment-requests/lib/labels"
+import { countryName } from "@/lib/countries"
 
 export type PaymentRequestPrint = FunctionReturnType<
   typeof api.paymentRequests.getForPrint
@@ -122,6 +123,7 @@ export function PaymentRequestDocument({
         <Field label="Purpose of Request" value={req.purpose} />
         <Field label="Amount Requested" value={formatMoney(req.amountCents, req.currency)} />
         <Field label="Account / Payee Name" value={req.payeeName} />
+        {req.country && <Field label="Country" value={countryName(req.country)} />}
         {req.templateFields.map((f) => {
           const val = req.fieldValues[f.key]
           if (!val) return null

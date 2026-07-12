@@ -4,7 +4,16 @@ import * as React from "react"
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import type { PaymentRequestStatus } from "@/convex/lib/enums"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -16,24 +25,157 @@ import {
 import {
   PR_STATUS_LABELS,
   PR_STATUS_BADGE,
+  PR_SORT_OPTIONS,
+  sortPaymentRequests,
+  type PrSortKey,
   requestRef,
   formatMoney,
   currentMonth,
 } from "@/features/payment-requests/lib/labels"
+import { countryName } from "@/lib/countries"
 import { MonthNav } from "@/features/claims/components/month-nav"
 import { SubmitPaymentRequestDialog } from "@/features/payment-requests/components/submit-payment-request-dialog"
 import { PaymentRequestDetailDialog } from "@/features/payment-requests/components/payment-request-detail"
 
+const ALL = "__all__"
+const STATUS_OPTIONS = Object.keys(PR_STATUS_LABELS) as PaymentRequestStatus[]
+
 export function MyPaymentRequests() {
   const [month, setMonth] = React.useState(currentMonth())
   const [openId, setOpenId] = React.useState<Id<"paymentRequests"> | null>(null)
+  const [search, setSearch] = React.useState("")
+  const [country, setCountry] = React.useState<string>(ALL)
+  const [status, setStatus] = React.useState<string>(ALL)
+  const [minAmount, setMinAmount] = React.useState("")
+  const [maxAmount, setMaxAmount] = React.useState("")
+  const [sort, setSort] = React.useState<PrSortKey>("submitted_desc")
   const requests = useQuery(api.paymentRequests.mine, { month })
+
+  const countryOptions = React.useMemo(() => {
+    const codes = new Set<string>()
+    for (const r of requests ?? []) if (r.country) codes.add(r.country)
+    return [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b)))
+  }, [requests])
+
+  const filtered = React.useMemo(() => {
+    const q = search.trim().toLowerCase()
+    const min = minAmount ? Math.round(Number(minAmount) * 100) : null
+    const max = maxAmount ? Math.round(Number(maxAmount) * 100) : null
+    return (requests ?? []).filter((r) => {
+      if (country !== ALL && r.country !== country) return false
+      if (status !== ALL && r.status !== status) return false
+      if (min != null && r.amountCents < min) return false
+      if (max != null && r.amountCents > max) return false
+      if (q) {
+        const hay =
+          `${requestRef(r.requestNumber)} ${r.payeeName} ${r.purpose}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+  }, [requests, search, country, status, minAmount, maxAmount])
+
+  const sorted = React.useMemo(
+    () => sortPaymentRequests(filtered, sort),
+    [filtered, sort],
+  )
+
+  const hasFilters =
+    search.trim() !== "" ||
+    country !== ALL ||
+    status !== ALL ||
+    minAmount !== "" ||
+    maxAmount !== ""
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <MonthNav month={month} onChange={setMonth} />
         <SubmitPaymentRequestDialog month={month} />
+      </div>
+
+      {/* Search + filters */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          placeholder="Search ref, payee, purpose…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-9 w-full sm:w-64"
+        />
+        <Select value={country} onValueChange={setCountry}>
+          <SelectTrigger className="h-9 w-[9.5rem]">
+            <SelectValue placeholder="Country" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>All countries</SelectItem>
+            {countryOptions.map((code) => (
+              <SelectItem key={code} value={code}>
+                {countryName(code)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={status} onValueChange={setStatus}>
+          <SelectTrigger className="h-9 w-[9rem]">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>All statuses</SelectItem>
+            {STATUS_OPTIONS.map((s) => (
+              <SelectItem key={s} value={s}>
+                {PR_STATUS_LABELS[s]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-1">
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Min $"
+            value={minAmount}
+            onChange={(e) => setMinAmount(e.target.value)}
+            className="h-9 w-24"
+          />
+          <span className="text-muted-foreground text-xs">–</span>
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Max $"
+            value={maxAmount}
+            onChange={(e) => setMaxAmount(e.target.value)}
+            className="h-9 w-24"
+          />
+        </div>
+        <Select value={sort} onValueChange={(v) => setSort(v as PrSortKey)}>
+          <SelectTrigger className="h-9 w-[11rem]">
+            <SelectValue placeholder="Sort" />
+          </SelectTrigger>
+          <SelectContent>
+            {PR_SORT_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {hasFilters && (
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground text-xs underline"
+            onClick={() => {
+              setSearch("")
+              setCountry(ALL)
+              setStatus(ALL)
+              setMinAmount("")
+              setMaxAmount("")
+            }}
+          >
+            Clear
+          </button>
+        )}
       </div>
 
       <div className="rounded-lg border">
@@ -43,6 +185,7 @@ export function MyPaymentRequests() {
               <TableHead className="w-24">Ref</TableHead>
               <TableHead>Purpose</TableHead>
               <TableHead className="hidden sm:table-cell">Payee</TableHead>
+              <TableHead className="hidden lg:table-cell">Country</TableHead>
               <TableHead className="text-right">Amount</TableHead>
               <TableHead className="hidden sm:table-cell">Status</TableHead>
             </TableRow>
@@ -50,18 +193,20 @@ export function MyPaymentRequests() {
           <TableBody>
             {requests === undefined ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground py-8 text-center text-sm">
+                <TableCell colSpan={6} className="text-muted-foreground py-8 text-center text-sm">
                   Loading…
                 </TableCell>
               </TableRow>
-            ) : requests.length === 0 ? (
+            ) : sorted.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground py-8 text-center text-sm">
-                  No payment requests this month.
+                <TableCell colSpan={6} className="text-muted-foreground py-8 text-center text-sm">
+                  {hasFilters
+                    ? "No payment requests match your filters."
+                    : "No payment requests this month."}
                 </TableCell>
               </TableRow>
             ) : (
-              requests.map((r) => (
+              sorted.map((r) => (
                 <TableRow
                   key={r._id}
                   className="cursor-pointer"
@@ -78,6 +223,9 @@ export function MyPaymentRequests() {
                   </TableCell>
                   <TableCell className="hidden max-w-[12rem] truncate sm:table-cell">
                     {r.payeeName}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground hidden text-xs lg:table-cell">
+                    {r.country ? countryName(r.country) : "—"}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatMoney(r.amountCents, r.currency)}

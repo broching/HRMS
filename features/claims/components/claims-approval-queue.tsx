@@ -439,6 +439,7 @@ function GroupClaims({
   const reject = useMutation(api.claims.reject)
   const approveAll = useMutation(api.claims.approveAllForGroup)
   const markReimbursed = useMutation(api.claims.markGroupReimbursed)
+  const markOneReimbursed = useMutation(api.claims.markReimbursed)
   const getUploadUrl = useMutation(api.claims.generateUploadUrl)
 
   const [openId, setOpenId] = React.useState<Id<"claims"> | null>(null)
@@ -452,6 +453,8 @@ function GroupClaims({
   const [approveAllOpen, setApproveAllOpen] = React.useState(false)
   const [signAllOpen, setSignAllOpen] = React.useState(false)
   const [reimburseOpen, setReimburseOpen] = React.useState(false)
+  const [reimburseClaimId, setReimburseClaimId] =
+    React.useState<Id<"claims"> | null>(null)
   const [busy, setBusy] = React.useState(false)
 
   const currency = claims?.[0]?.currency ?? group.currency
@@ -511,6 +514,22 @@ function GroupClaims({
       setReimburseOpen(false)
     } catch (e) {
       toast.error(getErrorMessage(e, "Couldn't mark claims reimbursed"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const reimburseClaim = (claims ?? []).find((c) => c._id === reimburseClaimId)
+
+  async function handleReimburseOne() {
+    if (!reimburseClaimId) return
+    setBusy(true)
+    try {
+      await markOneReimbursed({ claimId: reimburseClaimId })
+      toast.success("Claim marked reimbursed")
+      setReimburseClaimId(null)
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't mark this claim reimbursed"))
     } finally {
       setBusy(false)
     }
@@ -654,6 +673,19 @@ function GroupClaims({
                       >
                         Waiting for batch
                       </span>
+                    ) : c.status === "approved" && canReimburse ? (
+                      <div
+                        className="flex justify-end"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Button
+                          size="sm"
+                          className="h-8 bg-green-600 text-white hover:bg-green-700"
+                          onClick={() => setReimburseClaimId(c._id)}
+                        >
+                          Mark reimbursed
+                        </Button>
+                      </div>
                     ) : (c.status === "pending_manager" ||
                         c.status === "pending_finance") &&
                       c.currentApprover ? (
@@ -790,6 +822,19 @@ function GroupClaims({
         confirmLabel="Mark reimbursed"
         busy={busy}
         onConfirm={handleReimburse}
+      />
+      <ConfirmDialog
+        open={reimburseClaimId !== null}
+        onOpenChange={(o) => !o && !busy && setReimburseClaimId(null)}
+        title="Mark claim reimbursed?"
+        description={
+          reimburseClaim
+            ? `This marks the ${reimburseClaim.claimTypeName} claim (${formatMoney(reimburseClaim.amountCents, reimburseClaim.currency)}) as reimbursed.`
+            : ""
+        }
+        confirmLabel="Mark reimbursed"
+        busy={busy}
+        onConfirm={handleReimburseOne}
       />
     </div>
   )
