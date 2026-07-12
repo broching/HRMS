@@ -305,6 +305,7 @@ export function MyPaymentRequests() {
         requestId={openId}
         open={openId != null}
         onOpenChange={(o) => !o && setOpenId(null)}
+        onNavigate={setOpenId}
       />
     </div>
   )

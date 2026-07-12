@@ -633,7 +633,9 @@ export const create = mutation({
   },
 });
 
-// Route an existing draft into the approval chain.
+// Route an existing draft into the approval chain. Only drafts submit — a
+// rejected request is frozen; the requestor resubmits it via `resubmitRequest`,
+// which duplicates it into a fresh draft (mirrors claims).
 export const submitRequest = mutation({
   args: { requestId: v.id("paymentRequests") },
   returns: v.null(),
@@ -647,19 +649,8 @@ export const submitRequest = mutation({
     if (!own || request.employeeId !== own._id) {
       throw new ConvexError("Only the requestor can submit this request.");
     }
-    if (request.status !== "draft" && request.status !== "rejected") {
-      throw new ConvexError("Only drafts or rejected requests can be submitted.");
-    }
-    // Resubmitting a rejected request: clear the prior decision so it routes
-    // through the approval chain fresh (routeRequest rebuilds the chain).
-    if (request.status === "rejected") {
-      await ctx.db.patch(requestId, {
-        decidedAt: undefined,
-        decisionNote: undefined,
-        rejectedStepIndex: undefined,
-        financeApproverUserId: undefined,
-        signatures: undefined,
-      });
+    if (request.status !== "draft") {
+      throw new ConvexError("Only draft requests can be submitted.");
     }
     await routeRequest(ctx, orgId, request);
     await writeAuditLog(ctx, {
@@ -670,6 +661,66 @@ export const submitRequest = mutation({
       entityId: requestId,
     });
     return null;
+  },
+});
+
+// Resubmit a rejected request by DUPLICATING it into a fresh draft owned by the
+// requestor, linked back to the original via `resubmittedFromRequestId`. The
+// original stays rejected (still visible, but excluded from exports); the copy
+// is a brand-new draft the owner can edit before submitting it back through the
+// approval workflow. Mirrors claims' resubmit-as-duplicate. Returns the new id.
+export const resubmitRequest = mutation({
+  args: { requestId: v.id("paymentRequests") },
+  returns: v.id("paymentRequests"),
+  handler: async (ctx, { requestId }) => {
+    const { orgId, userId } = await requireOrg(ctx);
+    const request = await ctx.db.get(requestId);
+    if (!request || request.orgId !== orgId) {
+      throw new ConvexError("Payment request not found.");
+    }
+    const own = await employeeByUserId(ctx, orgId, userId);
+    if (!own || request.employeeId !== own._id) {
+      throw new ConvexError("Only the requestor can resubmit this request.");
+    }
+    if (request.status !== "rejected") {
+      throw new ConvexError("Only rejected requests can be resubmitted.");
+    }
+
+    // Fresh draft copy of the request's content. Decision/approval/signature
+    // state is intentionally not carried over — the copy routes fresh on submit,
+    // against current settings. Attachment files are shared with the original
+    // (delete is guarded so removing one keeps the other's attachments).
+    const requestNumber = await nextRequestNumber(ctx, orgId);
+    const dupId = await ctx.db.insert("paymentRequests", {
+      orgId,
+      employeeId: own._id,
+      templateId: request.templateId,
+      requestNumber,
+      purpose: request.purpose,
+      amountCents: request.amountCents,
+      currency: request.currency,
+      payeeName: request.payeeName,
+      items: request.items,
+      country: request.country,
+      requestDate: request.requestDate,
+      incurredMonth: request.incurredMonth,
+      fieldValues: request.fieldValues,
+      attachmentStorageIds: request.attachmentStorageIds,
+      remarks: request.remarks,
+      status: "draft",
+      requestorSignatureStorageId: request.requestorSignatureStorageId,
+      resubmittedFromRequestId: request._id,
+      createdBy: userId,
+    });
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "payment_request.resubmit_duplicate",
+      entity: "paymentRequests",
+      entityId: dupId,
+      after: { from: request._id },
+    });
+    return dupId;
   },
 });
 
@@ -915,15 +966,13 @@ export const editRequest = mutation({
     const isPending =
       request.status === "pending_manager" ||
       request.status === "pending_finance";
-    const isRejected = request.status === "rejected";
     const settings = await resolvePaymentRequestSettings(ctx, orgId);
     const canApprover = isPending && (await canActNow(ctx, orgCtx, request, settings));
-    // The requestor can edit their own request at any pre-decision stage — a
-    // draft, while it's pending, or after it was rejected (to fix and resubmit).
-    // An eligible approver can also edit a pending request.
-    const canEdit =
-      (isOwner && (request.status === "draft" || isPending || isRejected)) ||
-      canApprover;
+    // The requestor can only edit their own DRAFT — once submitted the request
+    // is locked to them. To change a rejected request they resubmit it (which
+    // duplicates it into a fresh draft). An eligible approver can still correct a
+    // pending request.
+    const canEdit = (isOwner && request.status === "draft") || canApprover;
     if (!canEdit) throw new ConvexError("You can't edit this payment request.");
     const sanitized = sanitizeItems(args.items);
     const amountCents = sanitized ? sanitized.totalCents : args.amountCents;
@@ -1266,11 +1315,12 @@ export const get = query({
       request.status === "pending_manager" ||
       request.status === "pending_finance";
     const isRejected = request.status === "rejected";
+    // The requestor can only edit their own draft; approvers can correct a
+    // pending request. Once submitted the request is locked to the requestor.
     const canEdit =
-      (isMine && (request.status === "draft" || isPending || isRejected)) ||
-      (isPending && canApprove);
-    // The requestor can resubmit their own rejected request (optionally after
-    // editing it).
+      (isMine && request.status === "draft") || (isPending && canApprove);
+    // The requestor resubmits their own rejected request — this duplicates it
+    // into a fresh draft they then edit and submit.
     const canResubmit = isMine && isRejected;
 
     return {
@@ -1351,7 +1401,9 @@ export const exportRows = query({
       .collect();
 
     const visible = rows.filter((r) => {
-      if (r.status === "draft") return false;
+      // Drafts (not yet submitted) and rejected requests are never exported —
+      // rejected ones stay visible in-app but are excluded from every report.
+      if (r.status === "draft" || r.status === "rejected") return false;
       if (isOversight) return true;
       if (isFinanceApprover(settings, orgCtx.userId)) return true;
       return !!r.approvalChain?.some((s) => stepEligible(s, orgCtx.userId));

@@ -102,10 +102,14 @@ export function PaymentRequestDetailDialog({
   requestId,
   open,
   onOpenChange,
+  onNavigate,
 }: {
   requestId: Id<"paymentRequests"> | null
   open: boolean
   onOpenChange: (open: boolean) => void
+  // Switch the open dialog to another request (e.g. the fresh draft created by
+  // resubmitting a rejected request). When absent, resubmit just closes.
+  onNavigate?: (id: Id<"paymentRequests">) => void
 }) {
   const request = useQuery(
     api.paymentRequests.get,
@@ -118,6 +122,7 @@ export function PaymentRequestDetailDialog({
   const approve = useMutation(api.paymentRequests.approve)
   const reject = useMutation(api.paymentRequests.reject)
   const submitDraft = useMutation(api.paymentRequests.submitRequest)
+  const resubmitRequest = useMutation(api.paymentRequests.resubmitRequest)
   const markPaid = useMutation(api.paymentRequests.markPaid)
   const deleteRequest = useMutation(api.paymentRequests.deleteRequest)
   const addComment = useMutation(api.paymentRequests.addComment)
@@ -354,14 +359,17 @@ export function PaymentRequestDetailDialog({
                     size="sm"
                     disabled={busy}
                     onClick={() =>
-                      run(
-                        () => submitDraft({ requestId: request._id }),
-                        "Resubmitted",
-                      )
+                      run(async () => {
+                        const newId = await resubmitRequest({
+                          requestId: request._id,
+                        })
+                        if (onNavigate) onNavigate(newId)
+                        else onOpenChange(false)
+                      }, "Draft created — edit and submit it")
                     }
                   >
                     <IconSend className="size-4" />
-                    Resubmit
+                    Revise &amp; resubmit
                   </Button>
                 )}
                 {request.canApprove && !rejecting && (

@@ -767,6 +767,10 @@ export default defineSchema({
     paidAt: v.optional(v.number()),
     decisionNote: v.optional(v.string()),
     edits: v.optional(v.array(claimEditEntry)),
+    // When this request is a resubmission of a rejected one, the id of the
+    // original. The original stays rejected (visible but excluded from exports);
+    // this fresh draft routes through approval anew.
+    resubmittedFromRequestId: v.optional(v.id("paymentRequests")),
     createdBy: v.optional(v.id("users")),
   })
     .index("by_org", ["orgId"])
