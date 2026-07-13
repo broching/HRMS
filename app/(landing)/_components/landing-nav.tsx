@@ -12,6 +12,7 @@ const LINKS = [
   { name: "Platform", href: "/#platform" },
   { name: "Products", href: "/#products" },
   { name: "LeadMightyHR", href: "/leadmightyhr" },
+  { name: "Pricing", href: "/#pricing" },
   { name: "Contact", href: "/#contact" },
 ];
 

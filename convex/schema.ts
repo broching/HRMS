@@ -1380,6 +1380,29 @@ export default defineSchema({
     .index("byUserId", ["userId"])
     .index("byPayerUserId", ["payer.user_id"]),
 
+  // ─── Billing (Stripe subscriptions) ──────────────────────────────────────
+
+  // One row per organization — the org is the Stripe customer. Created when an
+  // admin first starts checkout (customer provisioned) and kept in sync from
+  // Stripe webhooks (see convex/stripe.ts + http.ts). `plan` is our plan key
+  // (starter | growth | business); `seats` is the subscription quantity =
+  // employee headcount billed. `status` is the raw Stripe subscription status
+  // (active | trialing | past_due | canceled | …).
+  subscriptions: defineTable({
+    orgId: v.id("organizations"),
+    stripeCustomerId: v.string(),
+    stripeSubscriptionId: v.optional(v.string()),
+    plan: v.optional(v.string()),
+    priceId: v.optional(v.string()),
+    status: v.optional(v.string()),
+    seats: v.optional(v.number()),
+    currentPeriodEnd: v.optional(v.number()), // epoch ms
+    cancelAtPeriodEnd: v.optional(v.boolean()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_customer", ["stripeCustomerId"])
+    .index("by_subscription", ["stripeSubscriptionId"]),
+
   // ─── Saved signatures ────────────────────────────────────────────────────
 
   // A reusable signature a user has saved so they can re-apply it when signing

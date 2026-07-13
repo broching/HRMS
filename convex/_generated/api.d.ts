@@ -10,6 +10,7 @@
 
 import type * as attendance from "../attendance.js";
 import type * as auth from "../auth.js";
+import type * as billing from "../billing.js";
 import type * as board from "../board.js";
 import type * as claimSettings from "../claimSettings.js";
 import type * as claimTypes from "../claimTypes.js";
@@ -46,6 +47,7 @@ import type * as lib_enums from "../lib/enums.js";
 import type * as lib_notificationRoutes from "../lib/notificationRoutes.js";
 import type * as lib_performanceDefaults from "../lib/performanceDefaults.js";
 import type * as lib_permissions from "../lib/permissions.js";
+import type * as lib_plans from "../lib/plans.js";
 import type * as lib_sgDefaults from "../lib/sgDefaults.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as members from "../members.js";
@@ -87,6 +89,8 @@ import type * as savedSignatures from "../savedSignatures.js";
 import type * as schedules from "../schedules.js";
 import type * as seed from "../seed.js";
 import type * as shiftTemplates from "../shiftTemplates.js";
+import type * as stripe from "../stripe.js";
+import type * as superAdmin from "../superAdmin.js";
 import type * as teams from "../teams.js";
 import type * as users from "../users.js";
 
@@ -99,6 +103,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   attendance: typeof attendance;
   auth: typeof auth;
+  billing: typeof billing;
   board: typeof board;
   claimSettings: typeof claimSettings;
   claimTypes: typeof claimTypes;
@@ -135,6 +140,7 @@ declare const fullApi: ApiFromModules<{
   "lib/notificationRoutes": typeof lib_notificationRoutes;
   "lib/performanceDefaults": typeof lib_performanceDefaults;
   "lib/permissions": typeof lib_permissions;
+  "lib/plans": typeof lib_plans;
   "lib/sgDefaults": typeof lib_sgDefaults;
   "lib/validators": typeof lib_validators;
   members: typeof members;
@@ -176,6 +182,8 @@ declare const fullApi: ApiFromModules<{
   schedules: typeof schedules;
   seed: typeof seed;
   shiftTemplates: typeof shiftTemplates;
+  stripe: typeof stripe;
+  superAdmin: typeof superAdmin;
   teams: typeof teams;
   users: typeof users;
 }>;

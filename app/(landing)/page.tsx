@@ -5,6 +5,7 @@ import { LandingNav } from "./_components/landing-nav";
 import { HrHero } from "./leadmightyhr/_components/hr-hero";
 import { Reveal } from "./_components/reveal";
 import { ModuleShowcase } from "./leadmightyhr/_components/module-showcase";
+import { PricingSection } from "./_components/pricing-section";
 import { SiteFooter } from "./_components/site-footer";
 
 
@@ -33,6 +34,8 @@ export default function LeadMightyHrPage() {
         </div>
         <ModuleShowcase />
       </div>
+
+      <PricingSection />
 
       {/* Closing CTA */}
       <section className="mx-auto max-w-6xl px-5 py-24">

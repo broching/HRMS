@@ -103,6 +103,25 @@ http.route({
   }),
 });
 
+// Stripe subscription webhooks. The raw body + signature are forwarded to a
+// Node action (convex/stripe.ts) which verifies the signature and syncs state.
+http.route({
+  path: "/stripe-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const signature = request.headers.get("stripe-signature");
+    if (!signature) {
+      return new Response("Missing stripe-signature header", { status: 400 });
+    }
+    const payload = await request.text();
+    const ok = await ctx.runAction(internal.stripe.processWebhook, {
+      payload,
+      signature,
+    });
+    return new Response(null, { status: ok ? 200 : 400 });
+  }),
+});
+
 async function validateRequest(req: Request): Promise<WebhookEvent | null> {
   const payloadString = await req.text();
   const svixHeaders = {

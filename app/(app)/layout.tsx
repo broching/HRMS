@@ -4,6 +4,7 @@ import { TopNav } from "@/components/layout/top-nav"
 import { SectionChrome } from "@/components/layout/section-chrome"
 import { LoadingBar } from "@/components/layout/loading-bar"
 import { EnsureMembership } from "@/components/layout/ensure-membership"
+import { BillingGate } from "@/features/billing/components/billing-gate"
 
 // OrgGuard: every authenticated HRMS route requires an active organization.
 // Unauthenticated users are bounced to the landing page (modal sign-in);
@@ -22,7 +23,9 @@ export default async function AppLayout({
       <EnsureMembership />
       <LoadingBar />
       <TopNav />
-      <SectionChrome>{children}</SectionChrome>
+      <BillingGate>
+        <SectionChrome>{children}</SectionChrome>
+      </BillingGate>
     </div>
   )
 }

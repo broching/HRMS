@@ -5,6 +5,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ClerkProvider } from "@clerk/nextjs";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
+import { AnalyticsProvider } from "@/components/analytics/analytics-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { PwaRegister } from "@/components/pwa-register";
 
@@ -67,9 +68,11 @@ export default function RootLayout({
         >
           <ClerkProvider>
             <ConvexClientProvider>
-              {children}
-              <Toaster />
-              <PwaRegister />
+              <AnalyticsProvider>
+                {children}
+                <Toaster />
+                <PwaRegister />
+              </AnalyticsProvider>
             </ConvexClientProvider>
           </ClerkProvider>
         </ThemeProvider>

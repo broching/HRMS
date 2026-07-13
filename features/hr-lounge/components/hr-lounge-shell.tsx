@@ -15,6 +15,7 @@ import {
   IconReportAnalytics,
   IconSitemap,
   IconBuildingCog,
+  IconCreditCard,
   IconUserPlus,
   IconBriefcase,
   IconClockCog,
@@ -110,6 +111,12 @@ const ITEMS: Item[] = [
     label: "Organization",
     icon: IconBuildingCog,
     href: "/hr-lounge/org-settings",
+    permission: "org:manage",
+  },
+  {
+    label: "Billing & plan",
+    icon: IconCreditCard,
+    href: "/hr-lounge/billing",
     permission: "org:manage",
   },
   {

@@ -20,6 +20,7 @@ import {
   IconBriefcase,
   IconReportAnalytics,
   IconBuildingCog,
+  IconCreditCard,
   type Icon,
 } from "@tabler/icons-react"
 import { permitted, type Permission } from "@/convex/lib/permissions"
@@ -86,6 +87,7 @@ const CATALOG: SearchEntry[] = [
   { label: "Reports", context: "HR Lounge", href: "/hr-lounge/reports", icon: IconReportAnalytics, permission: "reports:view", keywords: ["statistics", "analytics", "export", "attrition"] },
   { label: "Org Structure", context: "HR Lounge", href: "/hr-lounge/org-structure", icon: IconSitemap, permission: "employees:manage", keywords: ["departments", "offices", "hierarchy"] },
   { label: "Organization Settings", context: "HR Lounge", href: "/hr-lounge/org-settings", icon: IconBuildingCog, permission: "org:manage", keywords: ["logo", "locale", "name", "org profile", "currency"] },
+  { label: "Billing & plan", context: "HR Lounge", href: "/hr-lounge/billing", icon: IconCreditCard, permission: "org:manage", keywords: ["subscription", "stripe", "pricing", "plan", "seats", "upgrade", "payment method", "invoice"] },
   { label: "Attendance Config", context: "HR Lounge", href: "/settings/attendance", icon: IconClockCog, permission: "attendance:config", keywords: ["qr", "geofence", "office", "clock in"] },
   { label: "Shift Templates", context: "HR Lounge", href: "/settings/shift-templates", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "shifts", "schedule"] },
 ]
