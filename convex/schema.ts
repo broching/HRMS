@@ -298,6 +298,71 @@ export default defineSchema({
       filterFields: ["orgId", "status"],
     }),
 
+  // Saved org-chart node coordinates. Org-shared (one canonical arrangement that
+  // `employees:manage` edits and everyone else sees). One row per positioned
+  // employee; nodes without a row fall back to the computed tidy-tree layout.
+  // Kept separate from `employees` so frequent drag-saves don't churn the heavy
+  // employee document or its audit trail.
+  orgChartPositions: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    x: v.number(),
+    y: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_employee", ["orgId", "employeeId"]),
+
+  // ── Timesheet & project management ────────────────────────────────────────
+  // Projects employees log time against. Org-scoped; managed by projects:manage.
+  projects: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    code: v.optional(v.string()),
+    description: v.optional(v.string()),
+    clientName: v.optional(v.string()),
+    color: v.optional(v.string()),
+    leadEmployeeId: v.optional(v.id("employees")),
+    status: v.union(v.literal("active"), v.literal("archived")),
+    createdBy: v.optional(v.id("users")),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  // Tasks within a project. Time can be logged to a project with or without one.
+  projectTasks: defineTable({
+    orgId: v.id("organizations"),
+    projectId: v.id("projects"),
+    name: v.string(),
+    status: v.union(v.literal("open"), v.literal("done")),
+    order: v.optional(v.number()),
+    archivedAt: v.optional(v.number()),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_org", ["orgId"]),
+
+  // A single logged block of work. `minutes` (not float hours) avoids rounding
+  // drift; the UI presents h/m.
+  timeEntries: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    date: v.string(), // ISO "YYYY-MM-DD"
+    projectId: v.id("projects"),
+    taskId: v.optional(v.id("projectTasks")),
+    minutes: v.number(),
+    // Minute-of-day (0–1439) when the block is placed on the hourly grid.
+    // Absent = "unscheduled" (duration only) — kept for older entries.
+    startMinute: v.optional(v.number()),
+    description: v.string(),
+    billable: v.optional(v.boolean()),
+    createdBy: v.optional(v.id("users")),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_employee_date", ["employeeId", "date"])
+    .index("by_org_date", ["orgId", "date"])
+    .index("by_project", ["projectId"]),
+
   employeeDocuments: defineTable({
     orgId: v.id("organizations"),
     employeeId: v.id("employees"),

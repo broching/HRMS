@@ -27,6 +27,7 @@ export const PERMISSIONS = [
   "attendance:team", // Team → Team Attendance
   "scheduling:roster", // Team → Roster (build + publish team schedule)
   "performance:team", // Team → Team Reviews
+  "timesheets:team", // Team → Team Timesheets (view your reporting tree)
   // ── HR Lounge ───────────────────────────────────────────────────────────
   "hr:access", // see the HR Lounge (HR + admin)
   "employees:manage", // create/edit/archive any employee
@@ -40,6 +41,7 @@ export const PERMISSIONS = [
   "performance:manage", // review cycles + org-wide appraisals
   "scheduling:manage", // shift templates + org-wide rosters
   "attendance:config", // offices, QR, geofence
+  "projects:manage", // HR Lounge → Projects + org-wide timesheet oversight
   "reports:view", // statistics + report builder
   // ── Organization ────────────────────────────────────────────────────────
   "org:manage", // organization settings, country/locale
@@ -113,6 +115,11 @@ export const PERMISSION_META: Record<
     description: "Complete performance reviews for your team.",
     module: "Team workspace",
   },
+  "timesheets:team": {
+    label: "Team timesheets",
+    description: "View timesheets for your whole reporting tree.",
+    module: "Team workspace",
+  },
   // ── HR Lounge ─────────────────────────────────────────────────────────────
   "hr:access": {
     label: "Open HR Lounge",
@@ -174,6 +181,11 @@ export const PERMISSION_META: Record<
     description: "Manage offices, QR and geofence settings.",
     module: "HR Lounge",
   },
+  "projects:manage": {
+    label: "Projects & timesheets",
+    description: "Manage projects and tasks, and see org-wide timesheets.",
+    module: "HR Lounge",
+  },
   "reports:view": {
     label: "Reports",
     description: "Access statistics and the report builder.",
@@ -231,6 +243,7 @@ const MANAGER_PERMISSIONS: Permission[] = [
   "attendance:team",
   "scheduling:roster",
   "performance:team",
+  "timesheets:team",
   "reports:view",
 ];
 

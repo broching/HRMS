@@ -97,7 +97,7 @@ export function MyPayslips() {
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6">
       {/* Document type tabs (EA Form / PCB II not applicable for SG) */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-muted-foreground text-sm">Document type</span>
         <div className="bg-muted inline-flex rounded-lg p-1">
           {DOC_TYPES.map((d) => (
@@ -169,13 +169,17 @@ export function MyPayslips() {
           </div>
 
           {/* Selected payslip */}
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm font-medium">
               {selected
                 ? `${employeeName} — ${splitPeriod(selected.periodMonth).monthName.slice(0, 3)} ${splitPeriod(selected.periodMonth).year}`
                 : ""}
             </p>
-            <Button onClick={handleDownload} disabled={!payslip || downloading}>
+            <Button
+              className="w-full sm:w-auto"
+              onClick={handleDownload}
+              disabled={!payslip || downloading}
+            >
               <IconDownload className="size-4" />
               {downloading ? "Preparing…" : "Download payslip"}
             </Button>

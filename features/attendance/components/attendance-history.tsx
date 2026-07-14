@@ -34,7 +34,7 @@ export function AttendanceHistory() {
 
   return (
     <Card className="mx-4 lg:mx-6">
-      <CardHeader className="flex-row items-center justify-between">
+      <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle>Recent attendance</CardTitle>
         <RequestCorrectionDialog
           trigger={

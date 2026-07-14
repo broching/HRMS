@@ -6,6 +6,7 @@ import { useQuery } from "convex/react"
 import {
   IconCalendarStats,
   IconChevronRight,
+  IconClockPlay,
   IconReceipt2,
   IconFileInvoice,
   IconSearch,
@@ -59,6 +60,12 @@ const CARDS: TeamCard[] = [
     description: "Check your team goals for this quarter",
     icon: IconStars,
     href: "/performance/team",
+  },
+  {
+    title: "Team Timesheets",
+    description: "See time logged across your reporting line",
+    icon: IconClockPlay,
+    href: "/timesheets/team",
   },
   {
     title: "Onboarding",

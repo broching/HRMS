@@ -18,6 +18,8 @@ import {
   IconCreditCard,
   IconUserPlus,
   IconBriefcase,
+  IconFolders,
+  IconClockHour4,
   IconClockCog,
   IconCalendarTime,
   IconLayoutSidebarLeftCollapse,
@@ -88,6 +90,18 @@ const ITEMS: Item[] = [
     icon: IconBriefcase,
     href: "/hr-lounge/recruitment",
     permission: "recruitment:manage",
+  },
+  {
+    label: "Projects",
+    icon: IconFolders,
+    href: "/hr-lounge/projects",
+    permission: "projects:manage",
+  },
+  {
+    label: "Timesheet Report",
+    icon: IconClockHour4,
+    href: "/hr-lounge/timesheets",
+    permission: "projects:manage",
   },
   {
     label: "Performance",

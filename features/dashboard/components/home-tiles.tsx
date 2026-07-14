@@ -6,6 +6,7 @@ import {
   IconCalendarStats,
   IconChevronRight,
   IconClockHour4,
+  IconClockPlay,
   IconId,
   IconReceipt,
   IconFileInvoice,
@@ -73,6 +74,12 @@ export function HomeTiles() {
       description: "Clock in and out with the office QR code",
       icon: IconClockHour4,
       href: "/attendance",
+    },
+    {
+      title: "My Timesheet",
+      description: "Log time against projects and tasks",
+      icon: IconClockPlay,
+      href: "/timesheets",
     },
     {
       title: "Team Calendar",

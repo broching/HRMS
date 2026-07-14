@@ -59,6 +59,7 @@ import type * as model_geo from "../model/geo.js";
 import type * as model_leaveCalc from "../model/leaveCalc.js";
 import type * as model_leavePolicy from "../model/leavePolicy.js";
 import type * as model_notify from "../model/notify.js";
+import type * as model_org from "../model/org.js";
 import type * as model_proration from "../model/proration.js";
 import type * as model_qrToken from "../model/qrToken.js";
 import type * as model_shiftTime from "../model/shiftTime.js";
@@ -77,6 +78,7 @@ import type * as payrollSettings from "../payrollSettings.js";
 import type * as payslipTemplates from "../payslipTemplates.js";
 import type * as performance from "../performance.js";
 import type * as positions from "../positions.js";
+import type * as projects from "../projects.js";
 import type * as recruitment from "../recruitment.js";
 import type * as reportBuilder from "../reportBuilder.js";
 import type * as reports from "../reports.js";
@@ -92,6 +94,7 @@ import type * as shiftTemplates from "../shiftTemplates.js";
 import type * as stripe from "../stripe.js";
 import type * as superAdmin from "../superAdmin.js";
 import type * as teams from "../teams.js";
+import type * as timeEntries from "../timeEntries.js";
 import type * as users from "../users.js";
 
 import type {
@@ -152,6 +155,7 @@ declare const fullApi: ApiFromModules<{
   "model/leaveCalc": typeof model_leaveCalc;
   "model/leavePolicy": typeof model_leavePolicy;
   "model/notify": typeof model_notify;
+  "model/org": typeof model_org;
   "model/proration": typeof model_proration;
   "model/qrToken": typeof model_qrToken;
   "model/shiftTime": typeof model_shiftTime;
@@ -170,6 +174,7 @@ declare const fullApi: ApiFromModules<{
   payslipTemplates: typeof payslipTemplates;
   performance: typeof performance;
   positions: typeof positions;
+  projects: typeof projects;
   recruitment: typeof recruitment;
   reportBuilder: typeof reportBuilder;
   reports: typeof reports;
@@ -185,6 +190,7 @@ declare const fullApi: ApiFromModules<{
   stripe: typeof stripe;
   superAdmin: typeof superAdmin;
   teams: typeof teams;
+  timeEntries: typeof timeEntries;
   users: typeof users;
 }>;
 

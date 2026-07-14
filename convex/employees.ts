@@ -1,5 +1,5 @@
 import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import {
   hrmsRole,
@@ -310,9 +310,11 @@ export const orgChart = query({
           : `${e.preferredName ?? e.firstName} ${e.lastName}`,
         employeeNumber: e.employeeNumber,
         managerId: e.managerId ?? null,
+        positionId: e.positionId ?? null,
         positionTitle: e.positionId ? (posTitle.get(e.positionId) ?? null) : null,
         departmentId: e.departmentId ?? null,
         departmentName: e.departmentId ? (deptName.get(e.departmentId) ?? null) : null,
+        officeId: e.officeId ?? null,
         officeName: e.officeId ? (officeName.get(e.officeId) ?? null) : null,
         workEmail: e.contact?.workEmail ?? null,
         photoUrl: e.photoStorageId
@@ -1377,6 +1379,224 @@ export const setPhoto = mutation({
       await ctx.storage.delete(existing.photoStorageId);
     }
     await ctx.db.patch(employeeId, { photoStorageId: storageId });
+    return null;
+  },
+});
+
+// ─── Org chart layout (shared arrangement + reporting-line edits) ──────────
+
+// Saved node coordinates for the org chart. Directory-safe read (same audience
+// as `orgChart`): any org member sees the shared arrangement; only managers
+// write it.
+export const layoutPositions = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      employeeId: v.id("employees"),
+      x: v.number(),
+      y: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const { orgId } = await requireOrg(ctx);
+    const rows = await ctx.db
+      .query("orgChartPositions")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    return rows.map((r) => ({ employeeId: r.employeeId, x: r.x, y: r.y }));
+  },
+});
+
+// Persist node coordinates. Called once per drop with every moved subtree node
+// batched. Upserts one row per employee via the by_org_employee index.
+export const saveLayoutPositions = mutation({
+  args: {
+    positions: v.array(
+      v.object({
+        employeeId: v.id("employees"),
+        x: v.number(),
+        y: v.number(),
+      }),
+    ),
+  },
+  returns: v.null(),
+  handler: async (ctx, { positions }) => {
+    const { orgId } = await requirePermission(ctx, "employees:manage");
+    const now = Date.now();
+    for (const p of positions) {
+      // Defensive: only persist positions for employees in this org.
+      const emp = await ctx.db.get(p.employeeId);
+      if (!emp || emp.orgId !== orgId) continue;
+      const existing = await ctx.db
+        .query("orgChartPositions")
+        .withIndex("by_org_employee", (q) =>
+          q.eq("orgId", orgId).eq("employeeId", p.employeeId),
+        )
+        .unique();
+      if (existing) {
+        await ctx.db.patch(existing._id, { x: p.x, y: p.y, updatedAt: now });
+      } else {
+        await ctx.db.insert("orgChartPositions", {
+          orgId,
+          employeeId: p.employeeId,
+          x: p.x,
+          y: p.y,
+          updatedAt: now,
+        });
+      }
+    }
+    return null;
+  },
+});
+
+// Clear the shared layout → the chart reverts to the computed tidy-tree.
+// Backs the "Auto arrange" button.
+export const resetLayout = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const { orgId } = await requirePermission(ctx, "employees:manage");
+    const rows = await ctx.db
+      .query("orgChartPositions")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    for (const r of rows) await ctx.db.delete(r._id);
+    return null;
+  },
+});
+
+// Quick job edits from the org-chart card modal: department, position, office.
+// Focused + all-optional so it never touches name/compensation. `null` clears a
+// field; omit a field to leave it unchanged. Manager changes go through
+// `setManager` (cycle-guarded). Gated on employees:manage.
+export const quickUpdateJob = mutation({
+  args: {
+    employeeId: v.id("employees"),
+    departmentId: v.optional(v.union(v.id("departments"), v.null())),
+    positionId: v.optional(v.union(v.id("positions"), v.null())),
+    officeId: v.optional(v.union(v.id("offices"), v.null())),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    const employee = await ctx.db.get(args.employeeId);
+    if (!employee || employee.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Employee not found." });
+    }
+
+    const patch: Record<string, unknown> = {};
+    // For each provided field, verify the referenced doc is in this org, then
+    // set it (null → undefined clears the field).
+    if (args.departmentId !== undefined) {
+      if (args.departmentId !== null) {
+        const d = await ctx.db.get(args.departmentId);
+        if (!d || d.orgId !== orgId)
+          throw new ConvexError({ code: "INVALID", message: "Unknown department." });
+      }
+      patch.departmentId = args.departmentId ?? undefined;
+    }
+    if (args.positionId !== undefined) {
+      if (args.positionId !== null) {
+        const p = await ctx.db.get(args.positionId);
+        if (!p || p.orgId !== orgId)
+          throw new ConvexError({ code: "INVALID", message: "Unknown position." });
+      }
+      patch.positionId = args.positionId ?? undefined;
+    }
+    if (args.officeId !== undefined) {
+      if (args.officeId !== null) {
+        const o = await ctx.db.get(args.officeId);
+        if (!o || o.orgId !== orgId)
+          throw new ConvexError({ code: "INVALID", message: "Unknown office." });
+      }
+      patch.officeId = args.officeId ?? undefined;
+    }
+
+    if (Object.keys(patch).length === 0) return null;
+    patch.updatedAt = Date.now();
+    await ctx.db.patch(args.employeeId, patch);
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "employee.quickUpdateJob",
+      entity: "employees",
+      entityId: args.employeeId,
+    });
+    return null;
+  },
+});
+
+// Reassign a person's reporting line by dropping them onto a manager in the
+// chart. Guards against self-management and cycles (can't report into your own
+// subtree). Pass managerId: null to detach (report to no one).
+export const setManager = mutation({
+  args: {
+    employeeId: v.id("employees"),
+    managerId: v.union(v.id("employees"), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { employeeId, managerId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Employee not found." });
+    }
+
+    if (managerId === null) {
+      if (employee.managerId === undefined) return null;
+      await ctx.db.patch(employeeId, { managerId: undefined, updatedAt: Date.now() });
+      await writeAuditLog(ctx, {
+        orgId,
+        actorUserId: userId,
+        action: "employee.setManager",
+        entity: "employees",
+        entityId: employeeId,
+        before: { managerId: employee.managerId ?? null },
+        after: { managerId: null },
+      });
+      return null;
+    }
+
+    if (managerId === employeeId) {
+      throw new ConvexError({
+        code: "INVALID",
+        message: "A person can't report to themselves.",
+      });
+    }
+    const manager = await ctx.db.get(managerId);
+    if (!manager || manager.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Manager not found." });
+    }
+
+    // Cycle guard: walk up the proposed manager's chain — if it reaches the
+    // employee, the assignment would create a loop.
+    let cursor: Id<"employees"> | undefined = manager.managerId;
+    const seen = new Set<Id<"employees">>([managerId]);
+    while (cursor) {
+      if (cursor === employeeId) {
+        throw new ConvexError({
+          code: "CYCLE",
+          message: "That would make someone report into their own team.",
+        });
+      }
+      if (seen.has(cursor)) break; // defend against a pre-existing loop
+      seen.add(cursor);
+      const next = await ctx.db.get(cursor);
+      cursor = next?.managerId;
+    }
+
+    if (employee.managerId === managerId) return null;
+    await ctx.db.patch(employeeId, { managerId, updatedAt: Date.now() });
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "employee.setManager",
+      entity: "employees",
+      entityId: employeeId,
+      before: { managerId: employee.managerId ?? null },
+      after: { managerId },
+    });
     return null;
   },
 });

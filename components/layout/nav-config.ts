@@ -60,6 +60,7 @@ export const SECTIONS: NavSection[] = [
       { title: "Claims", url: "/claims" },
       { title: "Payment Requests", url: "/payment-requests" },
       { title: "Attendance", url: "/attendance" },
+      { title: "Timesheets", url: "/timesheets" },
       { title: "My Schedule", url: "/scheduling" },
       { title: "Payslips", url: "/payslips" },
       { title: "Performance", url: "/performance" },
@@ -110,6 +111,12 @@ export const SECTIONS: NavSection[] = [
         url: "/attendance/team",
         icon: IconClockHour4,
         permission: "attendance:team",
+      },
+      {
+        title: "Team Timesheets",
+        url: "/timesheets/team",
+        icon: IconClockHour4,
+        permission: "timesheets:team",
       },
       {
         title: "Roster",

@@ -180,68 +180,6 @@
   }
 }
 
-/* ─── Org chart tree (top-down, connector lines via borders) ──────────────── */
-.org-tree,
-.org-tree ul {
-  display: flex;
-  justify-content: center;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-.org-tree ul {
-  position: relative;
-  padding-top: 1.25rem;
-}
-.org-tree li {
-  position: relative;
-  padding: 1.25rem 0.5rem 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-/* connectors from each child up to the horizontal bar */
-.org-tree li::before,
-.org-tree li::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 50%;
-  width: 50%;
-  height: 1.25rem;
-  border-top: 1px solid var(--border);
-}
-.org-tree li::after {
-  right: auto;
-  left: 50%;
-  border-left: 1px solid var(--border);
-}
-/* a lone child only needs the straight drop line */
-.org-tree li:only-child::before,
-.org-tree li:only-child::after {
-  display: none;
-}
-/* trim the bar at the ends of a sibling row */
-.org-tree li:first-child::before,
-.org-tree li:last-child::after {
-  border: 0 none;
-}
-.org-tree li:last-child::before {
-  border-right: 1px solid var(--border);
-}
-.org-tree li:first-child::after {
-  border-left: 1px solid var(--border);
-}
-/* drop line from a parent down to its children row */
-.org-tree ul::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: 0;
-  height: 1.25rem;
-  border-left: 1px solid var(--border);
-}
 /* Print isolation for payslips: hide everything except the payslip document so
    the browser's "Save as PDF" produces a clean single-document print. */
 @media print {

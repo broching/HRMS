@@ -9,8 +9,6 @@ import {
   IconExternalLink,
   IconPencil,
   IconZoomIn,
-  IconZoomOut,
-  IconZoomReset,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
@@ -37,6 +35,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { PageHeader } from "@/components/shared/page-header"
+import { DocumentViewer } from "@/components/shared/document-viewer"
 import {
   CLAIM_STATUS_BADGE,
   CLAIM_STATUS_LABELS,
@@ -451,9 +450,11 @@ function ReceiptPreview({
               Zoom
             </span>
           </button>
-          <ReceiptLightbox
+          <DocumentViewer
             url={url}
-            index={index}
+            title={`Receipt ${index + 1}`}
+            fileName={`receipt-${index + 1}`}
+            kind="image"
             open={zoomOpen}
             onOpenChange={setZoomOpen}
           />
@@ -486,72 +487,6 @@ function ReceiptPreview({
         </a>
       )}
     </div>
-  )
-}
-
-// Full-screen zoomable/pannable receipt viewer. Zoom via the buttons or the
-// mouse wheel; when zoomed past the frame the container scrolls to pan.
-function ReceiptLightbox({
-  url,
-  index,
-  open,
-  onOpenChange,
-}: {
-  url: string
-  index: number
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const [scale, setScale] = React.useState(1)
-  React.useEffect(() => {
-    if (open) setScale(1)
-  }, [open])
-  const zoomIn = () => setScale((s) => Math.min(6, +(s + 0.5).toFixed(2)))
-  const zoomOut = () => setScale((s) => Math.max(1, +(s - 0.5).toFixed(2)))
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[92vh] w-[95vw] max-w-[95vw] flex-col gap-2 p-3">
-        <DialogHeader className="flex-row items-center justify-between gap-2 space-y-0 pr-8">
-          <DialogTitle className="text-sm">Receipt {index + 1}</DialogTitle>
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="icon" className="size-8" onClick={zoomOut} title="Zoom out">
-              <IconZoomOut className="size-4" />
-            </Button>
-            <span className="text-muted-foreground w-12 text-center text-xs tabular-nums">
-              {Math.round(scale * 100)}%
-            </span>
-            <Button variant="outline" size="icon" className="size-8" onClick={zoomIn} title="Zoom in">
-              <IconZoomIn className="size-4" />
-            </Button>
-            <Button variant="outline" size="icon" className="size-8" onClick={() => setScale(1)} title="Reset">
-              <IconZoomReset className="size-4" />
-            </Button>
-            <a href={url} target="_blank" rel="noreferrer" title="Open in new tab">
-              <Button variant="outline" size="icon" className="size-8">
-                <IconExternalLink className="size-4" />
-              </Button>
-            </a>
-          </div>
-        </DialogHeader>
-        <div
-          className="flex-1 overflow-auto rounded-md border bg-muted/30"
-          onWheel={(e) => {
-            if (e.deltaY < 0) zoomIn()
-            else zoomOut()
-          }}
-        >
-          <div className="flex min-h-full min-w-full items-center justify-center p-4">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={url}
-              alt={`Receipt ${index + 1}`}
-              style={{ transform: `scale(${scale})` }}
-              className="max-h-[80vh] origin-center object-contain transition-transform"
-            />
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }
 
