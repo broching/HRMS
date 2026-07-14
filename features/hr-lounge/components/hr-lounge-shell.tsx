@@ -31,6 +31,7 @@ import { useCurrentMember } from "@/hooks/use-current-member"
 import { permitted, type Permission } from "@/convex/lib/permissions"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
+import { SidebarNav, type SidebarNavGroup } from "@/components/layout/sidebar-nav"
 
 type Item = {
   label: string
@@ -40,6 +41,8 @@ type Item = {
   comingSoon?: boolean
   // Sub-function gate; omitted items are visible to anyone with hr:access.
   permission?: Permission
+  // Collapsible category this module sits under; undefined = ungrouped lead.
+  group?: string
 }
 
 // The HR module rail. The core HR modules live in-shell under /hr-lounge so the
@@ -48,104 +51,126 @@ type Item = {
 // permission from a role hides the module from that role's rail.
 const ITEMS: Item[] = [
   { label: "Overview", icon: IconLayoutDashboard, href: "/hr-lounge/overview" },
+  // ── People ──
   {
     label: "Employee List",
     icon: IconUsers,
     href: "/hr-lounge",
     exact: true,
     permission: "employees:manage",
-  },
-  {
-    label: "Leave",
-    icon: IconCalendarStats,
-    href: "/hr-lounge/leave",
-    permission: "leave:config",
-  },
-  {
-    label: "Payroll",
-    icon: IconCash,
-    href: "/hr-lounge/payroll",
-    permission: "payroll:manage",
-  },
-  {
-    label: "Compensation",
-    icon: IconCoin,
-    href: "/hr-lounge/payroll/compensation",
-    permission: "payroll:manage",
-  },
-  {
-    label: "Expense Claims",
-    icon: IconReceipt2,
-    href: "/hr-lounge/claims",
-    permission: "claims:read:all",
-  },
-  {
-    label: "Payment Requests",
-    icon: IconFileInvoice,
-    href: "/hr-lounge/payment-requests",
-    permission: "payment_requests:read:all",
-  },
-  {
-    label: "Recruitment",
-    icon: IconBriefcase,
-    href: "/hr-lounge/recruitment",
-    permission: "recruitment:manage",
-  },
-  {
-    label: "Projects",
-    icon: IconFolders,
-    href: "/hr-lounge/projects",
-    permission: "projects:manage",
-  },
-  {
-    label: "Timesheet Report",
-    icon: IconClockHour4,
-    href: "/hr-lounge/timesheets",
-    permission: "projects:manage",
-  },
-  {
-    label: "Performance",
-    icon: IconChartBar,
-    href: "/hr-lounge/performance",
-    permission: "performance:manage",
-  },
-  {
-    label: "Reports",
-    icon: IconReportAnalytics,
-    href: "/hr-lounge/reports",
-    permission: "reports:view",
+    group: "People",
   },
   {
     label: "Org Structure",
     icon: IconSitemap,
     href: "/hr-lounge/org-structure",
     permission: "employees:manage",
+    group: "People",
   },
   {
-    label: "Organization",
-    icon: IconBuildingCog,
-    href: "/hr-lounge/org-settings",
-    permission: "org:manage",
+    label: "Recruitment",
+    icon: IconBriefcase,
+    href: "/hr-lounge/recruitment",
+    permission: "recruitment:manage",
+    group: "People",
   },
   {
-    label: "Billing & plan",
-    icon: IconCreditCard,
-    href: "/hr-lounge/billing",
-    permission: "org:manage",
+    label: "Performance",
+    icon: IconChartBar,
+    href: "/hr-lounge/performance",
+    permission: "performance:manage",
+    group: "People",
+  },
+  { label: "Onboarding", icon: IconUserPlus, comingSoon: true, group: "People" },
+  // ── Payroll & claims ──
+  {
+    label: "Payroll",
+    icon: IconCash,
+    href: "/hr-lounge/payroll",
+    permission: "payroll:manage",
+    group: "Payroll & claims",
+  },
+  {
+    label: "Compensation",
+    icon: IconCoin,
+    href: "/hr-lounge/payroll/compensation",
+    permission: "payroll:manage",
+    group: "Payroll & claims",
+  },
+  {
+    label: "Expense Claims",
+    icon: IconReceipt2,
+    href: "/hr-lounge/claims",
+    permission: "claims:read:all",
+    group: "Payroll & claims",
+  },
+  {
+    label: "Payment Requests",
+    icon: IconFileInvoice,
+    href: "/hr-lounge/payment-requests",
+    permission: "payment_requests:read:all",
+    group: "Payroll & claims",
+  },
+  // ── Time & projects ──
+  {
+    label: "Projects",
+    icon: IconFolders,
+    href: "/hr-lounge/projects",
+    permission: "projects:manage",
+    group: "Time & projects",
+  },
+  {
+    label: "Timesheet Report",
+    icon: IconClockHour4,
+    href: "/hr-lounge/timesheets",
+    permission: "projects:manage",
+    group: "Time & projects",
+  },
+  // ── Leave & attendance ──
+  {
+    label: "Leave",
+    icon: IconCalendarStats,
+    href: "/hr-lounge/leave",
+    permission: "leave:config",
+    group: "Leave & attendance",
   },
   {
     label: "Attendance Config",
     icon: IconClockCog,
     href: "/settings/attendance",
     permission: "attendance:config",
+    group: "Leave & attendance",
   },
   {
     label: "Shift Templates",
     icon: IconCalendarTime,
     href: "/settings/shift-templates",
     permission: "scheduling:manage",
+    group: "Leave & attendance",
   },
-  { label: "Onboarding", icon: IconUserPlus, comingSoon: true },
+  // ── Insights ──
+  {
+    label: "Reports",
+    icon: IconReportAnalytics,
+    href: "/hr-lounge/reports",
+    permission: "reports:view",
+    group: "Insights",
+  },
+  // ── Organization ──
+  {
+    label: "Organization",
+    icon: IconBuildingCog,
+    href: "/hr-lounge/org-settings",
+    permission: "org:manage",
+    group: "Organization",
+  },
+  {
+    label: "Billing & plan",
+    icon: IconCreditCard,
+    href: "/hr-lounge/billing",
+    permission: "org:manage",
+    group: "Organization",
+  },
 ]
 
 export function HrLoungeShell({ children }: { children: React.ReactNode }) {
@@ -195,6 +220,28 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
     return !!item.href && item.href === activeHref
   }
 
+  // Fold the flat, permission-filtered list into ordered collapsible groups.
+  const groups: SidebarNavGroup[] = []
+  for (const item of items) {
+    const key = item.group ?? "__lead__"
+    let group = groups.find((g) => g.key === key)
+    if (!group) {
+      group = { key, label: item.group, items: [] }
+      groups.push(group)
+    }
+    group.items.push({
+      key: item.label,
+      label: item.label,
+      icon: item.icon,
+      href: item.href,
+      active: isActive(item),
+      comingSoon: item.comingSoon,
+      onClick: item.comingSoon
+        ? () => toast.info(`${item.label} is coming soon.`)
+        : undefined,
+    })
+  }
+
   return (
     <div className="flex flex-col gap-6 py-4 lg:flex-row lg:gap-0">
       <aside
@@ -227,53 +274,11 @@ export function HrLoungeShell({ children }: { children: React.ReactNode }) {
             )}
           </button>
         </div>
-        <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
-          {items.map((item) => {
-            const active = isActive(item)
-            const content = (
-              <span
-                title={collapsed ? item.label : undefined}
-                className={cn(
-                  "flex items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-sm whitespace-nowrap transition-colors",
-                  collapsed && "lg:justify-center lg:px-2",
-                  active
-                    ? "border-primary/20 bg-primary/10 text-primary font-medium"
-                    : "hover:bg-accent/50 border-transparent",
-                  item.comingSoon && "opacity-60",
-                )}
-              >
-                <span className="flex items-center gap-2.5">
-                  <item.icon className="size-4 shrink-0" />
-                  <span className={cn(collapsed && "lg:hidden")}>
-                    {item.label}
-                  </span>
-                </span>
-                {item.comingSoon && !collapsed && (
-                  <span className="text-muted-foreground hidden text-[10px] lg:inline">
-                    Soon
-                  </span>
-                )}
-              </span>
-            )
-            if (item.comingSoon) {
-              return (
-                <button
-                  key={item.label}
-                  type="button"
-                  className="text-left"
-                  onClick={() => toast.info(`${item.label} is coming soon.`)}
-                >
-                  {content}
-                </button>
-              )
-            }
-            return (
-              <Link key={item.label} href={item.href!}>
-                {content}
-              </Link>
-            )
-          })}
-        </nav>
+        <SidebarNav
+          groups={groups}
+          collapsed={collapsed}
+          storageKey="hr-lounge-nav-groups"
+        />
       </aside>
 
       <div className="min-w-0 flex-1 lg:pl-6">{children}</div>

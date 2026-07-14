@@ -10,6 +10,11 @@ import {
 } from "./auth";
 import { employeeByUserId } from "./employees";
 import { reportingSubtree } from "./model/org";
+import {
+  accessForEmployee,
+  canEmployeeLog,
+  isProjectPrivileged,
+} from "./model/projectAccess";
 
 /**
  * Daily time entries. Employees CRUD their own; a manager/head can read the
@@ -155,6 +160,27 @@ async function assertCanLogFor(
   });
 }
 
+// Enforce assignment for non-privileged loggers: a plain employee may only log
+// time against a project/task they're assigned to. Managers (tasks:manage) and
+// HR (projects:manage) bypass this — they can log against anything (incl. on
+// behalf of others).
+async function assertAssignedToLog(
+  ctx: QueryCtx,
+  orgCtx: OrgContext,
+  employeeId: Id<"employees">,
+  projectId: Id<"projects">,
+  taskId: Id<"projectTasks"> | undefined,
+) {
+  if (isProjectPrivileged(orgCtx)) return;
+  const access = await accessForEmployee(ctx, employeeId);
+  if (!canEmployeeLog(access, projectId, taskId)) {
+    throw new ConvexError({
+      code: "FORBIDDEN",
+      message: "You can only log time to projects and tasks assigned to you.",
+    });
+  }
+}
+
 // ── Self reads + writes ──────────────────────────────────────────────────────
 
 export const mine = query({
@@ -208,6 +234,7 @@ export const create = mutation({
     validMinutes(args.minutes);
     validStart(args.startMinute, Math.round(args.minutes));
     await checkProjectTask(ctx, orgId, args.projectId, args.taskId);
+    await assertAssignedToLog(ctx, orgCtx, targetId, args.projectId, args.taskId);
     return await ctx.db.insert("timeEntries", {
       orgId,
       employeeId: targetId,
@@ -250,6 +277,7 @@ export const update = mutation({
       args.taskId === undefined ? entry.taskId : (args.taskId ?? undefined);
     if (args.projectId !== undefined || args.taskId !== undefined) {
       await checkProjectTask(ctx, orgId, nextProject, nextTask);
+      await assertAssignedToLog(ctx, orgCtx, entry.employeeId, nextProject, nextTask);
     }
     if (args.minutes !== undefined) validMinutes(args.minutes);
 
@@ -967,5 +995,129 @@ export const orgCalendar = query({
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
     return { totalMinutes, days };
+  },
+});
+
+// ── Detailed per-entry export ────────────────────────────────────────────────
+// One row per time entry with every field, for spreadsheet export. Two flavours:
+// the caller's reporting tree (`teamExportRows`, timesheets:team) and the whole
+// org (`orgExportRows`, projects:manage). Both share the enriched row shape.
+
+const exportRowView = v.object({
+  date: v.string(),
+  employeeName: v.string(),
+  employeeNumber: v.string(),
+  jobTitle: v.union(v.string(), v.null()),
+  department: v.union(v.string(), v.null()),
+  team: v.union(v.string(), v.null()),
+  projectName: v.string(),
+  taskName: v.union(v.string(), v.null()),
+  startMinute: v.union(v.number(), v.null()),
+  minutes: v.number(),
+  billable: v.boolean(),
+  description: v.string(),
+});
+
+// Build the org-wide lookup maps (employees, positions, departments, teams,
+// projects, tasks) used to hydrate export rows.
+async function exportLookups(ctx: QueryCtx, orgId: Id<"organizations">) {
+  const [employees, positions, departments, teams, projects, tasks] =
+    await Promise.all([
+      ctx.db.query("employees").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("positions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("departments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("teams").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("projects").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("projectTasks").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+    ]);
+  return {
+    empMap: new Map(employees.map((e) => [e._id, e])),
+    posTitle: new Map(positions.map((p) => [p._id, p.title])),
+    deptName: new Map(departments.map((d) => [d._id, d.name])),
+    teamName: new Map(teams.map((t) => [t._id, t.name])),
+    projName: new Map(projects.map((p) => [p._id, p.name])),
+    taskName: new Map(tasks.map((t) => [t._id, t.name])),
+  };
+}
+
+type ExportLookups = Awaited<ReturnType<typeof exportLookups>>;
+
+function hydrateExportRow(e: Doc<"timeEntries">, lk: ExportLookups) {
+  const emp = lk.empMap.get(e.employeeId);
+  return {
+    date: e.date,
+    employeeName: emp ? displayName(emp) : "—",
+    employeeNumber: emp?.employeeNumber ?? "",
+    jobTitle: emp?.positionId ? (lk.posTitle.get(emp.positionId) ?? null) : null,
+    department: emp?.departmentId ? (lk.deptName.get(emp.departmentId) ?? null) : null,
+    team: emp?.teamId ? (lk.teamName.get(emp.teamId) ?? null) : null,
+    projectName: lk.projName.get(e.projectId) ?? "—",
+    taskName: e.taskId ? (lk.taskName.get(e.taskId) ?? null) : null,
+    startMinute: e.startMinute ?? null,
+    minutes: e.minutes,
+    billable: e.billable ?? false,
+    description: e.description,
+  };
+}
+
+// Sort export rows by date, then person, then start time — a natural reading
+// order for a timesheet.
+function sortExportRows(rows: ReturnType<typeof hydrateExportRow>[]) {
+  rows.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    if (a.employeeName !== b.employeeName)
+      return a.employeeName.localeCompare(b.employeeName);
+    return (a.startMinute ?? 1e9) - (b.startMinute ?? 1e9);
+  });
+  return rows;
+}
+
+export const orgExportRows = query({
+  args: {
+    from: v.string(),
+    to: v.string(),
+    projectId: v.optional(v.id("projects")),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+  },
+  returns: v.array(exportRowView),
+  handler: async (ctx, args) => {
+    const { orgId } = await requirePermission(ctx, "projects:manage");
+    const { filtered } = await orgEntriesFiltered(ctx, orgId, args);
+    const lk = await exportLookups(ctx, orgId);
+    return sortExportRows(filtered.map((e) => hydrateExportRow(e, lk)));
+  },
+});
+
+export const teamExportRows = query({
+  args: {
+    from: v.string(),
+    to: v.string(),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+    projectId: v.optional(v.id("projects")),
+  },
+  returns: v.array(exportRowView),
+  handler: async (ctx, { from, to, departmentId, teamId, projectId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "timesheets:team");
+    const me = await employeeByUserId(ctx, orgId, userId);
+    if (!me) return [];
+    const subtree = await reportingSubtree(ctx, orgId, me._id);
+    subtree.add(me._id);
+    const lk = await exportLookups(ctx, orgId);
+
+    const rows: ReturnType<typeof hydrateExportRow>[] = [];
+    for (const employeeId of subtree) {
+      const emp = lk.empMap.get(employeeId);
+      if (!emp) continue;
+      if (departmentId && emp.departmentId !== departmentId) continue;
+      if (teamId && emp.teamId !== teamId) continue;
+      const entries = await entriesFor(ctx, employeeId, from, to);
+      for (const e of entries) {
+        if (projectId && e.projectId !== projectId) continue;
+        rows.push(hydrateExportRow(e, lk));
+      }
+    }
+    return sortExportRows(rows);
   },
 });

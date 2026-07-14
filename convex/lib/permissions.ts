@@ -29,6 +29,7 @@ export const PERMISSIONS = [
   "performance:team", // Team → Team Reviews
   "timesheets:team", // Team → Team Timesheets (view your reporting tree)
   "timesheets:log:team", // Team → log/edit time on behalf of your reporting tree
+  "tasks:manage", // create/edit tasks, assign people, complete any task (team-side)
   // ── HR Lounge ───────────────────────────────────────────────────────────
   "hr:access", // see the HR Lounge (HR + admin)
   "employees:manage", // create/edit/archive any employee
@@ -125,6 +126,12 @@ export const PERMISSION_META: Record<
   "timesheets:log:team": {
     label: "Log time for your team",
     description: "Log and edit time entries on behalf of anyone in your reporting tree.",
+    module: "Team workspace",
+  },
+  "tasks:manage": {
+    label: "Manage tasks",
+    description:
+      "Create and edit project tasks, assign people, and mark any task complete.",
     module: "Team workspace",
   },
   // ── HR Lounge ─────────────────────────────────────────────────────────────
@@ -257,6 +264,7 @@ const MANAGER_PERMISSIONS: Permission[] = [
   "performance:team",
   "timesheets:team",
   "timesheets:log:team",
+  "tasks:manage",
   "reports:view",
 ];
 

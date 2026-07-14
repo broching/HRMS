@@ -1186,3 +1186,14 @@ export const DEFAULT_ORG_SETTINGS = {
   weekStart: 1,
   fiscalYearStartMonth: 1,
 } as const;
+
+// ─── Timesheet & project management ──────────────────────────────────────
+
+// Task priority for project tasks. Optional on a task (defaults to "medium" in
+// the UI when unset).
+export const taskPriority = v.union(
+  v.literal("low"),
+  v.literal("medium"),
+  v.literal("high"),
+);
+export type TaskPriority = "low" | "medium" | "high";

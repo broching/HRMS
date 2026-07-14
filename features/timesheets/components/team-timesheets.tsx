@@ -14,6 +14,12 @@ import {
   IconFilter,
   IconLayoutDashboard,
   IconReportAnalytics,
+  IconDownload,
+  IconMaximize,
+  IconMinimize,
+  IconLayoutSidebarRightCollapse,
+  IconLayoutSidebarRightExpand,
+  IconX,
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -62,6 +68,7 @@ import {
 } from "@/features/timesheets/components/entry-dialog"
 import { TeamDayGrid } from "@/features/timesheets/components/team-day-grid"
 import { TimesheetReport } from "@/features/timesheets/components/timesheet-report"
+import { TimesheetExportDialog } from "@/features/timesheets/components/timesheet-export-dialog"
 
 type Summary = FunctionReturnType<typeof api.timeEntries.teamSummary>
 type Person = Summary["byEmployee"][number]
@@ -126,6 +133,20 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
   const [draft, setDraft] = React.useState<EntryDraft>({})
   const [selected, setSelected] = React.useState<PersonRef | null>(null)
   const [filtersOpen, setFiltersOpen] = React.useState(false)
+  const [exportOpen, setExportOpen] = React.useState(false)
+  const [projectPanelOpen, setProjectPanelOpen] = React.useState(true)
+
+  // Fullscreen "focus mode" — a fixed overlay (not the native Fullscreen API, so
+  // portaled dialogs like the log-time form still stack above it). Esc exits.
+  const [isFullscreen, setIsFullscreen] = React.useState(false)
+  React.useEffect(() => {
+    if (!isFullscreen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [isFullscreen])
 
   // Who am I + what can I log — drives the drag-to-log controls on the day grid.
   const member = useQuery(api.members.current)
@@ -311,8 +332,13 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
   }
 
   return (
-    <div className="flex flex-col gap-4 px-4 lg:px-6">
-      {isOrg && <ModeToggle mode={mode} onChange={setMode} />}
+    <div
+      className={cn(
+        "flex flex-col gap-4 px-4 lg:px-6",
+        isFullscreen && "bg-background fixed inset-0 z-40 overflow-y-auto py-4",
+      )}
+    >
+      {isOrg && !isFullscreen && <ModeToggle mode={mode} onChange={setMode} />}
 
       {/* Toolbar */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -370,6 +396,39 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
           >
             <IconFilter className="size-4" />
             Filters
+          </Button>
+          {/* Collapse the project panel for more board width (day/week/month). */}
+          <Button
+            variant="outline"
+            size="icon"
+            className="hidden size-8 xl:inline-flex"
+            title={projectPanelOpen ? "Hide project panel" : "Show project panel"}
+            aria-label={projectPanelOpen ? "Hide project panel" : "Show project panel"}
+            onClick={() => setProjectPanelOpen((o) => !o)}
+          >
+            {projectPanelOpen ? (
+              <IconLayoutSidebarRightCollapse className="size-4" />
+            ) : (
+              <IconLayoutSidebarRightExpand className="size-4" />
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-8"
+            title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            onClick={() => setIsFullscreen((f) => !f)}
+          >
+            {isFullscreen ? (
+              <IconMinimize className="size-4" />
+            ) : (
+              <IconMaximize className="size-4" />
+            )}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
+            <IconDownload className="size-4" />
+            Export
           </Button>
         </div>
       </div>
@@ -442,7 +501,12 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
           <KpiRow stats={stats} />
 
           {view === "day" ? (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+            <div
+              className={cn(
+                "grid gap-4",
+                projectPanelOpen && "xl:grid-cols-[minmax(0,1fr)_320px]",
+              )}
+            >
               <Card className="gap-0 overflow-hidden p-0">
                 <TeamDayGrid
                   date={anchor}
@@ -477,7 +541,13 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
                   }}
                 />
               </Card>
-              <ProjectBreakdown byProject={byProject} totalMinutes={stats.totalMinutes} />
+              {projectPanelOpen && (
+                <ProjectBreakdown
+                  byProject={byProject}
+                  totalMinutes={stats.totalMinutes}
+                  onCollapse={() => setProjectPanelOpen(false)}
+                />
+              )}
             </div>
           ) : (
             <>
@@ -496,7 +566,12 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
                     })
                 }}
               />
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+              <div
+                className={cn(
+                  "grid gap-4",
+                  projectPanelOpen && "xl:grid-cols-[minmax(0,1fr)_320px]",
+                )}
+              >
                 <PeopleHeatmap
                   people={roster}
                   total={summary?.byEmployee.length ?? 0}
@@ -509,10 +584,13 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
                     })
                   }
                 />
-                <ProjectBreakdown
-                  byProject={byProject}
-                  totalMinutes={stats.totalMinutes}
-                />
+                {projectPanelOpen && (
+                  <ProjectBreakdown
+                    byProject={byProject}
+                    totalMinutes={stats.totalMinutes}
+                    onCollapse={() => setProjectPanelOpen(false)}
+                  />
+                )}
               </div>
             </>
           )}
@@ -531,6 +609,17 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
         draft={draft}
         projects={projects}
         onOpenChange={setLogOpen}
+      />
+
+      <TimesheetExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        scope={scope}
+        anchor={anchor}
+        view={view}
+        departmentId={dept}
+        teamId={tid}
+        projectId={pid}
       />
     </div>
   )
@@ -896,14 +985,29 @@ function PeopleHeatmap({
 function ProjectBreakdown({
   byProject,
   totalMinutes,
+  onCollapse,
 }: {
   byProject: ProjectDatum[]
   totalMinutes: number
+  onCollapse?: () => void
 }) {
   const max = byProject[0]?.minutes ?? 0
   return (
     <Card className="h-fit gap-0 p-4">
-      <h3 className="text-sm font-semibold">By project</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold">By project</h3>
+        {onCollapse && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            title="Hide panel"
+            aria-label="Hide project panel"
+            className="text-muted-foreground hover:text-foreground hidden xl:inline-flex"
+          >
+            <IconX className="size-4" />
+          </button>
+        )}
+      </div>
       {byProject.length === 0 ? (
         <p className="text-muted-foreground mt-2 text-xs">No time logged.</p>
       ) : (

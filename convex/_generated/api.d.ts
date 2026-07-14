@@ -60,6 +60,7 @@ import type * as model_leaveCalc from "../model/leaveCalc.js";
 import type * as model_leavePolicy from "../model/leavePolicy.js";
 import type * as model_notify from "../model/notify.js";
 import type * as model_org from "../model/org.js";
+import type * as model_projectAccess from "../model/projectAccess.js";
 import type * as model_proration from "../model/proration.js";
 import type * as model_qrToken from "../model/qrToken.js";
 import type * as model_shiftTime from "../model/shiftTime.js";
@@ -156,6 +157,7 @@ declare const fullApi: ApiFromModules<{
   "model/leavePolicy": typeof model_leavePolicy;
   "model/notify": typeof model_notify;
   "model/org": typeof model_org;
+  "model/projectAccess": typeof model_projectAccess;
   "model/proration": typeof model_proration;
   "model/qrToken": typeof model_qrToken;
   "model/shiftTime": typeof model_shiftTime;

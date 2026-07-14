@@ -12,10 +12,13 @@ import { Skeleton } from "@/components/ui/skeleton"
 export function RoleGate({
   roles,
   permission,
+  anyPermission,
   children,
 }: {
   roles?: HrmsRole[]
   permission?: Permission
+  // Any-of permissions: access granted when the member holds at least one.
+  anyPermission?: Permission[]
   children: React.ReactNode
 }) {
   const member = useCurrentMember()
@@ -28,7 +31,9 @@ export function RoleGate({
   const allowed =
     !!role &&
     (!roles || roles.includes(role)) &&
-    (!permission || permitted(member?.permissions, permission))
+    (!permission || permitted(member?.permissions, permission)) &&
+    (!anyPermission ||
+      anyPermission.some((p) => permitted(member?.permissions, p)))
 
   if (!allowed) {
     return (

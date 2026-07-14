@@ -185,7 +185,7 @@ export function EntryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <IconClockHour4 className="size-5" />
@@ -267,20 +267,23 @@ export function EntryDialog({
             />
           </div>
 
-          {/* When + how long */}
+          {/* When + how long. `min-w-0` lets the native date/time inputs shrink
+              inside the grid instead of forcing horizontal overflow on mobile. */}
           <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
+            <div className="flex min-w-0 flex-col gap-1.5">
               <Label className="text-xs">Date</Label>
               <Input
                 type="date"
+                className="w-full min-w-0"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex min-w-0 flex-col gap-1.5">
               <Label className="text-xs">Start time (optional)</Label>
               <Input
                 type="time"
+                className="w-full min-w-0"
                 value={start}
                 onChange={(e) => setStart(e.target.value)}
               />

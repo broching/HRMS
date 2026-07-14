@@ -19,6 +19,11 @@ import {
   type NavSection,
 } from "@/components/layout/nav-config"
 import { SubNav } from "@/components/layout/sub-nav"
+import {
+  SidebarNav,
+  type SidebarNavGroup,
+} from "@/components/layout/sidebar-nav"
+import { IconCircle } from "@tabler/icons-react"
 
 function canSee(
   item: Pick<NavLink, "roles" | "permission">,
@@ -91,6 +96,24 @@ function SectionSidebar({
 }) {
   const [collapsed, setCollapsed] = React.useState(false)
 
+  // Fold the section's links into ordered collapsible groups for the rail.
+  const groups: SidebarNavGroup[] = []
+  for (const item of items) {
+    const key = item.group ?? "__lead__"
+    let group = groups.find((g) => g.key === key)
+    if (!group) {
+      group = { key, label: item.group, items: [] }
+      groups.push(group)
+    }
+    group.items.push({
+      key: item.url,
+      label: item.title,
+      icon: item.icon ?? IconCircle,
+      href: item.url,
+      active: item.url === activeUrl,
+    })
+  }
+
   return (
     <div className="flex flex-col gap-6 py-4 lg:flex-row lg:gap-0">
       <aside
@@ -120,30 +143,11 @@ function SectionSidebar({
             )}
           </button>
         </div>
-        <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
-          {items.map((item) => {
-            const active = item.url === activeUrl
-            return (
-              <Link key={item.url} href={item.url}>
-                <span
-                  title={collapsed ? item.title : undefined}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm whitespace-nowrap transition-colors",
-                    collapsed && "lg:justify-center lg:px-2",
-                    active
-                      ? "border-primary/20 bg-primary/10 text-primary font-medium"
-                      : "hover:bg-accent/50 border-transparent",
-                  )}
-                >
-                  {item.icon && <item.icon className="size-4 shrink-0" />}
-                  <span className={cn(collapsed && "lg:hidden")}>
-                    {item.title}
-                  </span>
-                </span>
-              </Link>
-            )
-          })}
-        </nav>
+        <SidebarNav
+          groups={groups}
+          collapsed={collapsed}
+          storageKey={`section-nav-${section.key}`}
+        />
       </aside>
 
       <div className="min-w-0 flex-1 lg:pl-6">

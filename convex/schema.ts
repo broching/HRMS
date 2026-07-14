@@ -89,6 +89,7 @@ import {
   feedback360Relationship,
   feedback360Status,
   feedback360Answer,
+  taskPriority,
 } from "./lib/enums";
 
 // Per-module email notification config. `enabled` gates whether emails send for
@@ -331,14 +332,56 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"]),
 
   // Tasks within a project. Time can be logged to a project with or without one.
+  // Tasks carry richer detail (description/due/priority/attachments) so they can
+  // be worked as proper work items, and completion is tracked with who/when.
   projectTasks: defineTable({
     orgId: v.id("organizations"),
     projectId: v.id("projects"),
     name: v.string(),
+    description: v.optional(v.string()),
     status: v.union(v.literal("open"), v.literal("done")),
+    priority: v.optional(taskPriority),
+    dueDate: v.optional(v.string()), // ISO "YYYY-MM-DD"
+    // Up to a small cap of supporting files (parallel arrays: id + display name).
+    attachmentStorageIds: v.optional(v.array(v.id("_storage"))),
+    attachmentNames: v.optional(v.array(v.string())),
+    completedAt: v.optional(v.number()),
+    completedBy: v.optional(v.id("employees")),
     order: v.optional(v.number()),
     archivedAt: v.optional(v.number()),
+    createdBy: v.optional(v.id("users")),
+    updatedAt: v.optional(v.number()),
   })
+    .index("by_project", ["projectId"])
+    .index("by_org", ["orgId"]),
+
+  // Who is assigned to a whole project. A project assignee is implicitly on every
+  // task in that project and may log time against it. Managed by tasks:manage /
+  // projects:manage.
+  projectAssignments: defineTable({
+    orgId: v.id("organizations"),
+    projectId: v.id("projects"),
+    employeeId: v.id("employees"),
+    assignedBy: v.optional(v.id("users")),
+    assignedAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_employee", ["employeeId"])
+    .index("by_org", ["orgId"]),
+
+  // Who is assigned to a single task. A task assignee can see that task (and its
+  // parent project read-only) and log time against it, but not the rest of the
+  // project's tasks.
+  taskAssignments: defineTable({
+    orgId: v.id("organizations"),
+    taskId: v.id("projectTasks"),
+    projectId: v.id("projects"),
+    employeeId: v.id("employees"),
+    assignedBy: v.optional(v.id("users")),
+    assignedAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_employee", ["employeeId"])
     .index("by_project", ["projectId"])
     .index("by_org", ["orgId"]),
 
