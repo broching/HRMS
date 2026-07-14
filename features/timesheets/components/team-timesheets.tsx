@@ -8,13 +8,16 @@ import {
   IconChevronRight,
   IconUsers,
   IconClockHour4,
-  IconClockPlus,
   IconUserCheck,
   IconChartBar,
   IconSearch,
+  IconFilter,
+  IconLayoutDashboard,
+  IconReportAnalytics,
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { permitted } from "@/convex/lib/permissions"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -57,17 +60,32 @@ import {
   EntryDialog,
   type EntryDraft,
 } from "@/features/timesheets/components/entry-dialog"
+import { TeamDayGrid } from "@/features/timesheets/components/team-day-grid"
+import { TimesheetReport } from "@/features/timesheets/components/timesheet-report"
 
 type Summary = FunctionReturnType<typeof api.timeEntries.teamSummary>
 type Person = Summary["byEmployee"][number]
-type View = "week" | "month"
+type Day = FunctionReturnType<typeof api.timeEntries.teamDay>
+type View = "day" | "week" | "month"
+type Scope = "team" | "org"
 
-// One person's contribution on a single day, used by the team calendar.
-type DayPerson = {
+// The minimal shape the drill-in dialog needs — shared by week/month rows and
+// day columns.
+type PersonRef = { employeeId: string; name: string; jobTitle: string | null }
+
+// One person's contribution on a single day, used by the week/month calendar.
+type CalPerson = {
   employeeId: string
   name: string
   jobTitle: string | null
   color: string
+  minutes: number
+}
+
+type ProjectDatum = {
+  projectId: string
+  name: string
+  color: string | null
   minutes: number
 }
 
@@ -95,41 +113,97 @@ function datesInRange(from: string, to: string): string[] {
   return out
 }
 
-export function TeamTimesheets() {
-  const [view, setView] = React.useState<View>("week")
+export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
+  const isOrg = scope === "org"
+  const [mode, setMode] = React.useState<"board" | "report">("board")
+  const [view, setView] = React.useState<View>("day")
   const [anchor, setAnchor] = React.useState<string>(() => todayIso())
   const [search, setSearch] = React.useState("")
   const [departmentId, setDepartmentId] = React.useState(ALL)
   const [teamId, setTeamId] = React.useState(ALL)
+  const [projectId, setProjectId] = React.useState(ALL)
   const [logOpen, setLogOpen] = React.useState(false)
   const [draft, setDraft] = React.useState<EntryDraft>({})
+  const [selected, setSelected] = React.useState<PersonRef | null>(null)
+  const [filtersOpen, setFiltersOpen] = React.useState(false)
+
+  // Who am I + what can I log — drives the drag-to-log controls on the day grid.
+  const member = useQuery(api.members.current)
+  const meEmp = useQuery(api.employees.me)
+  const myEmployeeId = meEmp?._id ?? null
+  const canLogAny = isOrg
+    ? permitted(member?.permissions, "timesheets:log:all")
+    : permitted(member?.permissions, "timesheets:log:team")
+  const canLogFor = React.useCallback(
+    (employeeId: string) => canLogAny || employeeId === myEmployeeId,
+    [canLogAny, myEmployeeId],
+  )
 
   const range = React.useMemo(() => {
     if (view === "week") {
       const monday = mondayOfIso(anchor)
       return { from: monday, to: addDaysIso(monday, 6) }
     }
-    return monthRange(anchor)
+    if (view === "month") return monthRange(anchor)
+    return { from: anchor, to: anchor }
   }, [view, anchor])
 
-  const summary = useQuery(api.timeEntries.teamSummary, {
-    ...range,
-    departmentId: departmentId === ALL ? undefined : (departmentId as Id<"departments">),
-    teamId: teamId === ALL ? undefined : (teamId as Id<"teams">),
-  })
+  const dept = departmentId === ALL ? undefined : (departmentId as Id<"departments">)
+  const tid = teamId === ALL ? undefined : (teamId as Id<"teams">)
+  const pid = projectId === ALL ? undefined : (projectId as Id<"projects">)
+
+  // Only the query matching the active scope + view runs; the rest skip. Splitting
+  // team vs org keeps each call's arg validator exact.
+  const summaryActive = mode === "board" && view !== "day"
+  const dayActive = mode === "board" && view === "day"
+
+  const teamSummaryQ = useQuery(
+    api.timeEntries.teamSummary,
+    !isOrg && summaryActive
+      ? { from: range.from, to: range.to, departmentId: dept, teamId: tid }
+      : "skip",
+  )
+  const orgSummaryQ = useQuery(
+    api.timeEntries.orgSummary,
+    isOrg && summaryActive
+      ? {
+          from: range.from,
+          to: range.to,
+          departmentId: dept,
+          teamId: tid,
+          projectId: pid,
+        }
+      : "skip",
+  )
+  const teamDayQ = useQuery(
+    api.timeEntries.teamDay,
+    !isOrg && dayActive ? { date: anchor, departmentId: dept, teamId: tid } : "skip",
+  )
+  const orgDayQ = useQuery(
+    api.timeEntries.orgDay,
+    isOrg && dayActive
+      ? { date: anchor, departmentId: dept, teamId: tid, projectId: pid }
+      : "skip",
+  )
+
+  const summary = isOrg ? orgSummaryQ : teamSummaryQ
+  const day = isOrg ? orgDayQ : teamDayQ
+
   const departments = useQuery(api.departments.list) ?? []
   const teams = useQuery(api.teams.list) ?? []
   const projectsAll = useQuery(api.projects.list) ?? []
   const projects = projectsAll.filter((p) => p.status === "active")
 
-  const [selected, setSelected] = React.useState<Person | null>(null)
-
   const dates = datesInRange(range.from, range.to)
   const rangeLabel =
-    view === "week" ? weekRangeLabel(mondayOfIso(anchor)) : monthLabel(anchor)
+    view === "day"
+      ? formatDayLabel(anchor)
+      : view === "week"
+        ? weekRangeLabel(mondayOfIso(anchor))
+        : monthLabel(anchor)
 
-  // Search filters the roster list only; department/team are applied server-side
-  // so KPIs, projects, and the calendar stay accurate to the selected scope.
+  // Search filters the roster list only; department/team/project are applied
+  // server-side so KPIs, projects, and the calendar stay accurate to the scope.
   const roster = React.useMemo(() => {
     const people = summary?.byEmployee ?? []
     const q = search.trim().toLowerCase()
@@ -141,9 +215,21 @@ export function TeamTimesheets() {
     )
   }, [summary, search])
 
+  // Day columns, narrowed by the same search.
+  const dayPeople = React.useMemo(() => {
+    const people = day?.people ?? []
+    const q = search.trim().toLowerCase()
+    if (!q) return people
+    return people.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.jobTitle ?? "").toLowerCase().includes(q),
+    )
+  }, [day, search])
+
   // Per-day people for the calendar: who logged, coloured by their top project.
   const calendarPeople = React.useMemo(() => {
-    const m = new Map<string, DayPerson[]>()
+    const m = new Map<string, CalPerson[]>()
     for (const p of summary?.byEmployee ?? []) {
       for (const d of p.byDate) {
         if (d.minutes <= 0) continue
@@ -162,21 +248,71 @@ export function TeamTimesheets() {
     return m
   }, [summary])
 
+  // KPI stats — sourced from whichever query drives the active view.
+  const stats = React.useMemo(() => {
+    if (view === "day") {
+      const total = day?.totalMinutes ?? 0
+      const logged = day?.peopleLogged ?? 0
+      return { totalMinutes: total, peopleLogged: logged, people: logged }
+    }
+    return {
+      totalMinutes: summary?.totalMinutes ?? 0,
+      peopleLogged: summary?.peopleLogged ?? 0,
+      people: summary?.byEmployee.length ?? 0,
+    }
+  }, [view, day, summary])
+
+  // Project breakdown — from the summary for week/month, computed from the day
+  // entries for the day view.
+  const byProject: ProjectDatum[] = React.useMemo(() => {
+    if (view === "day") {
+      const m = new Map<string, ProjectDatum>()
+      for (const p of day?.people ?? []) {
+        for (const e of p.entries) {
+          const cur =
+            m.get(e.projectId) ??
+            {
+              projectId: e.projectId,
+              name: e.projectName,
+              color: e.projectColor,
+              minutes: 0,
+            }
+          cur.minutes += e.minutes
+          m.set(e.projectId, cur)
+        }
+      }
+      return [...m.values()].sort((a, b) => b.minutes - a.minutes)
+    }
+    return summary?.byProject ?? []
+  }, [view, day, summary])
+
   function step(dir: -1 | 1) {
-    if (view === "week") setAnchor(addDaysIso(anchor, dir * 7))
+    if (view === "day") setAnchor(addDaysIso(anchor, dir))
+    else if (view === "week") setAnchor(addDaysIso(anchor, dir * 7))
     else setAnchor(addMonthsIso(anchor, dir))
+  }
+
+  const loading = view === "day" ? day === undefined : summary === undefined
+  const isEmpty =
+    view === "day"
+      ? day !== undefined && day.people.length === 0
+      : summary !== undefined && summary.byEmployee.length === 0
+
+  // HR Lounge "Report" mode reuses the full org report component untouched.
+  if (isOrg && mode === "report") {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="px-4 lg:px-6">
+          <ModeToggle mode={mode} onChange={setMode} />
+        </div>
+        <TimesheetReport />
+      </div>
+    )
   }
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6">
-      {/* Quick-log — a manager logs their own time without leaving the view. */}
-      <QuickLog
-        projects={projects}
-        onQuick={(d) => {
-          setDraft(d)
-          setLogOpen(true)
-        }}
-      />
+      {isOrg && <ModeToggle mode={mode} onChange={setMode} />}
 
       {/* Toolbar */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -206,35 +342,56 @@ export function TeamTimesheets() {
           </Button>
           <div className="ml-1 text-sm font-semibold">{rangeLabel}</div>
         </div>
-        <ToggleGroup
-          type="single"
-          value={view}
-          onValueChange={(v) => v && setView(v as View)}
-          variant="outline"
-          size="sm"
-        >
-          <ToggleGroupItem value="week" className="px-4">
-            Week
-          </ToggleGroupItem>
-          <ToggleGroupItem value="month" className="px-4">
-            Month
-          </ToggleGroupItem>
-        </ToggleGroup>
+        <div className="flex items-center gap-2">
+          <ToggleGroup
+            type="single"
+            value={view}
+            onValueChange={(v) => v && setView(v as View)}
+            variant="outline"
+            size="sm"
+          >
+            <ToggleGroupItem value="day" className="px-4">
+              Day
+            </ToggleGroupItem>
+            <ToggleGroupItem value="week" className="px-4">
+              Week
+            </ToggleGroupItem>
+            <ToggleGroupItem value="month" className="px-4">
+              Month
+            </ToggleGroupItem>
+          </ToggleGroup>
+          {/* Filters live behind a toggle on mobile so the calendar shows first. */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="lg:hidden"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen((o) => !o)}
+          >
+            <IconFilter className="size-4" />
+            Filters
+          </Button>
+        </div>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      {/* Filters — collapsed on mobile (see toggle above), always shown on desktop. */}
+      <div
+        className={cn(
+          "flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:flex",
+          filtersOpen ? "flex" : "hidden",
+        )}
+      >
         <div className="relative sm:max-w-xs sm:flex-1">
           <IconSearch className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
           <Input
-            placeholder="Search your people"
+            placeholder={isOrg ? "Search people" : "Search your people"}
             className="pl-8"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
         <Select value={departmentId} onValueChange={setDepartmentId}>
-          <SelectTrigger className="w-full sm:w-48">
+          <SelectTrigger className="w-full sm:w-44">
             <SelectValue placeholder="All departments" />
           </SelectTrigger>
           <SelectContent>
@@ -247,7 +404,7 @@ export function TeamTimesheets() {
           </SelectContent>
         </Select>
         <Select value={teamId} onValueChange={setTeamId}>
-          <SelectTrigger className="w-full sm:w-44">
+          <SelectTrigger className="w-full sm:w-40">
             <SelectValue placeholder="All teams" />
           </SelectTrigger>
           <SelectContent>
@@ -259,43 +416,106 @@ export function TeamTimesheets() {
             ))}
           </SelectContent>
         </Select>
+        {isOrg && (
+          <Select value={projectId} onValueChange={setProjectId}>
+            <SelectTrigger className="w-full sm:w-44">
+              <SelectValue placeholder="All projects" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All projects</SelectItem>
+              {projectsAll.map((p) => (
+                <SelectItem key={p._id} value={p._id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
-      {summary === undefined ? (
+      {loading ? (
         <Skeleton className="h-96 w-full" />
-      ) : summary.byEmployee.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-16 text-center">
-          <IconUsers className="text-muted-foreground size-8" stroke={1.5} />
-          <p className="text-muted-foreground text-sm">
-            {departmentId !== ALL || teamId !== ALL
-              ? "No one in this scope reports to you in the selected range."
-              : "No one reports to you yet, so there are no timesheets to show here."}
-          </p>
-        </div>
+      ) : isEmpty ? (
+        <EmptyState scope={scope} filtered={dept !== undefined || tid !== undefined || pid !== undefined} />
       ) : (
         <>
-          <KpiRow summary={summary} />
-          {/* Calendar first — who logged each day, coloured by their top project. */}
-          <TeamCalendar
-            mode={view}
-            anchor={anchor}
-            people={calendarPeople}
-            onSelectPerson={(id) =>
-              setSelected(
-                summary.byEmployee.find((p) => p.employeeId === id) ?? null,
-              )
-            }
-          />
-          {/* Then the existing roster heatmap + project breakdown. */}
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-            <PeopleHeatmap
-              people={roster}
-              total={summary.byEmployee.length}
-              dates={dates}
-              onSelect={setSelected}
-            />
-            <ProjectBreakdown summary={summary} />
-          </div>
+          <KpiRow stats={stats} />
+
+          {view === "day" ? (
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+              <Card className="gap-0 overflow-hidden p-0">
+                <TeamDayGrid
+                  date={anchor}
+                  people={dayPeople}
+                  onSelectPerson={(p) =>
+                    setSelected({
+                      employeeId: p.employeeId,
+                      name: p.name,
+                      jobTitle: p.jobTitle,
+                    })
+                  }
+                  canLogFor={canLogFor}
+                  onLog={(person, d, minute, minutes) => {
+                    const isSelf = person.employeeId === myEmployeeId
+                    setDraft({
+                      date: d,
+                      startMinute: minute,
+                      minutes: minutes ?? 60,
+                      employeeId: isSelf ? undefined : person.employeeId,
+                      employeeName: isSelf ? undefined : person.name,
+                    })
+                    setLogOpen(true)
+                  }}
+                  onEditEntry={(person, entry) => {
+                    const isSelf = person.employeeId === myEmployeeId
+                    setDraft({
+                      entry,
+                      employeeId: isSelf ? undefined : person.employeeId,
+                      employeeName: isSelf ? undefined : person.name,
+                    })
+                    setLogOpen(true)
+                  }}
+                />
+              </Card>
+              <ProjectBreakdown byProject={byProject} totalMinutes={stats.totalMinutes} />
+            </div>
+          ) : (
+            <>
+              {/* Calendar first — who logged each day, coloured by top project. */}
+              <TeamCalendar
+                mode={view}
+                anchor={anchor}
+                people={calendarPeople}
+                onSelectPerson={(id) => {
+                  const p = summary?.byEmployee.find((x) => x.employeeId === id)
+                  if (p)
+                    setSelected({
+                      employeeId: p.employeeId,
+                      name: p.name,
+                      jobTitle: p.jobTitle,
+                    })
+                }}
+              />
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+                <PeopleHeatmap
+                  people={roster}
+                  total={summary?.byEmployee.length ?? 0}
+                  dates={dates}
+                  onSelect={(p) =>
+                    setSelected({
+                      employeeId: p.employeeId,
+                      name: p.name,
+                      jobTitle: p.jobTitle,
+                    })
+                  }
+                />
+                <ProjectBreakdown
+                  byProject={byProject}
+                  totalMinutes={stats.totalMinutes}
+                />
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -316,63 +536,73 @@ export function TeamTimesheets() {
   )
 }
 
-// ── Quick-log cards ──────────────────────────────────────────────────────────
+// ── Board / Report mode toggle (HR Lounge only) ──────────────────────────────
 
-function QuickLog({
-  projects,
-  onQuick,
+function ModeToggle({
+  mode,
+  onChange,
 }: {
-  projects: FunctionReturnType<typeof api.projects.list>
-  onQuick: (draft: EntryDraft) => void
+  mode: "board" | "report"
+  onChange: (m: "board" | "report") => void
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-      <button
-        type="button"
-        onClick={() => onQuick({ date: todayIso() })}
-        className="border-primary/40 bg-primary/5 hover:bg-primary/10 flex items-center gap-2 rounded-xl border border-dashed p-3 text-left transition-colors"
-      >
-        <span className="bg-primary/15 text-primary flex size-8 shrink-0 items-center justify-center rounded-lg">
-          <IconClockPlus className="size-4" />
-        </span>
-        <span className="text-sm font-medium">Log my time</span>
-      </button>
-      {projects.slice(0, 4).map((p) => (
-        <button
-          key={p._id}
-          type="button"
-          onClick={() => onQuick({ date: todayIso(), projectId: p._id })}
-          className="hover:border-primary/40 hover:bg-accent/40 flex items-center gap-2 rounded-xl border p-3 text-left transition-colors"
-        >
-          <span
-            className="size-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: p.color ?? "#94a3b8" }}
-          />
-          <span className="min-w-0 truncate text-sm font-medium">{p.name}</span>
-        </button>
-      ))}
+    <ToggleGroup
+      type="single"
+      value={mode}
+      onValueChange={(v) => v && onChange(v as "board" | "report")}
+      variant="outline"
+      size="sm"
+      className="self-start"
+    >
+      <ToggleGroupItem value="board" className="gap-1.5 px-3">
+        <IconLayoutDashboard className="size-4" />
+        Board
+      </ToggleGroupItem>
+      <ToggleGroupItem value="report" className="gap-1.5 px-3">
+        <IconReportAnalytics className="size-4" />
+        Report
+      </ToggleGroupItem>
+    </ToggleGroup>
+  )
+}
+
+function EmptyState({ scope, filtered }: { scope: Scope; filtered: boolean }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-16 text-center">
+      <IconUsers className="text-muted-foreground size-8" stroke={1.5} />
+      <p className="text-muted-foreground text-sm">
+        {scope === "org"
+          ? filtered
+            ? "No time was logged in this scope for the selected range."
+            : "No time has been logged across the organisation for this range."
+          : filtered
+            ? "No one in this scope reports to you in the selected range."
+            : "No one reports to you yet, so there are no timesheets to show here."}
+      </p>
     </div>
   )
 }
 
 // ── KPI cards ──────────────────────────────────────────────────────────────────
 
-function KpiRow({ summary }: { summary: Summary }) {
-  const people = summary.byEmployee.length
+function KpiRow({
+  stats,
+}: {
+  stats: { totalMinutes: number; peopleLogged: number; people: number }
+}) {
   const avg =
-    summary.peopleLogged > 0
-      ? Math.round(summary.totalMinutes / summary.peopleLogged)
+    stats.peopleLogged > 0
+      ? Math.round(stats.totalMinutes / stats.peopleLogged)
       : 0
-
   const kpis = [
     {
       label: "Total logged",
-      value: formatMinutes(summary.totalMinutes),
+      value: formatMinutes(stats.totalMinutes),
       icon: IconClockHour4,
     },
     {
       label: "People logged",
-      value: `${summary.peopleLogged}/${people}`,
+      value: `${stats.peopleLogged}/${stats.people}`,
       icon: IconUserCheck,
     },
     { label: "Avg / person", value: formatMinutes(avg), icon: IconChartBar },
@@ -383,9 +613,11 @@ function KpiRow({ summary }: { summary: Summary }) {
         <Card key={k.label} className="gap-0 p-4">
           <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
             <k.icon className="size-3.5" />
-            {k.label}
+            <span className="truncate">{k.label}</span>
           </div>
-          <div className="mt-1 text-2xl font-semibold tabular-nums">{k.value}</div>
+          <div className="mt-1 text-xl font-semibold tabular-nums sm:text-2xl">
+            {k.value}
+          </div>
         </Card>
       ))}
     </div>
@@ -405,7 +637,7 @@ function TeamCalendar({
 }: {
   mode: "week" | "month"
   anchor: string
-  people: Map<string, DayPerson[]>
+  people: Map<string, CalPerson[]>
   onSelectPerson: (employeeId: string) => void
 }) {
   const today = todayIso()
@@ -424,109 +656,116 @@ function TeamCalendar({
 
   return (
     <Card className="gap-0 overflow-hidden p-0">
-      <div className="text-muted-foreground grid grid-cols-7 border-b text-center text-[11px] font-medium tracking-wide uppercase">
-        {DOW.map((d) => (
-          <div key={d} className="py-2">
-            {d}
+      {/* Horizontal scroll keeps day columns usable on narrow screens. */}
+      <div className="overflow-x-auto">
+        <div className="min-w-[640px]">
+          <div className="text-muted-foreground grid grid-cols-7 border-b text-center text-[11px] font-medium tracking-wide uppercase">
+            {DOW.map((d) => (
+              <div key={d} className="py-2">
+                {d}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <div>
-        {weeks.map((week, wi) => (
-          <div
-            key={wi}
-            className="grid grid-cols-7 last:[&>*]:border-b-0 [&>*:last-child]:border-r-0"
-          >
-            {week.map((date) => {
-              const dayPeople = people.get(date) ?? []
-              const minutes = dayPeople.reduce((s, p) => s + p.minutes, 0)
-              const inMonth = mode === "week" || sameMonth(date, anchor)
-              const isToday = date === today
-              const top = dayPeople[0]
-              const intensity =
-                minutes > 0 ? 0.12 + 0.5 * Math.min(1, minutes / peak) : 0
-              return (
-                <div
-                  key={date}
-                  className={cn(
-                    "relative flex flex-col gap-1.5 border-r border-b p-2 text-left",
-                    mode === "week" ? "min-h-[140px]" : "min-h-[96px]",
-                    !inMonth && "bg-muted/20 text-muted-foreground",
-                  )}
-                  style={
-                    top && inMonth
-                      ? {
-                          backgroundColor: `color-mix(in srgb, ${top.color} ${Math.round(
-                            intensity * 100,
-                          )}%, transparent)`,
-                        }
-                      : undefined
-                  }
-                >
-                  <div className="flex items-center justify-between">
-                    {mode === "week" ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-muted-foreground text-[11px] uppercase">
-                          {dowLabel(date)}
-                        </span>
-                        <span
-                          className={cn(
-                            "flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
-                            isToday && "bg-primary text-primary-foreground font-semibold",
-                          )}
-                        >
-                          {dayOfMonth(date)}
-                        </span>
-                      </span>
-                    ) : (
-                      <span
-                        className={cn(
-                          "flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
-                          isToday && "bg-primary text-primary-foreground font-semibold",
-                        )}
-                      >
-                        {dayOfMonth(date)}
-                      </span>
-                    )}
-                    {minutes > 0 && (
-                      <span className="text-[11px] font-semibold tabular-nums">
-                        {formatHoursDecimal(minutes)}
-                      </span>
-                    )}
-                  </div>
-
-                  {dayPeople.length > 0 && (
-                    <div className="mt-auto flex items-center">
-                      <div className="flex -space-x-2">
-                        {dayPeople.slice(0, maxAvatars).map((p) => (
-                          <button
-                            key={p.employeeId}
-                            type="button"
-                            onClick={() => onSelectPerson(p.employeeId)}
-                            title={`${p.name} · ${formatMinutes(p.minutes)}`}
-                            className="relative inline-flex rounded-full border-2 bg-background transition-transform hover:z-10 hover:-translate-y-0.5"
-                            style={{ borderColor: p.color }}
+          <div>
+            {weeks.map((week, wi) => (
+              <div
+                key={wi}
+                className="grid grid-cols-7 last:[&>*]:border-b-0 [&>*:last-child]:border-r-0"
+              >
+                {week.map((date) => {
+                  const dayPeople = people.get(date) ?? []
+                  const minutes = dayPeople.reduce((s, p) => s + p.minutes, 0)
+                  const inMonth = mode === "week" || sameMonth(date, anchor)
+                  const isToday = date === today
+                  const top = dayPeople[0]
+                  const intensity =
+                    minutes > 0 ? 0.12 + 0.5 * Math.min(1, minutes / peak) : 0
+                  return (
+                    <div
+                      key={date}
+                      className={cn(
+                        "relative flex flex-col gap-1.5 border-r border-b p-2 text-left",
+                        mode === "week" ? "min-h-[140px]" : "min-h-[96px]",
+                        !inMonth && "bg-muted/20 text-muted-foreground",
+                      )}
+                      style={
+                        top && inMonth
+                          ? {
+                              backgroundColor: `color-mix(in srgb, ${top.color} ${Math.round(
+                                intensity * 100,
+                              )}%, transparent)`,
+                            }
+                          : undefined
+                      }
+                    >
+                      <div className="flex items-center justify-between">
+                        {mode === "week" ? (
+                          <span className="flex items-center gap-1.5">
+                            <span className="text-muted-foreground text-[11px] uppercase">
+                              {dowLabel(date)}
+                            </span>
+                            <span
+                              className={cn(
+                                "flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
+                                isToday &&
+                                  "bg-primary text-primary-foreground font-semibold",
+                              )}
+                            >
+                              {dayOfMonth(date)}
+                            </span>
+                          </span>
+                        ) : (
+                          <span
+                            className={cn(
+                              "flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
+                              isToday &&
+                                "bg-primary text-primary-foreground font-semibold",
+                            )}
                           >
-                            <Avatar className="size-6">
-                              <AvatarFallback className="text-[9px] font-medium">
-                                {initials(p.name)}
-                              </AvatarFallback>
-                            </Avatar>
-                          </button>
-                        ))}
+                            {dayOfMonth(date)}
+                          </span>
+                        )}
+                        {minutes > 0 && (
+                          <span className="text-[11px] font-semibold tabular-nums">
+                            {formatHoursDecimal(minutes)}
+                          </span>
+                        )}
                       </div>
-                      {dayPeople.length > maxAvatars && (
-                        <span className="text-muted-foreground ml-1.5 text-[11px] font-medium">
-                          +{dayPeople.length - maxAvatars}
-                        </span>
+
+                      {dayPeople.length > 0 && (
+                        <div className="mt-auto flex items-center">
+                          <div className="flex -space-x-2">
+                            {dayPeople.slice(0, maxAvatars).map((p) => (
+                              <button
+                                key={p.employeeId}
+                                type="button"
+                                onClick={() => onSelectPerson(p.employeeId)}
+                                title={`${p.name} · ${formatMinutes(p.minutes)}`}
+                                className="relative inline-flex rounded-full border-2 bg-background transition-transform hover:z-10 hover:-translate-y-0.5"
+                                style={{ borderColor: p.color }}
+                              >
+                                <Avatar className="size-6">
+                                  <AvatarFallback className="text-[9px] font-medium">
+                                    {initials(p.name)}
+                                  </AvatarFallback>
+                                </Avatar>
+                              </button>
+                            ))}
+                          </div>
+                          {dayPeople.length > maxAvatars && (
+                            <span className="text-muted-foreground ml-1.5 text-[11px] font-medium">
+                              +{dayPeople.length - maxAvatars}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
-                  )}
-                </div>
-              )
-            })}
+                  )
+                })}
+              </div>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
     </Card>
   )
@@ -545,7 +784,6 @@ function PeopleHeatmap({
   dates: string[]
   onSelect: (p: Person) => void
 }) {
-  // Peak day across everyone, for a shared intensity scale.
   const peak = React.useMemo(() => {
     let max = 0
     for (const p of people) {
@@ -559,7 +797,7 @@ function PeopleHeatmap({
   return (
     <Card className="gap-0 overflow-hidden p-0">
       <div className="flex items-center justify-between border-b px-4 py-2.5">
-        <h3 className="text-sm font-semibold">Team</h3>
+        <h3 className="text-sm font-semibold">People</h3>
         <span className="text-muted-foreground text-xs">
           {people.length === total
             ? `${total} people`
@@ -655,18 +893,24 @@ function PeopleHeatmap({
 
 // ── Project breakdown ──────────────────────────────────────────────────────────
 
-function ProjectBreakdown({ summary }: { summary: Summary }) {
-  const max = summary.byProject[0]?.minutes ?? 0
+function ProjectBreakdown({
+  byProject,
+  totalMinutes,
+}: {
+  byProject: ProjectDatum[]
+  totalMinutes: number
+}) {
+  const max = byProject[0]?.minutes ?? 0
   return (
     <Card className="h-fit gap-0 p-4">
       <h3 className="text-sm font-semibold">By project</h3>
-      {summary.byProject.length === 0 ? (
+      {byProject.length === 0 ? (
         <p className="text-muted-foreground mt-2 text-xs">No time logged.</p>
       ) : (
         <ul className="mt-3 flex flex-col gap-3">
-          {summary.byProject.map((p) => {
-            const pct = summary.totalMinutes
-              ? Math.round((p.minutes / summary.totalMinutes) * 100)
+          {byProject.map((p) => {
+            const pct = totalMinutes
+              ? Math.round((p.minutes / totalMinutes) * 100)
               : 0
             return (
               <li key={p.projectId} className="flex flex-col gap-1">
@@ -711,14 +955,16 @@ function PersonDialog({
   to,
   onClose,
 }: {
-  person: Person | null
+  person: PersonRef | null
   from: string
   to: string
   onClose: () => void
 }) {
   const entries = useQuery(
     api.timeEntries.forEmployee,
-    person ? { employeeId: person.employeeId as Id<"employees">, from, to } : "skip",
+    person
+      ? { employeeId: person.employeeId as Id<"employees">, from, to }
+      : "skip",
   )
 
   const byDay = React.useMemo(() => {

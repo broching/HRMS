@@ -2,7 +2,12 @@ import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireOrg, ctxHasPermission, requirePermission } from "./auth";
+import {
+  requireOrg,
+  ctxHasPermission,
+  requirePermission,
+  type OrgContext,
+} from "./auth";
 import { employeeByUserId } from "./employees";
 import { reportingSubtree } from "./model/org";
 
@@ -127,6 +132,29 @@ function validStart(startMinute: number | null | undefined, minutes: number) {
   }
 }
 
+// Authorize a write against `targetEmployeeId`'s timesheet. Logging for
+// yourself is always allowed; logging on behalf of a report needs
+// `timesheets:log:team` (and the target must be within the caller's reporting
+// tree); org-wide on-behalf logging needs `timesheets:log:all`. Throws when the
+// caller may not touch the target's time.
+async function assertCanLogFor(
+  ctx: QueryCtx,
+  orgCtx: OrgContext,
+  me: Doc<"employees"> | null,
+  targetEmployeeId: Id<"employees">,
+) {
+  if (me && me._id === targetEmployeeId) return;
+  if (ctxHasPermission(orgCtx, "timesheets:log:all")) return;
+  if (me && ctxHasPermission(orgCtx, "timesheets:log:team")) {
+    const subtree = await reportingSubtree(ctx, orgCtx.orgId, me._id);
+    if (subtree.has(targetEmployeeId)) return;
+  }
+  throw new ConvexError({
+    code: "FORBIDDEN",
+    message: "You don't have permission to log time for this person.",
+  });
+}
+
 // ── Self reads + writes ──────────────────────────────────────────────────────
 
 export const mine = query({
@@ -150,23 +178,39 @@ export const create = mutation({
     startMinute: v.optional(v.number()),
     description: v.string(),
     billable: v.optional(v.boolean()),
+    // When set, logs on behalf of another employee (managers → their reporting
+    // tree, HR/admin → anyone). Omitted = the caller's own timesheet.
+    employeeId: v.optional(v.id("employees")),
   },
   returns: v.id("timeEntries"),
   handler: async (ctx, args) => {
-    const { orgId, userId } = await requireOrg(ctx);
+    const orgCtx = await requireOrg(ctx);
+    const { orgId, userId } = orgCtx;
     const me = await employeeByUserId(ctx, orgId, userId);
-    if (!me) {
-      throw new ConvexError({
-        code: "NO_PROFILE",
-        message: "You don't have an employee profile to log time against.",
-      });
+    // Resolve whose timesheet this lands on — the caller by default.
+    let targetId: Id<"employees">;
+    if (args.employeeId) {
+      const target = await ctx.db.get(args.employeeId);
+      if (!target || target.orgId !== orgId) {
+        throw new ConvexError({ code: "NOT_FOUND", message: "Employee not found." });
+      }
+      targetId = args.employeeId;
+    } else {
+      if (!me) {
+        throw new ConvexError({
+          code: "NO_PROFILE",
+          message: "You don't have an employee profile to log time against.",
+        });
+      }
+      targetId = me._id;
     }
+    await assertCanLogFor(ctx, orgCtx, me, targetId);
     validMinutes(args.minutes);
     validStart(args.startMinute, Math.round(args.minutes));
     await checkProjectTask(ctx, orgId, args.projectId, args.taskId);
     return await ctx.db.insert("timeEntries", {
       orgId,
-      employeeId: me._id,
+      employeeId: targetId,
       date: args.date,
       projectId: args.projectId,
       taskId: args.taskId,
@@ -193,12 +237,14 @@ export const update = mutation({
   },
   returns: v.null(),
   handler: async (ctx, { entryId, ...args }) => {
-    const { orgId, userId } = await requireOrg(ctx);
+    const orgCtx = await requireOrg(ctx);
+    const { orgId, userId } = orgCtx;
     const me = await employeeByUserId(ctx, orgId, userId);
     const entry = await ctx.db.get(entryId);
-    if (!entry || entry.orgId !== orgId || !me || entry.employeeId !== me._id) {
-      throw new ConvexError({ code: "FORBIDDEN", message: "Not your entry." });
+    if (!entry || entry.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Entry not found." });
     }
+    await assertCanLogFor(ctx, orgCtx, me, entry.employeeId);
     const nextProject = args.projectId ?? entry.projectId;
     const nextTask =
       args.taskId === undefined ? entry.taskId : (args.taskId ?? undefined);
@@ -232,12 +278,14 @@ export const remove = mutation({
   args: { entryId: v.id("timeEntries") },
   returns: v.null(),
   handler: async (ctx, { entryId }) => {
-    const { orgId, userId } = await requireOrg(ctx);
+    const orgCtx = await requireOrg(ctx);
+    const { orgId, userId } = orgCtx;
     const me = await employeeByUserId(ctx, orgId, userId);
     const entry = await ctx.db.get(entryId);
-    if (!entry || entry.orgId !== orgId || !me || entry.employeeId !== me._id) {
-      throw new ConvexError({ code: "FORBIDDEN", message: "Not your entry." });
+    if (!entry || entry.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Entry not found." });
     }
+    await assertCanLogFor(ctx, orgCtx, me, entry.employeeId);
     await ctx.db.delete(entryId);
     return null;
   },
@@ -258,7 +306,11 @@ export const forEmployee = query({
     }
     const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const isSelf = !!me && me._id === employeeId;
-    const orgWide = ctxHasPermission(orgCtx, "employees:read:all");
+    // Org-wide timesheet oversight (projects:manage) already exposes everyone's
+    // hours via orgReport/orgSummary, so it may also read individual entries.
+    const orgWide =
+      ctxHasPermission(orgCtx, "employees:read:all") ||
+      ctxHasPermission(orgCtx, "projects:manage");
     let allowed = isSelf || orgWide;
     if (!allowed && me) {
       const subtree = await reportingSubtree(ctx, orgCtx.orgId, me._id);
@@ -311,7 +363,7 @@ export const teamSummary = query({
     ),
   }),
   handler: async (ctx, { from, to, departmentId, teamId }) => {
-    const { orgId, userId } = await requireOrg(ctx);
+    const { orgId, userId } = await requirePermission(ctx, "timesheets:team");
     const me = await employeeByUserId(ctx, orgId, userId);
     const empty = {
       totalMinutes: 0,
@@ -322,7 +374,9 @@ export const teamSummary = query({
     };
     if (!me) return empty;
     const subtree = await reportingSubtree(ctx, orgId, me._id);
-    if (subtree.size === 0) return empty;
+    // Include the caller's own timesheet so a manager sees their own logged
+    // work alongside their reports', not just their team's.
+    subtree.add(me._id);
 
     const projects = await ctx.db
       .query("projects")
@@ -404,6 +458,352 @@ export const teamSummary = query({
       .sort((a, b) => b.minutes - a.minutes);
 
     return { totalMinutes, billableMinutes, peopleLogged, byEmployee, byProject };
+  },
+});
+
+// ── Day board (per-hour, one column per person) ──────────────────────────────
+// Powers the "Day" view in the team + HR Lounge timesheet boards: for a single
+// date, each person who logged is returned with their (enriched) entries so the
+// grid can lay timed blocks out hour-by-hour. `topProjectColor` tints the column.
+
+const dayPersonView = v.object({
+  employeeId: v.id("employees"),
+  name: v.string(),
+  jobTitle: v.union(v.string(), v.null()),
+  color: v.union(v.string(), v.null()),
+  minutes: v.number(),
+  entries: v.array(entryView),
+});
+
+const dayView = v.object({
+  date: v.string(),
+  totalMinutes: v.number(),
+  peopleLogged: v.number(),
+  people: v.array(dayPersonView),
+});
+
+// Build the day board for a date. `employeeIds` scopes the result — a subtree
+// set for the team board, or null for the whole org. A single `by_org_date`
+// read covers everyone's entries for the day.
+async function buildDay(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  opts: {
+    date: string;
+    employeeIds: Set<Id<"employees">> | null;
+    departmentId?: Id<"departments">;
+    teamId?: Id<"teams">;
+    projectId?: Id<"projects">;
+    // Always surface this employee as a column, even with no entries that day,
+    // so the caller has somewhere to drag-log their own time.
+    selfId?: Id<"employees"> | null;
+  },
+) {
+  const { date } = opts;
+  const rows = await ctx.db
+    .query("timeEntries")
+    .withIndex("by_org_date", (q) =>
+      q.eq("orgId", orgId).gte("date", date).lte("date", date),
+    )
+    .collect();
+
+  const employees = await ctx.db
+    .query("employees")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const empMap = new Map(employees.map((e) => [e._id, e]));
+
+  const positions = await ctx.db
+    .query("positions")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const posTitle = new Map(positions.map((p) => [p._id, p.title]));
+
+  const projects = await ctx.db
+    .query("projects")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const pMap = new Map(projects.map((p) => [p._id, p]));
+  const tasks = await ctx.db
+    .query("projectTasks")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const tMap = new Map(tasks.map((t) => [t._id, t.name]));
+
+  const filtered = rows.filter((r) => {
+    if (opts.employeeIds && !opts.employeeIds.has(r.employeeId)) return false;
+    const emp = empMap.get(r.employeeId);
+    if (!emp) return false;
+    if (opts.departmentId && emp.departmentId !== opts.departmentId) return false;
+    if (opts.teamId && emp.teamId !== opts.teamId) return false;
+    if (opts.projectId && r.projectId !== opts.projectId) return false;
+    return true;
+  });
+
+  const enrichRow = (e: Doc<"timeEntries">) => ({
+    _id: e._id,
+    _creationTime: e._creationTime,
+    employeeId: e.employeeId,
+    date: e.date,
+    minutes: e.minutes,
+    startMinute: e.startMinute ?? null,
+    description: e.description,
+    billable: e.billable ?? false,
+    projectId: e.projectId,
+    projectName: pMap.get(e.projectId)?.name ?? "—",
+    projectColor: pMap.get(e.projectId)?.color ?? null,
+    taskId: e.taskId ?? null,
+    taskName: e.taskId ? (tMap.get(e.taskId) ?? null) : null,
+  });
+
+  const byEmp = new Map<Id<"employees">, Doc<"timeEntries">[]>();
+  for (const r of filtered) {
+    const arr = byEmp.get(r.employeeId) ?? [];
+    arr.push(r);
+    byEmp.set(r.employeeId, arr);
+  }
+
+  let totalMinutes = 0;
+  const people = [];
+  for (const [employeeId, empRows] of byEmp) {
+    const emp = empMap.get(employeeId)!;
+    // Timed entries first (by start), then unscheduled ones.
+    const entries = empRows.map(enrichRow).sort((a, b) => {
+      const sa = a.startMinute ?? Number.MAX_SAFE_INTEGER;
+      const sb = b.startMinute ?? Number.MAX_SAFE_INTEGER;
+      return sa - sb;
+    });
+    const minutes = entries.reduce((s, e) => s + e.minutes, 0);
+    totalMinutes += minutes;
+    const projMin = new Map<Id<"projects">, number>();
+    for (const e of entries)
+      projMin.set(e.projectId, (projMin.get(e.projectId) ?? 0) + e.minutes);
+    const top = [...projMin.entries()].sort((a, b) => b[1] - a[1])[0];
+    people.push({
+      employeeId,
+      name: displayName(emp),
+      jobTitle: emp.positionId ? (posTitle.get(emp.positionId) ?? null) : null,
+      color: top ? (pMap.get(top[0])?.color ?? null) : null,
+      minutes,
+      entries,
+    });
+  }
+  // Ensure the caller's own column is present (a zero-entry placeholder) so they
+  // can drag-log even on a day they haven't logged anything yet.
+  if (opts.selfId && !byEmp.has(opts.selfId)) {
+    const emp = empMap.get(opts.selfId);
+    if (emp) {
+      people.push({
+        employeeId: opts.selfId,
+        name: displayName(emp),
+        jobTitle: emp.positionId ? (posTitle.get(emp.positionId) ?? null) : null,
+        color: null,
+        minutes: 0,
+        entries: [],
+      });
+    }
+  }
+  people.sort((a, b) => b.minutes - a.minutes);
+  const peopleLogged = people.filter((p) => p.entries.length > 0).length;
+  return { date, totalMinutes, peopleLogged, people };
+}
+
+// Day board across the caller's reporting tree.
+export const teamDay = query({
+  args: {
+    date: v.string(),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+  },
+  returns: dayView,
+  handler: async (ctx, { date, departmentId, teamId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "timesheets:team");
+    const me = await employeeByUserId(ctx, orgId, userId);
+    const empty = { date, totalMinutes: 0, peopleLogged: 0, people: [] };
+    if (!me) return empty;
+    const subtree = await reportingSubtree(ctx, orgId, me._id);
+    // Include the caller so they see (and can drag-log) their own time here too.
+    subtree.add(me._id);
+    return buildDay(ctx, orgId, {
+      date,
+      employeeIds: subtree,
+      departmentId,
+      teamId,
+      selfId: me._id,
+    });
+  },
+});
+
+// Day board across the whole org (projects:manage).
+export const orgDay = query({
+  args: {
+    date: v.string(),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+    projectId: v.optional(v.id("projects")),
+  },
+  returns: dayView,
+  handler: async (ctx, args) => {
+    const { orgId, userId } = await requirePermission(ctx, "projects:manage");
+    const me = await employeeByUserId(ctx, orgId, userId);
+    return buildDay(ctx, orgId, {
+      date: args.date,
+      employeeIds: null,
+      departmentId: args.departmentId,
+      teamId: args.teamId,
+      projectId: args.projectId,
+      selfId: me?._id ?? null,
+    });
+  },
+});
+
+// Org-wide week/month roll-up — the projects:manage twin of `teamSummary`, so the
+// HR Lounge board can reuse the same KPIs / calendar / heatmap / breakdown UI.
+// Only people who logged in the range are returned.
+export const orgSummary = query({
+  args: {
+    from: v.string(),
+    to: v.string(),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+    projectId: v.optional(v.id("projects")),
+  },
+  returns: v.object({
+    totalMinutes: v.number(),
+    billableMinutes: v.number(),
+    peopleLogged: v.number(),
+    byEmployee: v.array(
+      v.object({
+        employeeId: v.id("employees"),
+        name: v.string(),
+        jobTitle: v.union(v.string(), v.null()),
+        departmentId: v.union(v.id("departments"), v.null()),
+        teamId: v.union(v.id("teams"), v.null()),
+        minutes: v.number(),
+        billableMinutes: v.number(),
+        entries: v.number(),
+        byDate: v.array(v.object({ date: v.string(), minutes: v.number() })),
+        topProjectColor: v.union(v.string(), v.null()),
+      }),
+    ),
+    byProject: v.array(
+      v.object({
+        projectId: v.id("projects"),
+        name: v.string(),
+        color: v.union(v.string(), v.null()),
+        minutes: v.number(),
+      }),
+    ),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId } = await requirePermission(ctx, "projects:manage");
+    const rows = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_org_date", (q) =>
+        q.eq("orgId", orgId).gte("date", args.from).lte("date", args.to),
+      )
+      .collect();
+
+    const employees = await ctx.db
+      .query("employees")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    const empMap = new Map(employees.map((e) => [e._id, e]));
+
+    const positions = await ctx.db
+      .query("positions")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    const posTitle = new Map(positions.map((p) => [p._id, p.title]));
+
+    const projects = await ctx.db
+      .query("projects")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    const pName = new Map(projects.map((p) => [p._id, p.name]));
+    const pColor = new Map(projects.map((p) => [p._id, p.color ?? null]));
+
+    const filtered = rows.filter((r) => {
+      const emp = empMap.get(r.employeeId);
+      if (!emp) return false;
+      if (args.departmentId && emp.departmentId !== args.departmentId) return false;
+      if (args.teamId && emp.teamId !== args.teamId) return false;
+      if (args.projectId && r.projectId !== args.projectId) return false;
+      return true;
+    });
+
+    type Agg = {
+      minutes: number;
+      billableMinutes: number;
+      entries: number;
+      dayMap: Map<string, number>;
+      projMap: Map<Id<"projects">, number>;
+    };
+    const perEmp = new Map<Id<"employees">, Agg>();
+    const projMinutes = new Map<Id<"projects">, number>();
+    let totalMinutes = 0;
+    let billableMinutes = 0;
+
+    for (const r of filtered) {
+      const a =
+        perEmp.get(r.employeeId) ??
+        {
+          minutes: 0,
+          billableMinutes: 0,
+          entries: 0,
+          dayMap: new Map<string, number>(),
+          projMap: new Map<Id<"projects">, number>(),
+        };
+      a.minutes += r.minutes;
+      a.entries += 1;
+      a.dayMap.set(r.date, (a.dayMap.get(r.date) ?? 0) + r.minutes);
+      a.projMap.set(r.projectId, (a.projMap.get(r.projectId) ?? 0) + r.minutes);
+      if (r.billable) {
+        a.billableMinutes += r.minutes;
+        billableMinutes += r.minutes;
+      }
+      perEmp.set(r.employeeId, a);
+      totalMinutes += r.minutes;
+      projMinutes.set(r.projectId, (projMinutes.get(r.projectId) ?? 0) + r.minutes);
+    }
+
+    const byEmployee = [];
+    for (const [employeeId, a] of perEmp) {
+      const emp = empMap.get(employeeId)!;
+      const topProject = [...a.projMap.entries()].sort((x, y) => y[1] - x[1])[0];
+      byEmployee.push({
+        employeeId,
+        name: displayName(emp),
+        jobTitle: emp.positionId ? (posTitle.get(emp.positionId) ?? null) : null,
+        departmentId: emp.departmentId ?? null,
+        teamId: emp.teamId ?? null,
+        minutes: a.minutes,
+        billableMinutes: a.billableMinutes,
+        entries: a.entries,
+        byDate: [...a.dayMap.entries()]
+          .map(([date, m]) => ({ date, minutes: m }))
+          .sort((x, y) => x.date.localeCompare(y.date)),
+        topProjectColor: topProject ? (pColor.get(topProject[0]) ?? null) : null,
+      });
+    }
+    byEmployee.sort((x, y) => y.minutes - x.minutes);
+
+    const byProject = [...projMinutes.entries()]
+      .map(([projectId, minutes]) => ({
+        projectId,
+        name: pName.get(projectId) ?? "—",
+        color: pColor.get(projectId) ?? null,
+        minutes,
+      }))
+      .sort((x, y) => y.minutes - x.minutes);
+
+    return {
+      totalMinutes,
+      billableMinutes,
+      peopleLogged: byEmployee.length,
+      byEmployee,
+      byProject,
+    };
   },
 });
 

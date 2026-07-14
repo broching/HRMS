@@ -3,13 +3,14 @@
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
-import { IconClockHour4, IconTrash } from "@tabler/icons-react"
+import { IconClockHour4, IconTrash, IconUser } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
@@ -48,6 +49,10 @@ export type EntryDraft = {
   projectId?: string
   taskId?: string
   minutes?: number
+  // When logging on behalf of someone else (team / HR views): the target
+  // employee and their name for the header. Omitted = the caller's own time.
+  employeeId?: string
+  employeeName?: string
 }
 
 export function EntryDialog({
@@ -73,6 +78,7 @@ export function EntryDialog({
   const [minutes, setMinutes] = React.useState<number>(60)
   const [start, setStart] = React.useState<string>("") // "HH:MM" or ""
   const [description, setDescription] = React.useState("")
+  const [billable, setBillable] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
 
@@ -86,6 +92,7 @@ export function EntryDialog({
       setMinutes(editing.minutes)
       setStart(editing.startMinute != null ? minutesToClock(editing.startMinute) : "")
       setDescription(editing.description)
+      setBillable(editing.billable)
     } else {
       setDate(draft.date ?? "")
       setProjectId(draft.projectId ?? projects[0]?._id ?? "")
@@ -95,6 +102,7 @@ export function EntryDialog({
         draft.startMinute != null ? minutesToClock(draft.startMinute) : "",
       )
       setDescription("")
+      setBillable(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -134,6 +142,7 @@ export function EntryDialog({
           minutes,
           startMinute: startMinute ?? null,
           description,
+          billable,
         })
       } else {
         await create({
@@ -143,6 +152,10 @@ export function EntryDialog({
           minutes,
           startMinute: startMinute ?? undefined,
           description,
+          billable,
+          employeeId: draft.employeeId
+            ? (draft.employeeId as Id<"employees">)
+            : undefined,
         })
       }
       toast.success(editing ? "Entry updated" : "Time logged")
@@ -179,6 +192,18 @@ export function EntryDialog({
             {editing ? "Edit entry" : "Log time"}
           </DialogTitle>
         </DialogHeader>
+
+        {draft.employeeName && (
+          <div className="bg-muted/50 text-muted-foreground flex items-center gap-2 rounded-md border px-3 py-2 text-xs">
+            <IconUser className="size-3.5 shrink-0" />
+            <span>
+              Logging on behalf of{" "}
+              <span className="text-foreground font-medium">
+                {draft.employeeName}
+              </span>
+            </span>
+          </div>
+        )}
 
         <div className="flex flex-col gap-4 py-1">
           {/* Project → task → comment: the logging spine */}
@@ -293,6 +318,23 @@ export function EntryDialog({
                 <span className="text-muted-foreground text-xs">h</span>
               </div>
             </div>
+          </div>
+
+          {/* Billable toggle */}
+          <div className="flex items-center justify-between rounded-md border px-3 py-2">
+            <div className="flex flex-col">
+              <Label htmlFor="billable" className="text-xs">
+                Billable
+              </Label>
+              <span className="text-muted-foreground text-[11px]">
+                Count this time toward billable hours.
+              </span>
+            </div>
+            <Switch
+              id="billable"
+              checked={billable}
+              onCheckedChange={setBillable}
+            />
           </div>
         </div>
 

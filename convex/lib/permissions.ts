@@ -28,6 +28,7 @@ export const PERMISSIONS = [
   "scheduling:roster", // Team → Roster (build + publish team schedule)
   "performance:team", // Team → Team Reviews
   "timesheets:team", // Team → Team Timesheets (view your reporting tree)
+  "timesheets:log:team", // Team → log/edit time on behalf of your reporting tree
   // ── HR Lounge ───────────────────────────────────────────────────────────
   "hr:access", // see the HR Lounge (HR + admin)
   "employees:manage", // create/edit/archive any employee
@@ -42,6 +43,7 @@ export const PERMISSIONS = [
   "scheduling:manage", // shift templates + org-wide rosters
   "attendance:config", // offices, QR, geofence
   "projects:manage", // HR Lounge → Projects + org-wide timesheet oversight
+  "timesheets:log:all", // HR Lounge → log/edit time on behalf of any employee
   "reports:view", // statistics + report builder
   // ── Organization ────────────────────────────────────────────────────────
   "org:manage", // organization settings, country/locale
@@ -120,6 +122,11 @@ export const PERMISSION_META: Record<
     description: "View timesheets for your whole reporting tree.",
     module: "Team workspace",
   },
+  "timesheets:log:team": {
+    label: "Log time for your team",
+    description: "Log and edit time entries on behalf of anyone in your reporting tree.",
+    module: "Team workspace",
+  },
   // ── HR Lounge ─────────────────────────────────────────────────────────────
   "hr:access": {
     label: "Open HR Lounge",
@@ -186,6 +193,11 @@ export const PERMISSION_META: Record<
     description: "Manage projects and tasks, and see org-wide timesheets.",
     module: "HR Lounge",
   },
+  "timesheets:log:all": {
+    label: "Log time for anyone",
+    description: "Log and edit time entries on behalf of any employee in the org.",
+    module: "HR Lounge",
+  },
   "reports:view": {
     label: "Reports",
     description: "Access statistics and the report builder.",
@@ -244,6 +256,7 @@ const MANAGER_PERMISSIONS: Permission[] = [
   "scheduling:roster",
   "performance:team",
   "timesheets:team",
+  "timesheets:log:team",
   "reports:view",
 ];
 
