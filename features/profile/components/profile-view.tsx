@@ -16,6 +16,8 @@ import {
   IconReceipt2,
   IconPencil,
   IconTrash,
+  IconUserOff,
+  IconUserCheck,
   type Icon,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
@@ -79,11 +81,17 @@ export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
   const setMyPhoto = useMutation(api.employees.setMyPhoto)
   const setPhoto = useMutation(api.employees.setPhoto)
   const removeEmployee = useMutation(api.employees.remove)
+  const deactivateEmployee = useMutation(api.employees.deactivate)
+  const reactivateEmployee = useMutation(api.employees.reactivate)
   const [section, setSection] = React.useState<SectionKey>(
     initialTab ?? "profile",
   )
   const [confirmDelete, setConfirmDelete] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
+  const [confirmDeactivate, setConfirmDeactivate] = React.useState(false)
+  const [deactivating, setDeactivating] = React.useState(false)
+  const [confirmReactivate, setConfirmReactivate] = React.useState(false)
+  const [reactivating, setReactivating] = React.useState(false)
 
   async function handleDelete() {
     setDeleting(true)
@@ -96,6 +104,36 @@ export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
     } catch (e) {
       toast.error(getErrorMessage(e, "Couldn't delete this employee"))
       setDeleting(false)
+    }
+  }
+
+  async function handleDeactivate() {
+    setDeactivating(true)
+    try {
+      const { revokedLogin } = await deactivateEmployee({ employeeId })
+      setConfirmDeactivate(false)
+      toast.success(
+        revokedLogin
+          ? "Account deactivated — login access revoked"
+          : "Employee marked as terminated",
+      )
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't deactivate this account"))
+    } finally {
+      setDeactivating(false)
+    }
+  }
+
+  async function handleReactivate() {
+    setReactivating(true)
+    try {
+      await reactivateEmployee({ employeeId })
+      setConfirmReactivate(false)
+      toast.success("Employee reactivated — access restored")
+    } catch (e) {
+      toast.error(getErrorMessage(e, "Couldn't reactivate this employee"))
+    } finally {
+      setReactivating(false)
     }
   }
 
@@ -251,13 +289,31 @@ export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
 
           <div className="flex flex-col items-start gap-3 lg:ml-auto lg:items-end">
             {canManage && !isSelf && (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button asChild variant="outline">
                   <Link href={`/employees/${employeeId}/edit`}>
                     <IconPencil className="size-4" />
                     Edit
                   </Link>
                 </Button>
+                {employee.status === "terminated" ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => setConfirmReactivate(true)}
+                  >
+                    <IconUserCheck className="size-4" />
+                    Reactivate
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="text-amber-600 hover:text-amber-600 dark:text-amber-500 dark:hover:text-amber-500"
+                    onClick={() => setConfirmDeactivate(true)}
+                  >
+                    <IconUserOff className="size-4" />
+                    Deactivate
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   className="text-destructive hover:text-destructive"
@@ -357,6 +413,64 @@ export function ProfileView({ employeeId }: { employeeId: Id<"employees"> }) {
           )}
         </Card>
       </div>
+
+      <Dialog
+        open={confirmDeactivate}
+        onOpenChange={(o) => !deactivating && setConfirmDeactivate(o)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Deactivate account?</DialogTitle>
+            <DialogDescription>
+              This marks {employee.firstName} {employee.lastName} as{" "}
+              <strong>Terminated</strong> and revokes their login — they lose all
+              access to the app and are removed from the organization. Their
+              records (documents, leave, payroll, performance) are kept, and you
+              can reactivate them later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setConfirmDeactivate(false)}
+              disabled={deactivating}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleDeactivate} disabled={deactivating}>
+              {deactivating ? "Deactivating…" : "Deactivate account"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={confirmReactivate}
+        onOpenChange={(o) => !reactivating && setConfirmReactivate(o)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reactivate employee?</DialogTitle>
+            <DialogDescription>
+              This restores {employee.firstName} {employee.lastName} to{" "}
+              <strong>Active</strong> and re-grants their login access,
+              re-adding them to the organization.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setConfirmReactivate(false)}
+              disabled={reactivating}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleReactivate} disabled={reactivating}>
+              {reactivating ? "Reactivating…" : "Reactivate"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={confirmDelete} onOpenChange={(o) => !deleting && setConfirmDelete(o)}>
         <DialogContent className="sm:max-w-md">

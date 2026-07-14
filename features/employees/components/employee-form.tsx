@@ -308,6 +308,22 @@ export function EmployeeForm({
           return
         }
 
+        // Inline pre-check against the loaded directory so a taken work email
+        // surfaces on the field immediately. The server (employees.create)
+        // re-validates authoritatively (and also catches usernames + races).
+        if (email) {
+          const taken = allEmployees.find(
+            (e) => e.workEmail?.toLowerCase() === email.toLowerCase(),
+          )
+          if (taken) {
+            form.setError("workEmail", {
+              message: `Already assigned to ${taken.firstName} ${taken.lastName} (${taken.employeeNumber}).`,
+            })
+            toast.error("This work email is already assigned to an employee.")
+            return
+          }
+        }
+
         // Create + link the profile first, so whichever join path completes
         // (email invite acceptance, or username org-add) links it reliably.
         const id = await create({

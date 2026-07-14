@@ -17,6 +17,8 @@ import {
 } from "./lib/enums";
 import { requireOrg, getOrgContext, requirePermission } from "./auth";
 import { ctxHasPermission } from "./auth";
+import { internal } from "./_generated/api";
+import { memberByOrgAndUser } from "./members";
 import { writeAuditLog } from "./lib/audit";
 import { buildSearchName } from "./model/employee";
 import {
@@ -608,6 +610,37 @@ export const create = mutation({
     const masked = idNumber ? maskId(idNumber) : undefined;
     const email = loginEmail?.trim().toLowerCase() || undefined;
     const username = loginUsername?.trim().toLowerCase() || undefined;
+
+    // The login identifier (work email or username) must be unique within the
+    // org — otherwise two employee records would fight to link to the same
+    // account. Reject early with a clear message rather than silently creating
+    // a duplicate.
+    if (email) {
+      const emailDup = await ctx.db
+        .query("employees")
+        .withIndex("by_org_loginEmail", (q) =>
+          q.eq("orgId", orgId).eq("loginEmail", email),
+        )
+        .first();
+      if (emailDup) {
+        throw new Error(
+          `This work email is already assigned to employee ${emailDup.employeeNumber} (${emailDup.firstName} ${emailDup.lastName}).`,
+        );
+      }
+    }
+    if (username) {
+      const usernameDup = await ctx.db
+        .query("employees")
+        .withIndex("by_org_loginUsername", (q) =>
+          q.eq("orgId", orgId).eq("loginUsername", username),
+        )
+        .first();
+      if (usernameDup) {
+        throw new Error(
+          `This username is already assigned to employee ${usernameDup.employeeNumber} (${usernameDup.firstName} ${usernameDup.lastName}).`,
+        );
+      }
+    }
     // The invite email is canonical for work email; keep contact in sync.
     const contact = email
       ? { ...(rest.contact ?? {}), workEmail: email }
@@ -906,6 +939,108 @@ export const archive = mutation({
       orgId,
       actorUserId: userId,
       action: "employee.archive",
+      entity: "employees",
+      entityId: employeeId,
+    });
+    return null;
+  },
+});
+
+// Deactivate (offboard) someone who has left the org: terminate the employee
+// record AND revoke their login. Setting the linked member to `removed` blocks
+// all app access immediately (enforced in getOrgContext), and we schedule their
+// removal from the Clerk organization so their session can't keep carrying it.
+// History is preserved (unlike `remove`) and it's reversible via `reactivate`.
+export const deactivate = mutation({
+  args: { employeeId: v.id("employees"), exitDate: v.optional(v.string()) },
+  returns: v.object({ revokedLogin: v.boolean() }),
+  handler: async (ctx, { employeeId, exitDate }) => {
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgId) {
+      throw new Error("Employee not found.");
+    }
+    // Guard against locking yourself out of the org.
+    if (employee.userId && employee.userId === userId) {
+      throw new Error("You can't deactivate your own account.");
+    }
+
+    await ctx.db.patch(employeeId, {
+      status: "terminated",
+      exitDate: exitDate ?? new Date().toISOString().slice(0, 10),
+      updatedAt: Date.now(),
+    });
+
+    // Revoke the login account, if this person ever joined.
+    let revokedLogin = false;
+    if (employee.userId) {
+      const member = await memberByOrgAndUser(ctx, orgId, employee.userId);
+      if (member && member.status !== "removed") {
+        await ctx.db.patch(member._id, { status: "removed" });
+        revokedLogin = true;
+      }
+      const user = await ctx.db.get(employee.userId);
+      const org = await ctx.db.get(orgId);
+      if (user?.externalId && org) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.orgMembers.removeFromClerkOrg,
+          { clerkOrgId: org.clerkOrgId, clerkUserId: user.externalId },
+        );
+      }
+    }
+
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "employee.deactivate",
+      entity: "employees",
+      entityId: employeeId,
+      after: { status: "terminated", revokedLogin },
+    });
+    return { revokedLogin };
+  },
+});
+
+// Reverse a deactivation: restore the employee (default `active`) and re-grant
+// their login — the linked member goes back to `active` and we re-add them to
+// the Clerk organization.
+export const reactivate = mutation({
+  args: { employeeId: v.id("employees"), status: v.optional(employeeStatus) },
+  returns: v.null(),
+  handler: async (ctx, { employeeId, status }) => {
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgId) {
+      throw new Error("Employee not found.");
+    }
+
+    await ctx.db.patch(employeeId, {
+      status: status ?? "active",
+      exitDate: undefined,
+      updatedAt: Date.now(),
+    });
+
+    if (employee.userId) {
+      const member = await memberByOrgAndUser(ctx, orgId, employee.userId);
+      if (member && member.status === "removed") {
+        await ctx.db.patch(member._id, { status: "active" });
+        const user = await ctx.db.get(employee.userId);
+        const org = await ctx.db.get(orgId);
+        if (user?.externalId && org) {
+          await ctx.scheduler.runAfter(0, internal.orgMembers.addToClerkOrg, {
+            clerkOrgId: org.clerkOrgId,
+            clerkUserId: user.externalId,
+            role: member.role,
+          });
+        }
+      }
+    }
+
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "employee.reactivate",
       entity: "employees",
       entityId: employeeId,
     });

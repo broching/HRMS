@@ -137,6 +137,59 @@ export const addByUsername = action({
   },
 });
 
+// Remove a user from a Clerk organization. Best-effort: called (scheduled) when
+// an employee is deactivated so their session token can no longer carry the org.
+// A missing key or a 404 (already gone) is treated as a no-op — in-app access is
+// already revoked by the member's `removed` status regardless.
+export const removeFromClerkOrg = internalAction({
+  args: { clerkOrgId: v.string(), clerkUserId: v.string() },
+  returns: v.null(),
+  handler: async (_ctx, { clerkOrgId, clerkUserId }) => {
+    if (!process.env.CLERK_SECRET_KEY) {
+      console.warn("CLERK_SECRET_KEY unset; skipping Clerk org removal.");
+      return null;
+    }
+    try {
+      const res = await clerkFetch(
+        `/organizations/${clerkOrgId}/memberships/${clerkUserId}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok && res.status !== 404) {
+        console.error(
+          `Clerk org removal failed (${res.status}) for user ${clerkUserId}.`,
+        );
+      }
+    } catch (err) {
+      console.error(`Clerk org removal error for user ${clerkUserId}:`, err);
+    }
+    return null;
+  },
+});
+
+// Re-add a previously-removed user to a Clerk organization. Best-effort inverse
+// of removeFromClerkOrg, called (scheduled) when an employee is reactivated.
+// Idempotent — an existing membership counts as success.
+export const addToClerkOrg = internalAction({
+  args: {
+    clerkOrgId: v.string(),
+    clerkUserId: v.string(),
+    role: v.optional(hrmsRole),
+  },
+  returns: v.null(),
+  handler: async (_ctx, { clerkOrgId, clerkUserId, role }) => {
+    if (!process.env.CLERK_SECRET_KEY) {
+      console.warn("CLERK_SECRET_KEY unset; skipping Clerk org re-add.");
+      return null;
+    }
+    try {
+      await addMembership(clerkOrgId, clerkUserId, clerkRoleFor(role));
+    } catch (err) {
+      console.error(`Clerk org re-add error for user ${clerkUserId}:`, err);
+    }
+    return null;
+  },
+});
+
 // ─── Pending resolution (auto-add on signup) ───────────────────────────────
 
 // Distinct orgs still waiting for this username, with the role to grant.

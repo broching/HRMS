@@ -264,7 +264,10 @@ export const ensureSelf = mutation({
 
     const existing = await memberByOrgAndUser(ctx, org._id, user._id);
     if (existing) {
-      if (existing.status !== "active") {
+      // Auto-activate a pending invite on first sign-in — but NEVER a member an
+      // admin has deactivated (`removed`). Otherwise a deactivated person could
+      // restore their own access just by reloading the app.
+      if (existing.status === "invited") {
         await ctx.db.patch(existing._id, { status: "active" });
       }
       // Make sure a matching employee gets linked even if it was created
