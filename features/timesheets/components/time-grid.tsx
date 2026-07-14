@@ -18,7 +18,9 @@ import { packLanes } from "@/features/timesheets/lib/layout"
 
 type Entry = FunctionReturnType<typeof api.timeEntries.mine>[number]
 
-const SNAP = 15 // minutes
+// Drag-to-select snaps to whole hours (10am, 11am …) for fast blocking-out;
+// finer minute-level control is available in the edit form.
+const SNAP = 60 // minutes
 
 /**
  * Hourly calendar grid. Renders an hour gutter plus one column per date, with
@@ -32,14 +34,12 @@ export function TimeGrid({
   onCreate,
   onSelect,
   readOnly = false,
-  compactColumns = false,
 }: {
   dates: string[]
   entriesByDate: Map<string, Entry[]>
   onCreate?: (date: string, minute: number, minutes?: number) => void
   onSelect?: (entry: Entry) => void
   readOnly?: boolean
-  compactColumns?: boolean
 }) {
   const today = todayIso()
 
@@ -160,8 +160,7 @@ export function TimeGrid({
               <div
                 key={date}
                 className={cn(
-                  "flex flex-col border-l first:border-l-0",
-                  single ? "flex-1" : compactColumns ? "w-[92px]" : "flex-1",
+                  "flex flex-1 flex-col border-l first:border-l-0",
                   !single && "min-w-[92px]",
                 )}
               >

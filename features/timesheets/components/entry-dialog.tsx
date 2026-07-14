@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ConfirmDialog } from "@/features/claims/components/confirm-dialog"
 import { cn } from "@/lib/utils"
 import {
   clockToMinutes,
@@ -72,8 +73,8 @@ export function EntryDialog({
   const [minutes, setMinutes] = React.useState<number>(60)
   const [start, setStart] = React.useState<string>("") // "HH:MM" or ""
   const [description, setDescription] = React.useState("")
-  const [billable, setBillable] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
+  const [confirmOpen, setConfirmOpen] = React.useState(false)
 
   // Seed the form each time the dialog opens.
   React.useEffect(() => {
@@ -85,7 +86,6 @@ export function EntryDialog({
       setMinutes(editing.minutes)
       setStart(editing.startMinute != null ? minutesToClock(editing.startMinute) : "")
       setDescription(editing.description)
-      setBillable(editing.billable)
     } else {
       setDate(draft.date ?? "")
       setProjectId(draft.projectId ?? projects[0]?._id ?? "")
@@ -95,7 +95,6 @@ export function EntryDialog({
         draft.startMinute != null ? minutesToClock(draft.startMinute) : "",
       )
       setDescription("")
-      setBillable(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -135,7 +134,6 @@ export function EntryDialog({
           minutes,
           startMinute: startMinute ?? null,
           description,
-          billable,
         })
       } else {
         await create({
@@ -145,7 +143,6 @@ export function EntryDialog({
           minutes,
           startMinute: startMinute ?? undefined,
           description,
-          billable,
         })
       }
       toast.success(editing ? "Entry updated" : "Time logged")
@@ -297,24 +294,14 @@ export function EntryDialog({
               </div>
             </div>
           </div>
-
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4"
-              checked={billable}
-              onChange={(e) => setBillable(e.target.checked)}
-            />
-            Billable
-          </label>
         </div>
 
         <DialogFooter className="gap-2 sm:justify-between">
           {editing ? (
             <Button
-              variant="ghost"
-              className="text-muted-foreground hover:text-destructive"
-              onClick={handleDelete}
+              variant="outline"
+              className="border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive"
+              onClick={() => setConfirmOpen(true)}
               disabled={saving}
             >
               <IconTrash className="size-4" />
@@ -333,6 +320,20 @@ export function EntryDialog({
           </div>
         </DialogFooter>
       </DialogContent>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Delete this entry?"
+        description="This time entry will be permanently removed. This can't be undone."
+        confirmLabel="Delete entry"
+        destructive
+        busy={saving}
+        onConfirm={async () => {
+          await handleDelete()
+          setConfirmOpen(false)
+        }}
+      />
     </Dialog>
   )
 }

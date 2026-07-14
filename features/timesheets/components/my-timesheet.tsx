@@ -199,7 +199,6 @@ export function MyTimesheet() {
             entriesByDate={byDate}
             onCreate={openSlot}
             onSelect={openEdit}
-            compactColumns={view === "week"}
           />
         </Card>
       )}

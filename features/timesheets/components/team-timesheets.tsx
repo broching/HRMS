@@ -10,15 +10,11 @@ import {
   IconClockHour4,
   IconClockPlus,
   IconUserCheck,
-  IconCoin,
   IconChartBar,
   IconSearch,
-  IconLayoutList,
-  IconCalendarMonth,
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -45,6 +41,9 @@ import {
   addDaysIso,
   addMonthsIso,
   monthRange,
+  monthGrid,
+  weekDates,
+  sameMonth,
   weekRangeLabel,
   monthLabel,
   formatMinutes,
@@ -55,10 +54,6 @@ import {
   dayOfMonth,
 } from "@/features/timesheets/lib/time"
 import {
-  TimesheetCalendar,
-  type DayDatum,
-} from "@/features/timesheets/components/timesheet-calendar"
-import {
   EntryDialog,
   type EntryDraft,
 } from "@/features/timesheets/components/entry-dialog"
@@ -66,8 +61,17 @@ import {
 type Summary = FunctionReturnType<typeof api.timeEntries.teamSummary>
 type Person = Summary["byEmployee"][number]
 type View = "week" | "month"
-type Display = "roster" | "calendar"
 
+// One person's contribution on a single day, used by the team calendar.
+type DayPerson = {
+  employeeId: string
+  name: string
+  jobTitle: string | null
+  color: string
+  minutes: number
+}
+
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 const ALL = "__all__"
 
 function initials(name: string): string {
@@ -93,7 +97,6 @@ function datesInRange(from: string, to: string): string[] {
 
 export function TeamTimesheets() {
   const [view, setView] = React.useState<View>("week")
-  const [display, setDisplay] = React.useState<Display>("roster")
   const [anchor, setAnchor] = React.useState<string>(() => todayIso())
   const [search, setSearch] = React.useState("")
   const [departmentId, setDepartmentId] = React.useState(ALL)
@@ -138,18 +141,24 @@ export function TeamTimesheets() {
     )
   }, [summary, search])
 
-  // Per-day roll-up for the calendar: team minutes + how many people logged.
-  const calendarData = React.useMemo(() => {
-    const m = new Map<string, DayDatum>()
+  // Per-day people for the calendar: who logged, coloured by their top project.
+  const calendarPeople = React.useMemo(() => {
+    const m = new Map<string, DayPerson[]>()
     for (const p of summary?.byEmployee ?? []) {
       for (const d of p.byDate) {
         if (d.minutes <= 0) continue
-        const cur = m.get(d.date) ?? { minutes: 0, people: 0 }
-        cur.minutes += d.minutes
-        cur.people = (cur.people ?? 0) + 1
-        m.set(d.date, cur)
+        const arr = m.get(d.date) ?? []
+        arr.push({
+          employeeId: p.employeeId,
+          name: p.name,
+          jobTitle: p.jobTitle,
+          color: p.topProjectColor ?? "#6366f1",
+          minutes: d.minutes,
+        })
+        m.set(d.date, arr)
       }
     }
+    for (const arr of m.values()) arr.sort((a, b) => b.minutes - a.minutes)
     return m
   }, [summary])
 
@@ -197,36 +206,20 @@ export function TeamTimesheets() {
           </Button>
           <div className="ml-1 text-sm font-semibold">{rangeLabel}</div>
         </div>
-        <div className="flex items-center gap-2">
-          <ToggleGroup
-            type="single"
-            value={display}
-            onValueChange={(v) => v && setDisplay(v as Display)}
-            variant="outline"
-            size="sm"
-          >
-            <ToggleGroupItem value="roster" className="px-3" aria-label="Roster">
-              <IconLayoutList className="size-4" />
-            </ToggleGroupItem>
-            <ToggleGroupItem value="calendar" className="px-3" aria-label="Calendar">
-              <IconCalendarMonth className="size-4" />
-            </ToggleGroupItem>
-          </ToggleGroup>
-          <ToggleGroup
-            type="single"
-            value={view}
-            onValueChange={(v) => v && setView(v as View)}
-            variant="outline"
-            size="sm"
-          >
-            <ToggleGroupItem value="week" className="px-4">
-              Week
-            </ToggleGroupItem>
-            <ToggleGroupItem value="month" className="px-4">
-              Month
-            </ToggleGroupItem>
-          </ToggleGroup>
-        </div>
+        <ToggleGroup
+          type="single"
+          value={view}
+          onValueChange={(v) => v && setView(v as View)}
+          variant="outline"
+          size="sm"
+        >
+          <ToggleGroupItem value="week" className="px-4">
+            Week
+          </ToggleGroupItem>
+          <ToggleGroupItem value="month" className="px-4">
+            Month
+          </ToggleGroupItem>
+        </ToggleGroup>
       </div>
 
       {/* Filters */}
@@ -282,28 +275,27 @@ export function TeamTimesheets() {
       ) : (
         <>
           <KpiRow summary={summary} />
-          {display === "calendar" ? (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-              <Card className="gap-0 p-3">
-                <TimesheetCalendar
-                  mode={view}
-                  anchor={anchor}
-                  data={calendarData}
-                />
-              </Card>
-              <ProjectBreakdown summary={summary} />
-            </div>
-          ) : (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-              <PeopleHeatmap
-                people={roster}
-                total={summary.byEmployee.length}
-                dates={dates}
-                onSelect={setSelected}
-              />
-              <ProjectBreakdown summary={summary} />
-            </div>
-          )}
+          {/* Calendar first — who logged each day, coloured by their top project. */}
+          <TeamCalendar
+            mode={view}
+            anchor={anchor}
+            people={calendarPeople}
+            onSelectPerson={(id) =>
+              setSelected(
+                summary.byEmployee.find((p) => p.employeeId === id) ?? null,
+              )
+            }
+          />
+          {/* Then the existing roster heatmap + project breakdown. */}
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+            <PeopleHeatmap
+              people={roster}
+              total={summary.byEmployee.length}
+              dates={dates}
+              onSelect={setSelected}
+            />
+            <ProjectBreakdown summary={summary} />
+          </div>
         </>
       )}
 
@@ -367,10 +359,6 @@ function QuickLog({
 
 function KpiRow({ summary }: { summary: Summary }) {
   const people = summary.byEmployee.length
-  const billablePct =
-    summary.totalMinutes > 0
-      ? Math.round((summary.billableMinutes / summary.totalMinutes) * 100)
-      : 0
   const avg =
     summary.peopleLogged > 0
       ? Math.round(summary.totalMinutes / summary.peopleLogged)
@@ -387,11 +375,10 @@ function KpiRow({ summary }: { summary: Summary }) {
       value: `${summary.peopleLogged}/${people}`,
       icon: IconUserCheck,
     },
-    { label: "Billable", value: `${billablePct}%`, icon: IconCoin },
     { label: "Avg / person", value: formatMinutes(avg), icon: IconChartBar },
   ]
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div className="grid grid-cols-3 gap-3">
       {kpis.map((k) => (
         <Card key={k.label} className="gap-0 p-4">
           <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
@@ -402,6 +389,146 @@ function KpiRow({ summary }: { summary: Summary }) {
         </Card>
       ))}
     </div>
+  )
+}
+
+// ── Team calendar ──────────────────────────────────────────────────────────────
+// A week/month calendar showing who logged time each day. Each day is tinted by
+// its busiest project's colour, and the people who logged are shown as avatars
+// ringed in their top project's colour — click one to drill into their entries.
+
+function TeamCalendar({
+  mode,
+  anchor,
+  people,
+  onSelectPerson,
+}: {
+  mode: "week" | "month"
+  anchor: string
+  people: Map<string, DayPerson[]>
+  onSelectPerson: (employeeId: string) => void
+}) {
+  const today = todayIso()
+  const peak = React.useMemo(() => {
+    let max = 0
+    for (const arr of people.values()) {
+      const t = arr.reduce((s, p) => s + p.minutes, 0)
+      if (t > max) max = t
+    }
+    return Math.max(max, 60)
+  }, [people])
+
+  const weeks: string[][] =
+    mode === "month" ? monthGrid(anchor) : [weekDates(mondayOfIso(anchor))]
+  const maxAvatars = mode === "month" ? 3 : 6
+
+  return (
+    <Card className="gap-0 overflow-hidden p-0">
+      <div className="text-muted-foreground grid grid-cols-7 border-b text-center text-[11px] font-medium tracking-wide uppercase">
+        {DOW.map((d) => (
+          <div key={d} className="py-2">
+            {d}
+          </div>
+        ))}
+      </div>
+      <div>
+        {weeks.map((week, wi) => (
+          <div
+            key={wi}
+            className="grid grid-cols-7 last:[&>*]:border-b-0 [&>*:last-child]:border-r-0"
+          >
+            {week.map((date) => {
+              const dayPeople = people.get(date) ?? []
+              const minutes = dayPeople.reduce((s, p) => s + p.minutes, 0)
+              const inMonth = mode === "week" || sameMonth(date, anchor)
+              const isToday = date === today
+              const top = dayPeople[0]
+              const intensity =
+                minutes > 0 ? 0.12 + 0.5 * Math.min(1, minutes / peak) : 0
+              return (
+                <div
+                  key={date}
+                  className={cn(
+                    "relative flex flex-col gap-1.5 border-r border-b p-2 text-left",
+                    mode === "week" ? "min-h-[140px]" : "min-h-[96px]",
+                    !inMonth && "bg-muted/20 text-muted-foreground",
+                  )}
+                  style={
+                    top && inMonth
+                      ? {
+                          backgroundColor: `color-mix(in srgb, ${top.color} ${Math.round(
+                            intensity * 100,
+                          )}%, transparent)`,
+                        }
+                      : undefined
+                  }
+                >
+                  <div className="flex items-center justify-between">
+                    {mode === "week" ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-muted-foreground text-[11px] uppercase">
+                          {dowLabel(date)}
+                        </span>
+                        <span
+                          className={cn(
+                            "flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
+                            isToday && "bg-primary text-primary-foreground font-semibold",
+                          )}
+                        >
+                          {dayOfMonth(date)}
+                        </span>
+                      </span>
+                    ) : (
+                      <span
+                        className={cn(
+                          "flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
+                          isToday && "bg-primary text-primary-foreground font-semibold",
+                        )}
+                      >
+                        {dayOfMonth(date)}
+                      </span>
+                    )}
+                    {minutes > 0 && (
+                      <span className="text-[11px] font-semibold tabular-nums">
+                        {formatHoursDecimal(minutes)}
+                      </span>
+                    )}
+                  </div>
+
+                  {dayPeople.length > 0 && (
+                    <div className="mt-auto flex items-center">
+                      <div className="flex -space-x-2">
+                        {dayPeople.slice(0, maxAvatars).map((p) => (
+                          <button
+                            key={p.employeeId}
+                            type="button"
+                            onClick={() => onSelectPerson(p.employeeId)}
+                            title={`${p.name} · ${formatMinutes(p.minutes)}`}
+                            className="relative inline-flex rounded-full border-2 bg-background transition-transform hover:z-10 hover:-translate-y-0.5"
+                            style={{ borderColor: p.color }}
+                          >
+                            <Avatar className="size-6">
+                              <AvatarFallback className="text-[9px] font-medium">
+                                {initials(p.name)}
+                              </AvatarFallback>
+                            </Avatar>
+                          </button>
+                        ))}
+                      </div>
+                      {dayPeople.length > maxAvatars && (
+                        <span className="text-muted-foreground ml-1.5 text-[11px] font-medium">
+                          +{dayPeople.length - maxAvatars}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ))}
+      </div>
+    </Card>
   )
 }
 
@@ -654,11 +781,6 @@ function PersonDialog({
                           <span className="font-medium">{e.projectName}</span>
                           {e.taskName && (
                             <span className="text-muted-foreground">· {e.taskName}</span>
-                          )}
-                          {e.billable && (
-                            <Badge variant="outline" className="text-[10px]">
-                              Billable
-                            </Badge>
                           )}
                         </div>
                         {e.description && (
