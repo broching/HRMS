@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Card,
   CardContent,
@@ -25,60 +24,49 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { FunctionReturnType } from "convex/server"
 import {
   CYCLE_STATUS_BADGE,
   CYCLE_STATUS_LABELS,
 } from "@/features/performance/lib/labels"
+import { CycleFormDialog } from "@/features/performance/components/cycle-form-dialog"
+import { CycleScheduleDialog } from "@/features/performance/components/cycle-schedule-dialog"
+import { ModuleEmailSettings } from "@/features/org-settings/components/email-settings"
+import { ConfirmDialog } from "@/components/shared/confirm-dialog"
 
 type Cycle = FunctionReturnType<typeof api.reviewCycles.list>[number]
 
-function CycleConfigDialog({
+function ReleaseDialog({
   cycle,
   onClose,
 }: {
   cycle: Cycle | null
   onClose: () => void
 }) {
-  const updateConfig = useMutation(api.reviewCycles.updateConfig)
-  const [objW, setObjW] = React.useState("70")
-  const [scale, setScale] = React.useState("5")
-  const [questionnaire, setQuestionnaire] = React.useState("")
-  const [questions360, setQuestions360] = React.useState("")
+  const preview = useQuery(
+    api.reviewCycles.audiencePreview,
+    cycle ? { cycleId: cycle._id } : "skip",
+  )
+  const activate = useMutation(api.reviewCycles.activate)
   const [busy, setBusy] = React.useState(false)
 
-  React.useEffect(() => {
+  async function release() {
     if (!cycle) return
-    setObjW(String(cycle.objectivesWeightPct ?? 70))
-    setScale(String(cycle.ratingScaleMax))
-    setQuestionnaire((cycle.questionnaire ?? []).join("\n"))
-    setQuestions360((cycle.feedback360Questions ?? []).join("\n"))
-  }, [cycle])
-
-  const objNum = Number(objW) || 0
-  const compNum = 100 - objNum
-
-  async function save() {
-    if (!cycle) return
-    if (objNum < 0 || objNum > 100) {
-      toast.error("Objectives weight must be between 0 and 100.")
-      return
-    }
     setBusy(true)
     try {
-      await updateConfig({
-        cycleId: cycle._id,
-        ratingScaleMax: Number(scale) || 5,
-        objectivesWeightPct: objNum,
-        competenciesWeightPct: compNum,
-        questionnaire: questionnaire.split("\n"),
-        feedback360Questions: questions360.split("\n"),
-      })
-      toast.success("Cycle configuration saved.")
+      const r = await activate({ cycleId: cycle._id })
+      toast.success(`Released — ${r.created} participant(s) notified.`)
       onClose()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save configuration.")
+      toast.error(e instanceof Error ? e.message : "Couldn't release.")
     } finally {
       setBusy(false)
     }
@@ -86,56 +74,39 @@ function CycleConfigDialog({
 
   return (
     <Dialog open={!!cycle} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto">
+      <DialogContent>
         <DialogHeader>
-          <DialogTitle>Configure {cycle?.name}</DialogTitle>
+          <DialogTitle>Release {cycle?.name}?</DialogTitle>
           <DialogDescription>
-            Appraisal weighting, questionnaire and 360 questions for this cycle.
+            This opens the form for everyone below and notifies them. Both the
+            employee and appraiser sides open immediately.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-3 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label>Objectives %</Label>
-              <Input
-                inputMode="numeric"
-                value={objW}
-                onChange={(e) => setObjW(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Competencies %</Label>
-              <Input value={compNum} readOnly disabled />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Rating scale</Label>
-              <Input
-                inputMode="numeric"
-                value={scale}
-                onChange={(e) => setScale(e.target.value)}
-              />
-            </div>
+        {preview === undefined ? (
+          <Skeleton className="h-16 w-full" />
+        ) : (
+          <div className="text-sm">
+            <p className="font-medium">
+              {preview.count} participant{preview.count === 1 ? "" : "s"}
+            </p>
+            {preview.count === 0 ? (
+              <p className="text-muted-foreground mt-1">
+                No one matches this audience yet — set the audience first.
+              </p>
+            ) : (
+              <p className="text-muted-foreground mt-1">
+                {preview.names.join(", ")}
+                {preview.overflow > 0 && ` +${preview.overflow} more`}
+              </p>
+            )}
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>Questionnaire (one question per line)</Label>
-            <Textarea
-              rows={4}
-              value={questionnaire}
-              onChange={(e) => setQuestionnaire(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>360 feedback questions (one per line)</Label>
-            <Textarea
-              rows={4}
-              value={questions360}
-              onChange={(e) => setQuestions360(e.target.value)}
-            />
-          </div>
-        </div>
+        )}
         <DialogFooter>
-          <Button onClick={save} disabled={busy}>
-            {busy ? "Saving…" : "Save configuration"}
+          <Button
+            onClick={release}
+            disabled={busy || (preview?.count ?? 0) === 0}
+          >
+            {busy ? "Releasing…" : "Release now"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -144,12 +115,21 @@ function CycleConfigDialog({
 }
 
 function CreateCycle() {
+  const templates = useQuery(api.appraisalFormTemplates.list, {})
   const create = useMutation(api.reviewCycles.create)
   const [name, setName] = React.useState("")
   const [start, setStart] = React.useState("")
   const [end, setEnd] = React.useState("")
   const [scale, setScale] = React.useState("5")
+  const [templateId, setTemplateId] = React.useState<string>("")
   const [busy, setBusy] = React.useState(false)
+
+  // Default to the first template once loaded.
+  React.useEffect(() => {
+    if (templates && templates.length > 0 && !templateId) {
+      setTemplateId(templates[0]._id)
+    }
+  }, [templates, templateId])
 
   async function submit() {
     if (!name.trim() || !start || !end) {
@@ -163,8 +143,11 @@ function CreateCycle() {
         startDate: start,
         endDate: end,
         ratingScaleMax: Number(scale) || 5,
+        templateId: templateId
+          ? (templateId as Id<"appraisalFormTemplates">)
+          : undefined,
       })
-      toast.success("Cycle created")
+      toast.success("Cycle created — build the form, set the audience, then release.")
       setName("")
       setStart("")
       setEnd("")
@@ -178,7 +161,7 @@ function CreateCycle() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>New review cycle</CardTitle>
+        <CardTitle>New appraisal cycle</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -188,17 +171,24 @@ function CreateCycle() {
               id="rc-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="H1 2026"
+              placeholder="H1 2026 Appraisal"
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="rc-scale">Rating scale max</Label>
-            <Input
-              id="rc-scale"
-              inputMode="numeric"
-              value={scale}
-              onChange={(e) => setScale(e.target.value)}
-            />
+            <Label htmlFor="rc-template">Form template</Label>
+            <Select value={templateId} onValueChange={setTemplateId}>
+              <SelectTrigger id="rc-template">
+                <SelectValue placeholder="Choose a template…" />
+              </SelectTrigger>
+              <SelectContent>
+                {(templates ?? []).map((t) => (
+                  <SelectItem key={t._id} value={t._id}>
+                    {t.name}
+                    {t.isSystemDefault ? " (default)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="rc-start">Start</Label>
@@ -218,6 +208,15 @@ function CreateCycle() {
               onChange={(e) => setEnd(e.target.value)}
             />
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="rc-scale">Rating scale max</Label>
+            <Input
+              id="rc-scale"
+              inputMode="numeric"
+              value={scale}
+              onChange={(e) => setScale(e.target.value)}
+            />
+          </div>
         </div>
         <div>
           <Button onClick={submit} disabled={busy}>
@@ -231,10 +230,13 @@ function CreateCycle() {
 
 export function ReviewCyclesSettings() {
   const cycles = useQuery(api.reviewCycles.list)
-  const activate = useMutation(api.reviewCycles.activate)
   const close = useMutation(api.reviewCycles.close)
   const remove = useMutation(api.reviewCycles.remove)
-  const [configCycle, setConfigCycle] = React.useState<Cycle | null>(null)
+  const activate = useMutation(api.reviewCycles.activate)
+  const [formCycle, setFormCycle] = React.useState<Cycle | null>(null)
+  const [scheduleCycle, setScheduleCycle] = React.useState<Cycle | null>(null)
+  const [releaseCycle, setReleaseCycle] = React.useState<Cycle | null>(null)
+  const [closeCycleTarget, setCloseCycleTarget] = React.useState<Cycle | null>(null)
 
   async function run(p: Promise<unknown>, ok: string) {
     try {
@@ -275,30 +277,26 @@ export function ReviewCyclesSettings() {
                     {c.startDate} → {c.endDate} · scale 1–{c.ratingScaleMax}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setFormCycle(c)}
+                  >
+                    {c.status === "draft" ? "Build form" : "View form"}
+                  </Button>
                   {c.status !== "closed" && (
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => setConfigCycle(c)}
+                      onClick={() => setScheduleCycle(c)}
                     >
-                      Configure
+                      Audience & schedule
                     </Button>
                   )}
                   {c.status === "draft" && (
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        run(
-                          activate({ cycleId: c._id as Id<"reviewCycles"> }).then(
-                            (r) =>
-                              toast.message(`${r.created} reviews generated`),
-                          ),
-                          "Cycle activated",
-                        )
-                      }
-                    >
-                      Activate
+                    <Button size="sm" onClick={() => setReleaseCycle(c)}>
+                      Release
                     </Button>
                   )}
                   {c.status === "active" && (
@@ -308,22 +306,20 @@ export function ReviewCyclesSettings() {
                         variant="outline"
                         onClick={() =>
                           run(
-                            activate({ cycleId: c._id as Id<"reviewCycles"> }),
-                            "Reviews synced",
+                            activate({ cycleId: c._id as Id<"reviewCycles"> }).then(
+                              (r) =>
+                                toast.message(`${r.created} new review(s) added`),
+                            ),
+                            "Synced",
                           )
                         }
                       >
-                        Sync employees
+                        Sync
                       </Button>
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() =>
-                          run(
-                            close({ cycleId: c._id as Id<"reviewCycles"> }),
-                            "Cycle closed",
-                          )
-                        }
+                        onClick={() => setCloseCycleTarget(c)}
                       >
                         Close
                       </Button>
@@ -351,9 +347,43 @@ export function ReviewCyclesSettings() {
         </CardContent>
       </Card>
 
-      <CycleConfigDialog
-        cycle={configCycle}
-        onClose={() => setConfigCycle(null)}
+      <Card>
+        <CardHeader>
+          <CardTitle>Email notifications</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ModuleEmailSettings module="performance" />
+        </CardContent>
+      </Card>
+
+      <CycleFormDialog cycle={formCycle} onClose={() => setFormCycle(null)} />
+      <CycleScheduleDialog
+        cycle={scheduleCycle}
+        onClose={() => setScheduleCycle(null)}
+      />
+      <ReleaseDialog
+        cycle={releaseCycle}
+        onClose={() => setReleaseCycle(null)}
+      />
+      <ConfirmDialog
+        open={!!closeCycleTarget}
+        onOpenChange={(o) => !o && setCloseCycleTarget(null)}
+        title="Close this cycle?"
+        description={
+          closeCycleTarget
+            ? `Closing "${closeCycleTarget.name}" finalises it — no further self-reviews or appraisals can be submitted. This can't be undone.`
+            : undefined
+        }
+        confirmLabel="Close cycle"
+        destructive
+        onConfirm={async () => {
+          if (!closeCycleTarget) return
+          await run(
+            close({ cycleId: closeCycleTarget._id as Id<"reviewCycles"> }),
+            "Cycle closed",
+          )
+          setCloseCycleTarget(null)
+        }}
       />
     </div>
   )

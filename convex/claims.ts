@@ -2051,6 +2051,18 @@ export const approvalQueue = query({
   },
 });
 
+// Count of claims awaiting the caller's decision — powers the dashboard
+// quick-action badge without hydrating the full queue.
+export const pendingApprovalCount = query({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) return 0;
+    return (await claimsAwaitingCaller(ctx, orgCtx)).length;
+  },
+});
+
 // The approver's queue grouped by employee: one row per employee with claims
 // awaiting the caller, carrying the pending count and base-currency total.
 export const approvalGroups = query({

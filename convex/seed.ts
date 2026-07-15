@@ -7,6 +7,7 @@ import {
   defaultLeavePolicyFields,
 } from "./lib/sgDefaults";
 import { ensureDefaultCompetencies } from "./competencies";
+import { ensureDefaultFormTemplates } from "./appraisalFormTemplates";
 
 /**
  * Per-organization seeding, run once when an organization is first synced
@@ -52,6 +53,7 @@ export const seedOrganization = internalMutation({
       qrEnabled: false,
     });
     await ensureDefaultCompetencies(ctx, orgId);
+    await ensureDefaultFormTemplates(ctx, orgId);
     return null;
   },
 });

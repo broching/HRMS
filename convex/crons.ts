@@ -47,4 +47,13 @@ crons.cron(
   {},
 );
 
+// 08:00 UTC daily — nudge participants of released appraisal forms whose due
+// date is approaching or overdue.
+crons.cron(
+  "performance appraisal reminders",
+  "0 8 * * *",
+  internal.performanceReminders.remindAll,
+  {},
+);
+
 export default crons;

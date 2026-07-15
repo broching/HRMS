@@ -30,7 +30,12 @@ import {
 } from "@/components/ui/select"
 
 // Keep in sync with EMAIL_MODULES in convex/emailSettings.ts.
-export type EmailModuleKey = "claims" | "paymentRequests" | "payroll" | "leave"
+export type EmailModuleKey =
+  | "claims"
+  | "paymentRequests"
+  | "payroll"
+  | "leave"
+  | "performance"
 
 type ModuleConfig = {
   enabled: boolean
@@ -80,6 +85,15 @@ const MODULE_META: Record<
       title: "Leave request to review",
       body: "A leave request for 3 days is awaiting your approval.",
       cta: "Review request",
+    },
+  },
+  performance: {
+    label: "Performance",
+    hint: "Appraisal form releases, reminders and completions.",
+    sample: {
+      title: "Your appraisal is ready",
+      body: "Your appraisal form for H1 2026 is open — please complete it by 31 Jul.",
+      cta: "Complete appraisal",
     },
   },
 }
@@ -173,12 +187,13 @@ export function ModuleEmailSettings({ module }: { module: EmailModuleKey }) {
     if (!config || !settings) return
     setSaving(true)
     try {
-      // Preserve the other three modules exactly; only replace this one.
+      // Preserve the other modules exactly; only replace this one.
       const modules = {
         claims: outToInput(settings.modules.claims),
         paymentRequests: outToInput(settings.modules.paymentRequests),
         payroll: outToInput(settings.modules.payroll),
         leave: outToInput(settings.modules.leave),
+        performance: outToInput(settings.modules.performance),
       }
       modules[module] = {
         enabled: config.enabled,

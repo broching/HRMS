@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as appraisalFormTemplates from "../appraisalFormTemplates.js";
 import type * as attendance from "../attendance.js";
 import type * as attendanceSettings from "../attendanceSettings.js";
 import type * as auth from "../auth.js";
@@ -47,6 +48,7 @@ import type * as lib_emailTemplate from "../lib/emailTemplate.js";
 import type * as lib_enums from "../lib/enums.js";
 import type * as lib_notificationRoutes from "../lib/notificationRoutes.js";
 import type * as lib_performanceDefaults from "../lib/performanceDefaults.js";
+import type * as lib_performanceForm from "../lib/performanceForm.js";
 import type * as lib_permissions from "../lib/permissions.js";
 import type * as lib_plans from "../lib/plans.js";
 import type * as lib_sgDefaults from "../lib/sgDefaults.js";
@@ -80,6 +82,7 @@ import type * as payrollApproval from "../payrollApproval.js";
 import type * as payrollSettings from "../payrollSettings.js";
 import type * as payslipTemplates from "../payslipTemplates.js";
 import type * as performance from "../performance.js";
+import type * as performanceReminders from "../performanceReminders.js";
 import type * as positions from "../positions.js";
 import type * as projects from "../projects.js";
 import type * as recruitment from "../recruitment.js";
@@ -107,6 +110,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  appraisalFormTemplates: typeof appraisalFormTemplates;
   attendance: typeof attendance;
   attendanceSettings: typeof attendanceSettings;
   auth: typeof auth;
@@ -146,6 +150,7 @@ declare const fullApi: ApiFromModules<{
   "lib/enums": typeof lib_enums;
   "lib/notificationRoutes": typeof lib_notificationRoutes;
   "lib/performanceDefaults": typeof lib_performanceDefaults;
+  "lib/performanceForm": typeof lib_performanceForm;
   "lib/permissions": typeof lib_permissions;
   "lib/plans": typeof lib_plans;
   "lib/sgDefaults": typeof lib_sgDefaults;
@@ -179,6 +184,7 @@ declare const fullApi: ApiFromModules<{
   payrollSettings: typeof payrollSettings;
   payslipTemplates: typeof payslipTemplates;
   performance: typeof performance;
+  performanceReminders: typeof performanceReminders;
   positions: typeof positions;
   projects: typeof projects;
   recruitment: typeof recruitment;

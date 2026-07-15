@@ -17,8 +17,22 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 
-// Map a notification's type prefix to the page that best resolves it.
-function hrefFor(type: string): string {
+type EntityRef = { table: string; id: string }
+
+// Deep-link straight to the entity when it has its own detail route — mirrors
+// the server-side `deepLinkForEntity` used for email CTAs.
+function deepLinkFor(ref: EntityRef | undefined): string | null {
+  if (!ref) return null
+  if (ref.table === "reviews") return `/performance/reviews/${ref.id}`
+  if (ref.table === "claims") return `/claims/${ref.id}`
+  return null
+}
+
+// Map a notification to the page that best resolves it — the specific entity
+// when we can, otherwise the feature landing keyed off the type prefix.
+function hrefFor(type: string, entityRef?: EntityRef): string {
+  const deep = deepLinkFor(entityRef)
+  if (deep) return deep
   if (type.startsWith("leave.nudge") || type.startsWith("leave.requested"))
     return "/leave/requests"
   if (type.startsWith("leave.resubmitted")) return "/leave/requests"
@@ -31,6 +45,8 @@ function hrefFor(type: string): string {
   if (type.startsWith("payroll.approval")) return "/payroll/approvals"
   if (type.startsWith("payroll.")) return "/payslips"
   if (type.startsWith("recruitment.")) return "/hr-lounge/recruitment"
+  if (type === "review.self_submitted" || type === "review.appraiser_reminder")
+    return "/performance/team"
   if (type.startsWith("review.") || type.startsWith("feedback."))
     return "/performance"
   if (type.startsWith("schedule.")) return "/scheduling"
@@ -120,7 +136,7 @@ export function NotificationCenter() {
                   )}
                 >
                   <Link
-                    href={hrefFor(n.type)}
+                    href={hrefFor(n.type, n.entityRef)}
                     onClick={() => {
                       if (!n.read) markRead({ notificationId: n._id })
                     }}

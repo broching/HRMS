@@ -1334,6 +1334,26 @@ export const approvalQueue = query({
   },
 });
 
+// Count of leave requests awaiting the caller's approval — powers the dashboard
+// quick-action badge without hydrating the full queue.
+export const pendingApprovalCount = query({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) return 0;
+    const pending = await ctx.db
+      .query("leaveRequests")
+      .withIndex("by_org_status", (q) =>
+        q.eq("orgId", orgCtx.orgId).eq("status", "pending"),
+      )
+      .collect();
+    return pending.filter((r) =>
+      currentStepApprovers(r).ids.includes(orgCtx.userId),
+    ).length;
+  },
+});
+
 // Approved leave overlapping a date range, for the team calendar.
 export const calendar = query({
   args: { start: v.string(), end: v.string() },

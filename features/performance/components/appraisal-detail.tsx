@@ -9,6 +9,7 @@ import {
   IconChevronLeft,
   IconTargetArrow,
   IconAward,
+  IconTrash,
 } from "@tabler/icons-react"
 import type { FunctionReturnType } from "convex/server"
 import { api } from "@/convex/_generated/api"
@@ -16,7 +17,6 @@ import type { Id } from "@/convex/_generated/dataModel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Textarea } from "@/components/ui/textarea"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
@@ -27,11 +27,11 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { RatingInput } from "@/features/performance/components/rating-input"
+import { AppraisalFill } from "@/features/performance/components/appraisal-fill"
 import {
   FEEDBACK360_RELATIONSHIP_LABELS,
   FEEDBACK360_RELATIONSHIPS,
 } from "@/features/performance/lib/labels"
-import { IconTrash } from "@tabler/icons-react"
 
 type Appraisal = FunctionReturnType<typeof api.reviews.getAppraisal>
 type Objective = FunctionReturnType<typeof api.reviewObjectives.forReview>[number]
@@ -55,8 +55,6 @@ const RAIL: { key: RailKey; label: string }[] = [
   { key: "feedback360", label: "360 Feedback" },
 ]
 
-type FormTab = "questionnaire" | "objectives" | "competencies" | "summary"
-
 function fmt(iso: string): string {
   if (!iso) return "—"
   const d = new Date(iso + "T00:00:00")
@@ -69,18 +67,9 @@ export function AppraisalDetail({ reviewId }: { reviewId: Id<"reviews"> }) {
   const data = useQuery(api.reviews.getAppraisal, { reviewId })
   const objectives = useQuery(api.reviewObjectives.forReview, { reviewId })
   const competencies = useQuery(api.reviewCompetencies.forReview, { reviewId })
-  const ensureComps = useMutation(api.reviewCompetencies.ensureForReview)
+  const reopen = useMutation(api.reviews.reopenAppraisal)
 
   const [rail, setRail] = React.useState<RailKey>("form")
-
-  // Seed competency lines once so the appraisal form has rows to rate.
-  const seeded = React.useRef(false)
-  React.useEffect(() => {
-    if (!seeded.current && competencies && competencies.length === 0) {
-      seeded.current = true
-      ensureComps({ reviewId }).catch(() => {})
-    }
-  }, [competencies, ensureComps, reviewId])
 
   if (data === undefined) {
     return (
@@ -123,12 +112,24 @@ export function AppraisalDetail({ reviewId }: { reviewId: Id<"reviews"> }) {
             <CompetenciesConfig competencies={competencies} />
           )}
           {rail === "form" && (
-            <AppraisalForm
-              data={data}
-              objectives={objectives}
-              competencies={competencies}
-              reviewId={reviewId}
-            />
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start justify-between">
+                <h2 className="text-lg font-semibold">Appraisal form</h2>
+                {data.status === "completed" && data.canViewFeedback && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={async () => {
+                      await reopen({ reviewId })
+                      toast.success("Appraisal re-opened.")
+                    }}
+                  >
+                    Re-open appraisal
+                  </Button>
+                )}
+              </div>
+              <AppraisalFill reviewId={reviewId} perspective="appraiser" />
+            </div>
           )}
           {rail === "training" && <ComingSoon label="Training Plan" />}
           {rail === "oneOnOne" && <ComingSoon label="1 On 1 Feedback" />}
@@ -208,7 +209,7 @@ function AppraisalHeader({ data }: { data: Appraisal }) {
   )
 }
 
-// ─── Objectives (config view) ─────────────────────────────────────────────
+// ─── Objectives (config / overview view) ──────────────────────────────────
 
 function ObjectivesConfig({
   data,
@@ -230,6 +231,7 @@ function ObjectivesConfig({
         {objectives.length === 0 && canEdit && (
           <Button
             size="sm"
+            variant="outline"
             onClick={async () => {
               const r = await confirmFromGoals({ reviewId })
               toast.success(
@@ -239,10 +241,14 @@ function ObjectivesConfig({
               )
             }}
           >
-            Confirm objectives from goals
+            Import from goals
           </Button>
         )}
       </div>
+      <p className="text-muted-foreground text-sm">
+        Objectives are rated in the Appraisal Form. You can also seed them from
+        the employee&apos;s goals here.
+      </p>
       {objectives.length === 0 ? (
         <p className="text-muted-foreground text-sm">
           No objectives yet for this appraisal.
@@ -274,7 +280,7 @@ function ObjectivesConfig({
   )
 }
 
-// ─── Competencies (config view) ───────────────────────────────────────────
+// ─── Competencies (config / overview view) ────────────────────────────────
 
 function CompetenciesConfig({
   competencies,
@@ -286,6 +292,9 @@ function CompetenciesConfig({
   return (
     <div className="flex flex-col gap-4">
       <h2 className="text-lg font-semibold">Competencies</h2>
+      <p className="text-muted-foreground text-sm">
+        Competencies are rated in the Appraisal Form.
+      </p>
       {groups.map((g) => (
         <div key={g.category}>
           <p className="text-primary mb-2 font-semibold">{g.category}</p>
@@ -320,374 +329,7 @@ function CompetenciesConfig({
   )
 }
 
-// ─── Appraisal form ───────────────────────────────────────────────────────
-
-function AppraisalForm({
-  data,
-  objectives,
-  competencies,
-  reviewId,
-}: {
-  data: Appraisal
-  objectives: Objective[] | undefined
-  competencies: Competency[] | undefined
-  reviewId: Id<"reviews">
-}) {
-  const [tab, setTab] = React.useState<FormTab>("questionnaire")
-  const reopen = useMutation(api.reviews.reopenAppraisal)
-
-  const TABS: { key: FormTab; label: string }[] = [
-    { key: "questionnaire", label: "1. Questionnaire" },
-    { key: "objectives", label: "2. Objectives Feedback" },
-    { key: "competencies", label: "3. Competencies feedback" },
-    { key: "summary", label: "4. Summary" },
-  ]
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-start justify-between">
-        <h2 className="text-lg font-semibold">Appraisal form</h2>
-        {data.status === "completed" && data.canAppraiser && (
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={async () => {
-              await reopen({ reviewId })
-              toast.success("Appraisal re-opened.")
-            }}
-          >
-            Re-open Appraisal
-          </Button>
-        )}
-      </div>
-
-      <div className="flex items-center justify-between gap-4 border-b pb-3">
-        <div className="text-muted-foreground text-sm">
-          Appraiser: {data.appraiserName ?? "—"}
-        </div>
-        <div className="text-right">
-          <p className="text-muted-foreground text-xs">
-            Overall rating by {data.appraiserName ?? "appraiser"}
-          </p>
-          <div className="flex items-center justify-end gap-2">
-            <RatingInput
-              value={data.overallRating != null ? Math.round(data.overallRating) : null}
-              max={data.ratingScaleMax}
-              readOnly
-            />
-            <span className="font-semibold">
-              {data.overallRating != null ? data.overallRating.toFixed(1) : "—"}
-            </span>
-          </div>
-          {data.ratingBand && (
-            <p className="text-muted-foreground text-xs">{data.ratingBand}</p>
-          )}
-        </div>
-      </div>
-
-      <nav className="flex flex-wrap gap-4 border-b text-sm">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            className={cn(
-              "border-b-2 pb-2 transition-colors",
-              tab === t.key
-                ? "border-primary text-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground border-transparent",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
-
-      {tab === "questionnaire" && (
-        <QuestionnaireTab data={data} reviewId={reviewId} />
-      )}
-      {tab === "objectives" && (
-        <ObjectivesFeedbackTab data={data} objectives={objectives} />
-      )}
-      {tab === "competencies" && (
-        <CompetenciesFeedbackTab data={data} competencies={competencies} />
-      )}
-      {tab === "summary" && <SummaryTab data={data} reviewId={reviewId} />}
-    </div>
-  )
-}
-
-function QuestionnaireTab({
-  data,
-  reviewId,
-}: {
-  data: Appraisal
-  reviewId: Id<"reviews">
-}) {
-  const saveAnswer = useMutation(api.reviews.saveAnswer)
-  if (data.questionnaire.length === 0) {
-    return (
-      <p className="text-muted-foreground text-sm">
-        This cycle has no questionnaire configured.
-      </p>
-    )
-  }
-  return (
-    <div className="grid gap-6 md:grid-cols-2">
-      {data.questionnaire.map((q, i) => (
-        <div key={i} className="flex flex-col gap-2">
-          <p className="text-sm font-medium">{q.question}</p>
-          <AnswerCard
-            author="Employee"
-            value={q.selfAnswer}
-            editable={data.canSelf}
-            onSave={(answer) =>
-              saveAnswer({ reviewId, side: "self", index: i, answer })
-            }
-          />
-          <AnswerCard
-            author="Appraiser"
-            value={q.appraiserAnswer}
-            editable={data.canAppraiser}
-            onSave={(answer) =>
-              saveAnswer({ reviewId, side: "appraiser", index: i, answer })
-            }
-          />
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function ObjectivesFeedbackTab({
-  data,
-  objectives,
-}: {
-  data: Appraisal
-  objectives: Objective[] | undefined
-}) {
-  const rate = useMutation(api.reviewObjectives.rate)
-  if (objectives === undefined) return <Skeleton className="h-40 w-full" />
-  return (
-    <div className="flex flex-col gap-6">
-      <p className="text-muted-foreground text-sm">
-        Objectives carry {data.objectivesWeightPct}% of the appraisal&apos;s
-        weightage.
-      </p>
-      {objectives.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          No objectives to rate. Confirm objectives first.
-        </p>
-      ) : (
-        objectives.map((o) => (
-          <div key={o._id} className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <IconTargetArrow className="text-muted-foreground size-4" />
-                <span className="font-medium">{o.title}</span>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <Badge variant="secondary">{o.progress}%</Badge>
-                <Badge variant="outline">{o.weight}%</Badge>
-              </div>
-            </div>
-            <div className="grid gap-2 md:grid-cols-2">
-              <RateCard
-                author="Employee"
-                rating={o.selfRating}
-                comment={o.selfComment}
-                max={data.ratingScaleMax}
-                editable={data.canSelf}
-                onRate={(rating) =>
-                  rate({ objectiveId: o._id, side: "self", rating })
-                }
-                onComment={(comment) =>
-                  rate({ objectiveId: o._id, side: "self", comment })
-                }
-              />
-              <RateCard
-                author="Appraiser"
-                rating={o.appraiserRating}
-                comment={o.appraiserComment}
-                max={data.ratingScaleMax}
-                editable={data.canAppraiser}
-                onRate={(rating) =>
-                  rate({ objectiveId: o._id, side: "appraiser", rating })
-                }
-                onComment={(comment) =>
-                  rate({ objectiveId: o._id, side: "appraiser", comment })
-                }
-              />
-            </div>
-          </div>
-        ))
-      )}
-    </div>
-  )
-}
-
-function CompetenciesFeedbackTab({
-  data,
-  competencies,
-}: {
-  data: Appraisal
-  competencies: Competency[] | undefined
-}) {
-  const rate = useMutation(api.reviewCompetencies.rate)
-  if (competencies === undefined) return <Skeleton className="h-40 w-full" />
-  const groups = groupByCategory(competencies)
-  return (
-    <div className="flex flex-col gap-6">
-      <p className="text-muted-foreground text-sm">
-        Competencies carry {data.competenciesWeightPct}% of the appraisal&apos;s
-        weightage.
-      </p>
-      {groups.map((g) => (
-        <div key={g.category} className="flex flex-col gap-3">
-          <p className="text-primary font-semibold">{g.category}</p>
-          {g.items.map((c) => (
-            <div key={c._id} className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <IconAward className="text-muted-foreground size-4" />
-                  <span className="font-medium">{c.name}</span>
-                  {c.level != null && (
-                    <Badge variant="outline">Level {c.level}</Badge>
-                  )}
-                </div>
-                {c.weightPct > 0 && (
-                  <Badge variant="secondary">{c.weightPct}%</Badge>
-                )}
-              </div>
-              {c.description && (
-                <p className="text-muted-foreground text-sm">{c.description}</p>
-              )}
-              <div className="grid gap-2 md:grid-cols-2">
-                <RateCard
-                  author="Employee"
-                  rating={c.selfRating}
-                  comment={c.selfComment}
-                  max={data.ratingScaleMax}
-                  editable={data.canSelf}
-                  onRate={(rating) =>
-                    rate({ competencyId: c._id, side: "self", rating })
-                  }
-                  onComment={(comment) =>
-                    rate({ competencyId: c._id, side: "self", comment })
-                  }
-                />
-                <RateCard
-                  author="Appraiser"
-                  rating={c.appraiserRating}
-                  comment={c.appraiserComment}
-                  max={data.ratingScaleMax}
-                  editable={data.canAppraiser}
-                  onRate={(rating) =>
-                    rate({ competencyId: c._id, side: "appraiser", rating })
-                  }
-                  onComment={(comment) =>
-                    rate({ competencyId: c._id, side: "appraiser", comment })
-                  }
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function SummaryTab({
-  data,
-  reviewId,
-}: {
-  data: Appraisal
-  reviewId: Id<"reviews">
-}) {
-  const submitSelf = useMutation(api.reviews.submitSelfAppraisal)
-  const submitAppraiser = useMutation(api.reviews.submitAppraiserAppraisal)
-  const acknowledge = useMutation(api.reviews.acknowledgeAppraisal)
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <StatBox label="Objectives score" value={data.objectivesScore} weight={data.objectivesWeightPct} />
-        <StatBox label="Competencies score" value={data.competenciesScore} weight={data.competenciesWeightPct} />
-        <StatBox label="Overall" value={data.overallRating} band={data.ratingBand} />
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {data.canSelf && (
-          <Button
-            onClick={async () => {
-              await submitSelf({ reviewId })
-              toast.success("Self-appraisal submitted.")
-            }}
-          >
-            Submit self-appraisal
-          </Button>
-        )}
-        {data.canAppraiser && (
-          <Button
-            onClick={async () => {
-              await submitAppraiser({ reviewId })
-              toast.success("Appraisal completed.")
-            }}
-          >
-            Complete appraisal
-          </Button>
-        )}
-        {data.canAcknowledge && (
-          <Button
-            variant="outline"
-            onClick={async () => {
-              await acknowledge({ reviewId })
-              toast.success("Appraisal acknowledged.")
-            }}
-          >
-            Acknowledge
-          </Button>
-        )}
-      </div>
-
-      <div className="text-muted-foreground text-xs">
-        {data.selfSubmittedAt && <p>Self-appraisal submitted.</p>}
-        {data.managerSubmittedAt && <p>Appraiser review completed.</p>}
-        {data.acknowledgedAt && <p>Acknowledged by employee.</p>}
-      </div>
-    </div>
-  )
-}
-
-function StatBox({
-  label,
-  value,
-  weight,
-  band,
-}: {
-  label: string
-  value: number | null
-  weight?: number
-  band?: string | null
-}) {
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <p className="text-muted-foreground text-xs">
-          {label}
-          {weight != null ? ` · ${weight}%` : ""}
-        </p>
-        <p className="text-2xl font-semibold">
-          {value != null ? value.toFixed(1) : "—"}
-        </p>
-        {band && <p className="text-muted-foreground text-xs">{band}</p>}
-      </CardContent>
-    </Card>
-  )
-}
-
-// ─── 360 feedback (results panel — assignment UI added in Phase 3) ─────────
+// ─── 360 feedback ─────────────────────────────────────────────────────────
 
 function Feedback360Panel({ data }: { data: Appraisal; reviewId: Id<"reviews"> }) {
   const canView = data.canViewFeedback
@@ -849,84 +491,6 @@ function Feedback360Panel({ data }: { data: Appraisal; reviewId: Id<"reviews"> }
 }
 
 // ─── Small building blocks ────────────────────────────────────────────────
-
-function AnswerCard({
-  author,
-  value,
-  editable,
-  onSave,
-}: {
-  author: string
-  value: string | null
-  editable: boolean
-  onSave: (answer: string) => Promise<unknown>
-}) {
-  const [draft, setDraft] = React.useState(value ?? "")
-  React.useEffect(() => setDraft(value ?? ""), [value])
-  return (
-    <div className="bg-muted/40 rounded-md border p-3">
-      <p className="text-muted-foreground mb-1 text-xs">{author}</p>
-      {editable ? (
-        <Textarea
-          value={draft}
-          rows={2}
-          placeholder="Write an answer…"
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => {
-            if (draft !== (value ?? "")) onSave(draft).catch(() => toast.error("Could not save."))
-          }}
-        />
-      ) : (
-        <p className="text-sm">{value || <span className="text-muted-foreground">No answer.</span>}</p>
-      )}
-    </div>
-  )
-}
-
-function RateCard({
-  author,
-  rating,
-  comment,
-  max,
-  editable,
-  onRate,
-  onComment,
-}: {
-  author: string
-  rating: number | null
-  comment: string | null
-  max: number
-  editable: boolean
-  onRate: (rating: number) => Promise<unknown>
-  onComment: (comment: string) => Promise<unknown>
-}) {
-  const [draft, setDraft] = React.useState(comment ?? "")
-  React.useEffect(() => setDraft(comment ?? ""), [comment])
-  return (
-    <div className="bg-muted/40 flex flex-col gap-2 rounded-md border p-3">
-      <p className="text-muted-foreground text-xs">{author}</p>
-      <RatingInput
-        value={rating}
-        max={max}
-        readOnly={!editable}
-        onChange={(v) => onRate(v).catch(() => toast.error("Could not save rating."))}
-      />
-      {editable ? (
-        <Textarea
-          value={draft}
-          rows={2}
-          placeholder="Add a comment…"
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => {
-            if (draft !== (comment ?? "")) onComment(draft).catch(() => toast.error("Could not save."))
-          }}
-        />
-      ) : (
-        comment && <p className="text-sm">{comment}</p>
-      )}
-    </div>
-  )
-}
 
 function ComingSoon({ label }: { label: string }) {
   return (

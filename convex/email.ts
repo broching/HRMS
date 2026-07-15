@@ -55,7 +55,11 @@ export const buildNotificationEmail = internalQuery({
     // Resolve this module's config, falling back to the legacy flat fields for
     // orgs configured before per-module settings existed.
     const mod = settings.modules?.[feature];
-    const enabled = mod?.enabled ?? settings.features?.[feature] ?? false;
+    // Legacy `features` predates the performance module, so read it loosely.
+    const legacyFeatures = settings.features as
+      | Record<string, boolean>
+      | undefined;
+    const enabled = mod?.enabled ?? legacyFeatures?.[feature] ?? false;
     if (!enabled) return null;
 
     const accentColor = mod?.accentColor ?? settings.accentColor;
@@ -74,7 +78,7 @@ export const buildNotificationEmail = internalQuery({
       ? await ctx.storage.getUrl(settings.logoStorageId)
       : null;
 
-    const ctaUrl = `${appBaseUrl()}${routeForNotification(args.type)}`;
+    const ctaUrl = `${appBaseUrl()}${routeForNotification(args.type, args.entityRef)}`;
 
     const html = renderNotificationEmail({
       orgName,

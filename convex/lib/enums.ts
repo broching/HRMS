@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { Infer, v } from "convex/values";
 
 /**
  * Shared enum validators used across the HRMS schema and functions.
@@ -1179,6 +1179,88 @@ export const competencyLevelDescriptor = v.object({
   level: v.number(),
   description: v.string(),
 });
+
+// ─── Appraisal form builder ─────────────────────────────────────────────────
+// A review cycle's appraisal form is `sections[] → fields[]`, replacing the flat
+// `questionnaire: string[]`. Every field is answered by the employee (`self`),
+// the appraiser, or both, and maps to a value in the `reviewAnswers` table —
+// except the `objectives` / `competencies` blocks, which reuse their dedicated
+// tables (`reviewObjectives` / `reviewCompetencies`) and only mark where they
+// render + their section weight.
+export const formFieldType = v.union(
+  v.literal("section"), // heading only, no answer
+  v.literal("shortText"),
+  v.literal("longText"),
+  v.literal("ratingScale"),
+  v.literal("radio"),
+  v.literal("checkbox"),
+  v.literal("yesNo"),
+  v.literal("objectives"), // weighted objectives block
+  v.literal("competencies"), // competency-library block
+  v.literal("date"),
+  v.literal("file"),
+  v.literal("signature"),
+);
+export type FormFieldType = Infer<typeof formFieldType>;
+
+// Who answers a field. `section` ignores this.
+export const formFieldSide = v.union(
+  v.literal("self"),
+  v.literal("appraiser"),
+  v.literal("both"),
+);
+export type FormFieldSide = Infer<typeof formFieldSide>;
+
+// A label anchored to a value on a rating scale (e.g. `5 → "Exceptional"`).
+export const formScaleLabel = v.object({
+  value: v.number(),
+  label: v.string(),
+});
+
+export const formField = v.object({
+  id: v.string(), // stable slug generated in the builder, e.g. "f_ab12"
+  type: formFieldType,
+  label: v.string(), // question text / section heading
+  description: v.optional(v.string()), // helper text
+  required: v.optional(v.boolean()),
+  side: formFieldSide,
+  // Type-specific config (only the relevant keys are set per field type):
+  scaleMax: v.optional(v.number()), // ratingScale — falls back to cycle.ratingScaleMax
+  scaleLabels: v.optional(v.array(formScaleLabel)), // ratingScale
+  options: v.optional(v.array(v.string())), // radio / checkbox
+  weightPct: v.optional(v.number()), // scored fields/blocks (ratingScale/objectives/competencies)
+  competencyCategory: v.optional(v.string()), // competencies — optional category filter
+});
+export type FormField = Infer<typeof formField>;
+
+export const formSection = v.object({
+  id: v.string(),
+  title: v.string(),
+  description: v.optional(v.string()),
+  fields: v.array(formField),
+});
+export type FormSection = Infer<typeof formSection>;
+
+export const cycleForm = v.object({
+  sections: v.array(formSection),
+});
+export type CycleForm = Infer<typeof cycleForm>;
+
+// The audience a form is released to.
+export const cycleAudienceMode = v.union(
+  v.literal("all"),
+  v.literal("departments"),
+  v.literal("offices"),
+  v.literal("individuals"),
+);
+export type CycleAudienceMode = Infer<typeof cycleAudienceMode>;
+
+// Which side an answer belongs to (persisted on `reviewAnswers`).
+export const reviewAnswerSide = v.union(
+  v.literal("self"),
+  v.literal("appraiser"),
+);
+export type ReviewAnswerSide = Infer<typeof reviewAnswerSide>;
 
 // Org-level settings persisted on the `organizations` table.
 export const orgSettings = v.object({

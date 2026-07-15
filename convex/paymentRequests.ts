@@ -3,6 +3,7 @@ import { v, ConvexError } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import {
   requireOrg,
+  getOrgContext,
   requirePermission,
   ctxHasPermission,
   OrgContext,
@@ -1246,6 +1247,29 @@ export const approvalQueue = query({
     out.sort((a, b) => b._creationTime - a._creationTime);
     const canPay = isOversight || isFinanceApprover(settings, orgCtx.userId);
     return await Promise.all(out.map((r) => hydrateRow(ctx, r, canPay)));
+  },
+});
+
+// Count of payment requests awaiting the caller's decision right now. Powers the
+// dashboard quick-action badge — unlike `approvalQueue` this counts only items
+// the caller can act on this moment, not everything they're involved in.
+export const pendingApprovalCount = query({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) return 0;
+    const settings = await resolvePaymentRequestSettings(ctx, orgCtx.orgId);
+    const rows = await ctx.db
+      .query("paymentRequests")
+      .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+      .collect();
+    let count = 0;
+    for (const r of rows) {
+      if (r.status !== "pending_manager" && r.status !== "pending_finance") continue;
+      if (await canActNow(ctx, orgCtx, r, settings)) count += 1;
+    }
+    return count;
   },
 });
 

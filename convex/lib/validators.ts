@@ -70,6 +70,9 @@ import {
   feedAudience,
   ratingBand,
   competencyLevelDescriptor,
+  cycleForm,
+  cycleAudienceMode,
+  reviewAnswerSide,
   feedback360Relationship,
   feedback360Status,
   feedback360Answer,
@@ -1229,8 +1232,77 @@ export const reviewCycleDoc = v.object({
   ratingBands: v.optional(v.array(ratingBand)),
   questionnaire: v.optional(v.array(v.string())),
   feedback360Questions: v.optional(v.array(v.string())),
+  form: v.optional(cycleForm),
+  templateId: v.optional(v.id("appraisalFormTemplates")),
+  audience: v.optional(
+    v.object({
+      mode: cycleAudienceMode,
+      departmentIds: v.optional(v.array(v.id("departments"))),
+      officeIds: v.optional(v.array(v.id("offices"))),
+      employeeIds: v.optional(v.array(v.id("employees"))),
+    }),
+  ),
+  reminders: v.optional(
+    v.object({ enabled: v.boolean(), daysBefore: v.array(v.number()) }),
+  ),
   dueDates: v.optional(v.record(v.string(), v.string())),
   createdBy: v.optional(v.id("users")),
+})
+
+export const appraisalFormTemplateDoc = v.object({
+  _id: v.id("appraisalFormTemplates"),
+  _creationTime: v.number(),
+  orgId: v.id("organizations"),
+  name: v.string(),
+  description: v.optional(v.string()),
+  form: cycleForm,
+  isSystemDefault: v.boolean(),
+  active: v.boolean(),
+  createdBy: v.optional(v.id("users")),
+})
+
+// One field answer, resolved for the client (storage ids paired with signed
+// URLs). Only the keys relevant to the field's type are non-null.
+export const formAnswer = v.object({
+  fieldId: v.string(),
+  side: reviewAnswerSide,
+  text: v.union(v.string(), v.null()),
+  rating: v.union(v.number(), v.null()),
+  choice: v.union(v.string(), v.null()),
+  choices: v.union(v.array(v.string()), v.null()),
+  boolValue: v.union(v.boolean(), v.null()),
+  date: v.union(v.string(), v.null()),
+  files: v.array(
+    v.object({ storageId: v.id("_storage"), url: v.union(v.string(), v.null()) }),
+  ),
+  signatureStorageId: v.union(v.id("_storage"), v.null()),
+  signatureUrl: v.union(v.string(), v.null()),
+})
+
+// The form-driven fill payload: the resolved form + both sides' answers + what
+// the caller may do. Objectives/competencies blocks are fetched via their own
+// queries (reviewObjectives/reviewCompetencies.forReview).
+export const appraisalFormResult = v.object({
+  _id: v.id("reviews"),
+  cycleId: v.id("reviewCycles"),
+  cycleName: v.string(),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  appraiserName: v.union(v.string(), v.null()),
+  ratingScaleMax: v.number(),
+  status: reviewStatus,
+  form: cycleForm,
+  answers: v.array(formAnswer),
+  // Which side the viewer is, so a surface can pick the right perspective.
+  viewerIsSubject: v.boolean(),
+  viewerIsAppraiser: v.boolean(),
+  canSelf: v.boolean(),
+  canAppraiser: v.boolean(),
+  canFinalizeAppraiser: v.boolean(),
+  canAcknowledge: v.boolean(),
+  selfSubmittedAt: v.union(v.number(), v.null()),
+  managerSubmittedAt: v.union(v.number(), v.null()),
+  acknowledgedAt: v.union(v.number(), v.null()),
 })
 
 export const competencyDoc = v.object({
@@ -1400,6 +1472,7 @@ export const appraisalDetail = v.object({
   // Caller capabilities, resolved server-side.
   canSelf: v.boolean(),
   canAppraiser: v.boolean(),
+  canFinalizeAppraiser: v.boolean(),
   canAcknowledge: v.boolean(),
   canViewFeedback: v.boolean(),
 })

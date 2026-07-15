@@ -2,7 +2,7 @@ import { mutation, query, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc } from "./_generated/dataModel";
 import { reviewObjectiveRow } from "./lib/validators";
-import { loadReviewAccess } from "./reviews";
+import { loadReviewAccess, selfOpen, appraiserOpen } from "./reviews";
 import { writeAuditLog } from "./lib/audit";
 
 function hydrate(o: Doc<"reviewObjectives">) {
@@ -150,14 +150,14 @@ export const rate = mutation({
 
     if (side === "self") {
       if (!isSubject) throw new Error("Only the employee can enter self ratings.");
-      if (review.status !== "self_review") {
+      if (!selfOpen(review)) {
         throw new Error("Self-appraisal is closed for this review.");
       }
     } else {
       if (!isManager && !canManagePerf) {
         throw new Error("Only the appraiser or HR can enter appraiser ratings.");
       }
-      if (review.status === "completed") {
+      if (!appraiserOpen(review)) {
         throw new Error("This appraisal is completed.");
       }
     }

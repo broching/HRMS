@@ -87,6 +87,9 @@ import {
   feedAudience,
   ratingBand,
   competencyLevelDescriptor,
+  cycleForm,
+  cycleAudienceMode,
+  reviewAnswerSide,
   feedback360Relationship,
   feedback360Status,
   feedback360Answer,
@@ -1303,15 +1306,47 @@ export default defineSchema({
     // Qualitative bands applied to the numeric overall rating.
     ratingBands: v.optional(v.array(ratingBand)),
     // Configurable appraisal questionnaire (parallel self + appraiser answers).
+    // Legacy: superseded by the structured `form` below; kept so pre-existing
+    // cycles still render via `normalizeForm`.
     questionnaire: v.optional(v.array(v.string())),
     // Configurable 360-feedback questions.
     feedback360Questions: v.optional(v.array(v.string())),
+    // Structured appraisal form (sections → fields). Replaces `questionnaire`.
+    form: v.optional(cycleForm),
+    // Provenance: the template this cycle's form was created from (if any).
+    templateId: v.optional(v.id("appraisalFormTemplates")),
+    // Who the form is released to. Absent = all active employees (legacy).
+    audience: v.optional(
+      v.object({
+        mode: cycleAudienceMode,
+        departmentIds: v.optional(v.array(v.id("departments"))),
+        officeIds: v.optional(v.array(v.id("offices"))),
+        employeeIds: v.optional(v.array(v.id("employees"))),
+      }),
+    ),
+    // Due-date reminder config for the reminder cron.
+    reminders: v.optional(
+      v.object({ enabled: v.boolean(), daysBefore: v.array(v.number()) }),
+    ),
     // Optional per-stage due dates keyed by stage id (dashboard progress).
+    // Named keys `self` / `appraiser` drive the form's participant due dates.
     dueDates: v.optional(v.record(v.string(), v.string())),
     createdBy: v.optional(v.id("users")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
+
+  // Reusable appraisal-form templates: seeded system defaults (isSystemDefault)
+  // plus org-saved forms. Copied onto a cycle's `form` when chosen.
+  appraisalFormTemplates: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    description: v.optional(v.string()),
+    form: cycleForm,
+    isSystemDefault: v.boolean(),
+    active: v.boolean(),
+    createdBy: v.optional(v.id("users")),
+  }).index("by_org", ["orgId"]),
 
   // Org competency library. Competencies are grouped by `category` (e.g.
   // "Functional Knowledge") and carry per-level behaviour descriptors. Referenced
@@ -1453,12 +1488,40 @@ export default defineSchema({
     calibratedRating: v.optional(v.number()), // HR-adjusted final, if any
     releasedAt: v.optional(v.number()),
     acknowledgedAt: v.optional(v.number()),
+    // Last time a due-date reminder was sent for this review (reminder cron
+    // de-dupe). Not a workflow field.
+    lastRemindedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_cycle", ["cycleId"])
     .index("by_employee", ["employeeId"])
     .index("by_employee_cycle", ["employeeId", "cycleId"])
     .index("by_manager_status", ["managerId", "status"]),
+
+  // One answer to one form field for one side (self | appraiser) of a review.
+  // Replaces the positional `reviews.selfAnswers[]` / `appraiserAnswers[]`
+  // arrays (which remain a read-only fallback for legacy reviews). Only one of
+  // the value fields is set, per the field's type. `objectives` / `competencies`
+  // blocks are NOT stored here — they use their own tables.
+  reviewAnswers: defineTable({
+    orgId: v.id("organizations"),
+    reviewId: v.id("reviews"),
+    cycleId: v.id("reviewCycles"),
+    employeeId: v.id("employees"),
+    fieldId: v.string(),
+    side: reviewAnswerSide,
+    text: v.optional(v.string()), // shortText / longText
+    rating: v.optional(v.number()), // ratingScale
+    choice: v.optional(v.string()), // radio
+    choices: v.optional(v.array(v.string())), // checkbox
+    boolValue: v.optional(v.boolean()), // yesNo
+    date: v.optional(v.string()), // date (ISO)
+    fileStorageIds: v.optional(v.array(v.id("_storage"))), // file
+    signatureStorageId: v.optional(v.id("_storage")), // signature
+    updatedAt: v.number(),
+  })
+    .index("by_review_side", ["reviewId", "side"])
+    .index("by_review_field_side", ["reviewId", "fieldId", "side"]),
 
   // Peer / 360 feedback about an employee, visible to their manager + HR.
   feedback: defineTable({
@@ -1597,6 +1660,9 @@ export default defineSchema({
         paymentRequests: emailModuleConfig,
         payroll: emailModuleConfig,
         leave: emailModuleConfig,
+        // Optional so rows written before the performance module existed still
+        // validate; new saves always include it.
+        performance: v.optional(emailModuleConfig),
       }),
     ),
     // Shared branding: a single logo used across all module emails.

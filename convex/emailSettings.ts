@@ -10,6 +10,7 @@ export const EMAIL_MODULES = [
   "paymentRequests",
   "payroll",
   "leave",
+  "performance",
 ] as const;
 export type EmailModule = (typeof EMAIL_MODULES)[number];
 
@@ -37,6 +38,7 @@ const modulesOut = v.object({
   paymentRequests: moduleConfigOut,
   payroll: moduleConfigOut,
   leave: moduleConfigOut,
+  performance: moduleConfigOut,
 });
 
 type ModuleOut = {
@@ -95,6 +97,7 @@ export const get = query({
         paymentRequests: resolveModule(row, "paymentRequests"),
         payroll: resolveModule(row, "payroll"),
         leave: resolveModule(row, "leave"),
+        performance: resolveModule(row, "performance"),
       },
       logoStorageId,
       logoUrl: logoStorageId ? await ctx.storage.getUrl(logoStorageId) : null,
@@ -134,6 +137,7 @@ export const save = mutation({
       paymentRequests: moduleConfigIn,
       payroll: moduleConfigIn,
       leave: moduleConfigIn,
+      performance: moduleConfigIn,
     }),
   },
   returns: v.null(),
@@ -146,6 +150,7 @@ export const save = mutation({
         paymentRequests: cleanModule(modules.paymentRequests),
         payroll: cleanModule(modules.payroll),
         leave: cleanModule(modules.leave),
+        performance: cleanModule(modules.performance),
       },
     };
     if (existing) {
