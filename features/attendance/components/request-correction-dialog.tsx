@@ -5,6 +5,7 @@ import { useMutation } from "convex/react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { getErrorMessage } from "@/lib/errors"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -51,7 +52,7 @@ export function RequestCorrectionDialog({
     const requestedClockInAt = toMs(date, inTime)
     const requestedClockOutAt = toMs(date, outTime)
     if (!requestedClockInAt && !requestedClockOutAt) {
-      toast.error("Enter a corrected clock-in or clock-out time.")
+      toast.error("Add the correct clock-in or clock-out time.")
       return
     }
     setBusy(true)
@@ -63,13 +64,15 @@ export function RequestCorrectionDialog({
         requestedClockOutAt,
         reason,
       })
-      toast.success("Correction requested")
+      toast.success("Correction sent for review")
       setOpen(false)
       setInTime("")
       setOutTime("")
       setReason("")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't submit")
+      toast.error(
+        getErrorMessage(e, "We couldn't send your correction. Please try again."),
+      )
     } finally {
       setBusy(false)
     }

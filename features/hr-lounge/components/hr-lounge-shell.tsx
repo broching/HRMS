@@ -135,6 +135,13 @@ const ITEMS: Item[] = [
     group: "Leave & attendance",
   },
   {
+    label: "Attendance",
+    icon: IconClockHour4,
+    href: "/hr-lounge/attendance",
+    permission: "attendance:config",
+    group: "Leave & attendance",
+  },
+  {
     label: "Attendance Config",
     icon: IconClockCog,
     href: "/settings/attendance",

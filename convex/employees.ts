@@ -310,6 +310,7 @@ export const orgChart = query({
           : `${e.preferredName ?? e.firstName} ${e.lastName}`,
         employeeNumber: e.employeeNumber,
         managerId: e.managerId ?? null,
+        additionalManagerIds: e.additionalManagerIds ?? [],
         positionId: e.positionId ?? null,
         positionTitle: e.positionId ? (posTitle.get(e.positionId) ?? null) : null,
         departmentId: e.departmentId ?? null,
@@ -740,6 +741,9 @@ export const update = mutation({
     employeeId: v.id("employees"),
     employeeNumber: v.optional(v.string()),
     ...{ ...writableFields, employmentType: v.optional(employmentType), joinDate: v.optional(v.string()) },
+    // Attendance override: true/false forces on/off; null clears the override
+    // (inherit the org default); absent leaves it untouched.
+    attendanceRequired: v.optional(v.union(v.boolean(), v.null())),
   },
   returns: v.null(),
   handler: async (ctx, { employeeId, idNumber, ...patch }) => {
@@ -750,6 +754,9 @@ export const update = mutation({
     }
 
     const next: Record<string, unknown> = { ...patch, updatedAt: Date.now() };
+    // null override means "inherit the org default" — patch to undefined so the
+    // field is removed from the document.
+    if (patch.attendanceRequired === null) next.attendanceRequired = undefined;
     if (idNumber !== undefined) {
       const masked = maskId(idNumber);
       next.idNumberMasked = masked.masked;
@@ -1398,10 +1405,10 @@ export const layoutPositions = query({
     }),
   ),
   handler: async (ctx) => {
-    const { orgId } = await requireOrg(ctx);
+    const { orgId, userId } = await requireOrg(ctx);
     const rows = await ctx.db
       .query("orgChartPositions")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
       .collect();
     return rows.map((r) => ({ employeeId: r.employeeId, x: r.x, y: r.y }));
   },
@@ -1421,7 +1428,7 @@ export const saveLayoutPositions = mutation({
   },
   returns: v.null(),
   handler: async (ctx, { positions }) => {
-    const { orgId } = await requirePermission(ctx, "employees:manage");
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
     const now = Date.now();
     for (const p of positions) {
       // Defensive: only persist positions for employees in this org.
@@ -1429,8 +1436,8 @@ export const saveLayoutPositions = mutation({
       if (!emp || emp.orgId !== orgId) continue;
       const existing = await ctx.db
         .query("orgChartPositions")
-        .withIndex("by_org_employee", (q) =>
-          q.eq("orgId", orgId).eq("employeeId", p.employeeId),
+        .withIndex("by_org_user_employee", (q) =>
+          q.eq("orgId", orgId).eq("userId", userId).eq("employeeId", p.employeeId),
         )
         .unique();
       if (existing) {
@@ -1438,6 +1445,7 @@ export const saveLayoutPositions = mutation({
       } else {
         await ctx.db.insert("orgChartPositions", {
           orgId,
+          userId,
           employeeId: p.employeeId,
           x: p.x,
           y: p.y,
@@ -1455,10 +1463,10 @@ export const resetLayout = mutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
-    const { orgId } = await requirePermission(ctx, "employees:manage");
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
     const rows = await ctx.db
       .query("orgChartPositions")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
       .collect();
     for (const r of rows) await ctx.db.delete(r._id);
     return null;
@@ -1596,6 +1604,66 @@ export const setManager = mutation({
       entityId: employeeId,
       before: { managerId: employee.managerId ?? null },
       after: { managerId },
+    });
+    return null;
+  },
+});
+
+// Set the additional (dotted-line) managers for an employee. These grant the
+// same team visibility + approval rights as the primary manager but never draw
+// the solid org-chart hierarchy. Deduped; the person themselves and their
+// primary manager are dropped (the primary is already covered by `managerId`).
+// Pass an empty array to clear. Gated on employees:manage.
+export const setAdditionalManagers = mutation({
+  args: {
+    employeeId: v.id("employees"),
+    managerIds: v.array(v.id("employees")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { employeeId, managerIds }) => {
+    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+
+    const employee = await ctx.db.get(employeeId);
+    if (!employee || employee.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Employee not found." });
+    }
+
+    const cleaned: Id<"employees">[] = [];
+    const seen = new Set<Id<"employees">>();
+    for (const mid of managerIds) {
+      if (mid === employeeId) continue; // can't manage themselves
+      if (mid === employee.managerId) continue; // already the primary manager
+      if (seen.has(mid)) continue;
+      const mgr = await ctx.db.get(mid);
+      if (!mgr || mgr.orgId !== orgId) {
+        throw new ConvexError({ code: "NOT_FOUND", message: "Manager not found." });
+      }
+      seen.add(mid);
+      cleaned.push(mid);
+    }
+
+    const before = employee.additionalManagerIds ?? [];
+    const next = cleaned.length > 0 ? cleaned : undefined;
+    // No-op if unchanged (same members, order-insensitive).
+    if (
+      before.length === cleaned.length &&
+      before.every((id) => seen.has(id))
+    ) {
+      return null;
+    }
+
+    await ctx.db.patch(employeeId, {
+      additionalManagerIds: next,
+      updatedAt: Date.now(),
+    });
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "employee.setAdditionalManagers",
+      entity: "employees",
+      entityId: employeeId,
+      before: { additionalManagerIds: before },
+      after: { additionalManagerIds: cleaned },
     });
     return null;
   },

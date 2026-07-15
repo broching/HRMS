@@ -59,6 +59,7 @@ import {
   attendanceStatus,
   correctionStatus,
   shiftStatus,
+  overtimeStatus,
   cpfStatus,
   cpfConfig,
   payType,
@@ -216,8 +217,12 @@ export default defineSchema({
     // configured yet — mileage claims are blocked until an admin sets it up.
     mileageSettings: v.optional(officeMileageSettings),
     qrEnabled: v.boolean(),
-    // HMAC secret backing this office's rotating clock-in QR codes. Never
-    // returned to clients; set when QR attendance is first enabled.
+    // How this office's clock-in QR is presented. "poster" = a static, printed
+    // code (never expires; geofence enforces presence). "kiosk" = a rotating
+    // short-lived code on a device display. Absent = poster (the default).
+    qrMode: v.optional(v.union(v.literal("poster"), v.literal("kiosk"))),
+    // HMAC secret backing this office's clock-in QR codes. Never returned to
+    // clients; set when QR attendance is first enabled.
     qrSecret: v.optional(v.string()),
   }).index("by_org", ["orgId"]),
 
@@ -267,7 +272,11 @@ export default defineSchema({
     departmentId: v.optional(v.id("departments")),
     teamId: v.optional(v.id("teams")),
     positionId: v.optional(v.id("positions")),
-    managerId: v.optional(v.id("employees")),
+    managerId: v.optional(v.id("employees")), // primary (solid-line) manager
+    // Secondary "dotted-line" managers. Each gains the same team visibility and
+    // approval rights as the primary manager, but only `managerId` draws the
+    // solid org-chart hierarchy. See model/org.ts `managerEmployeeIds`.
+    additionalManagerIds: v.optional(v.array(v.id("employees"))),
     employmentType: employmentType,
     officeId: v.optional(v.id("offices")),
     joinDate: v.string(), // ISO date
@@ -275,6 +284,9 @@ export default defineSchema({
     probationEndDate: v.optional(v.string()),
     status: employeeStatus,
     exitDate: v.optional(v.string()),
+    // Whether this person must clock attendance (QR/GPS). Absent = inherit the
+    // org-wide default from `attendanceSettings`. Set true/false to override.
+    attendanceRequired: v.optional(v.boolean()),
 
     // Extensibility + denormalized search
     customFields: v.optional(v.record(v.string(), v.any())),
@@ -304,15 +316,21 @@ export default defineSchema({
   // employee; nodes without a row fall back to the computed tidy-tree layout.
   // Kept separate from `employees` so frequent drag-saves don't churn the heavy
   // employee document or its audit trail.
+  // Per-user saved org-chart layout. Each user arranges their own view; a row
+  // is scoped by (orgId, userId, employeeId). Legacy rows without `userId`
+  // (from the old org-wide layout) are simply ignored by the per-user reads.
   orgChartPositions: defineTable({
     orgId: v.id("organizations"),
+    userId: v.optional(v.id("users")),
     employeeId: v.id("employees"),
     x: v.number(),
     y: v.number(),
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_employee", ["orgId", "employeeId"]),
+    .index("by_org_employee", ["orgId", "employeeId"])
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_user_employee", ["orgId", "userId", "employeeId"]),
 
   // ── Timesheet & project management ────────────────────────────────────────
   // Projects employees log time against. Org-scoped; managed by projects:manage.
@@ -895,6 +913,17 @@ export default defineSchema({
 
   // ─── Attendance (PWA QR + GPS) ───────────────────────────────────────────
 
+  // One org-wide row of attendance policy. `requiredByDefault` decides whether a
+  // new/unset employee must clock attendance; individuals override it via
+  // `employees.attendanceRequired`. `defaultOvertimeMultiplier` seeds the OT
+  // scheduler. Absent row = defaults (not required, 1.5×).
+  attendanceSettings: defineTable({
+    orgId: v.id("organizations"),
+    requiredByDefault: v.boolean(),
+    defaultOvertimeMultiplier: v.optional(v.number()),
+    updatedBy: v.optional(v.id("users")),
+  }).index("by_org", ["orgId"]),
+
   // One row per clock-in/out pair. A row is `open` from clock-in until the
   // employee clocks out (or a correction completes it). The `date` is the
   // calendar day in the office timezone, used for daily lookups/reports.
@@ -980,6 +1009,32 @@ export default defineSchema({
     .index("by_employee", ["employeeId"])
     .index("by_employee_date", ["employeeId", "date"])
     .index("by_employee_status_date", ["employeeId", "status", "date"]),
+
+  // Scheduled overtime. A manager/HR schedules an employee for OT on a date;
+  // employees can only be paid OT that was scheduled here. Once `approved`
+  // (confirmed as worked), payroll pulls it into a run as an OT adjustment —
+  // `payrollAdjustmentId`/`pulledRunId` mark it consumed so it isn't paid twice.
+  overtimeRecords: defineTable({
+    orgId: v.id("organizations"),
+    employeeId: v.id("employees"),
+    date: v.string(), // ISO "YYYY-MM-DD"
+    plannedHours: v.number(),
+    // Hours actually worked, set on approval. Falls back to plannedHours.
+    actualHours: v.optional(v.number()),
+    multiplier: v.number(), // e.g. 1.5 = time-and-a-half
+    status: overtimeStatus,
+    note: v.optional(v.string()),
+    scheduledBy: v.optional(v.id("users")),
+    reviewedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    // Set when consumed by a payroll run, so it isn't double-paid.
+    pulledRunId: v.optional(v.id("payrollRuns")),
+    payrollAdjustmentId: v.optional(v.id("payrollAdjustments")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_employee", ["employeeId"])
+    .index("by_employee_date", ["employeeId", "date"]),
 
   // ─── Payroll ─────────────────────────────────────────────────────────────
 

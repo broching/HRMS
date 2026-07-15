@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useQuery } from "convex/react"
 import {
   IconAddressBook,
   IconCalendarStats,
@@ -14,6 +15,7 @@ import {
   IconFileDollar,
   type Icon,
 } from "@tabler/icons-react"
+import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
 import { Card } from "@/components/ui/card"
 
@@ -23,10 +25,46 @@ type Tile = {
   icon: Icon
   href?: string
   soon?: boolean
+  // Draws attention (e.g. an open clock-in session that needs closing).
+  highlight?: boolean
+  // Priority order on mobile (single-column). Lower = higher. Tiles without one
+  // fall in after the prioritized set, keeping their natural order. Reset to the
+  // natural DOM order from `sm` up (see MOBILE_ORDER).
+  mobileOrder?: number
 }
 
+// Static Tailwind order classes (JIT can't see interpolated ones). `sm:order-0`
+// drops the override so the desktop grid uses natural DOM order.
+const MOBILE_ORDER: Record<number, string> = {
+  1: "order-1 sm:order-0",
+  2: "order-2 sm:order-0",
+  3: "order-3 sm:order-0",
+  4: "order-4 sm:order-0",
+  5: "order-5 sm:order-0",
+  6: "order-6 sm:order-0",
+}
+const MOBILE_ORDER_REST = "order-7 sm:order-0"
+
 export function HomeTiles() {
+  // Attendance leads the grid when the caller must clock in/out (or is mid
+  // session); otherwise it stays in its normal slot lower down.
+  const attendance = useQuery(api.attendance.myAttendanceConfig)
+  const attendanceLeads = Boolean(
+    attendance && (attendance.required || attendance.hasOpenSession),
+  )
+  const attendanceTile: Tile = {
+    title: "Attendance",
+    description: attendance?.hasOpenSession
+      ? "You're clocked in — tap to clock out"
+      : "Clock in and out with the office QR code",
+    icon: IconClockHour4,
+    href: "/attendance",
+    highlight: attendance?.hasOpenSession,
+    mobileOrder: 1,
+  }
+
   const tiles: Tile[] = [
+    ...(attendanceLeads ? [attendanceTile] : []),
     {
       title: "My Profile",
       description: "Update and preview your personal profile",
@@ -44,6 +82,7 @@ export function HomeTiles() {
       description: "Perform your leave management",
       icon: IconCalendarStats,
       href: "/leave",
+      mobileOrder: 4,
     },
     {
       title: "My Goals",
@@ -56,30 +95,29 @@ export function HomeTiles() {
       description: "Access to all your payslips and forms",
       icon: IconFileDollar,
       href: "/payslips",
+      mobileOrder: 5,
     },
     {
       title: "My Claims",
       description: "Submit your expenses",
       icon: IconReceipt,
       href: "/claims",
+      mobileOrder: 3,
     },
     {
       title: "Payment Requests",
       description: "Raise a request for payment",
       icon: IconFileInvoice,
       href: "/payment-requests",
+      mobileOrder: 6,
     },
-    {
-      title: "Attendance",
-      description: "Clock in and out with the office QR code",
-      icon: IconClockHour4,
-      href: "/attendance",
-    },
+    ...(attendanceLeads ? [] : [attendanceTile]),
     {
       title: "My Timesheet",
       description: "Log time against projects and tasks",
       icon: IconClockPlay,
       href: "/timesheets",
+      mobileOrder: 2,
     },
     {
       title: "Team Calendar",
@@ -95,6 +133,8 @@ export function HomeTiles() {
     <div className="h-full">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:h-[85%] xl:grid-cols-3">
         {tiles.map((t) => {
+        const orderClass =
+          t.mobileOrder != null ? MOBILE_ORDER[t.mobileOrder] : MOBILE_ORDER_REST
         const inner = (
           <Card
             className={cn(
@@ -102,6 +142,7 @@ export function HomeTiles() {
               t.href
                 ? "hover:border-primary/40 hover:bg-accent/40 cursor-pointer"
                 : "opacity-60",
+              t.highlight && "border-primary/50 bg-primary/5",
             )}
           >
             <div className="flex flex-col gap-3">
@@ -124,11 +165,11 @@ export function HomeTiles() {
           </Card>
         )
         return t.href ? (
-          <Link key={t.title} href={t.href} className="block h-full">
+          <Link key={t.title} href={t.href} className={cn("block h-full", orderClass)}>
             {inner}
           </Link>
         ) : (
-          <div key={t.title} className="h-full">
+          <div key={t.title} className={cn("h-full", orderClass)}>
             {inner}
           </div>
         )

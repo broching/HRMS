@@ -513,6 +513,15 @@ export function OrgChart() {
     edges.push(edge(posOf(n.managerId), posOf(n._id)))
   }
 
+  // Dotted connectors for additional (secondary) managers.
+  const dottedEdges: string[] = []
+  for (const n of visibleNodes) {
+    for (const mId of n.additionalManagerIds) {
+      if (!built.byId.has(mId) || hidden.has(mId)) continue
+      dottedEdges.push(edge(posOf(mId), posOf(n._id)))
+    }
+  }
+
   const deptCounts = new Map<string, number>()
   const officeCounts = new Map<string, number>()
   let vacantCount = 0
@@ -714,6 +723,18 @@ export function OrgChart() {
                   strokeWidth={1.5}
                 />
               ))}
+              {/* Secondary (dotted-line) reporting relationships. */}
+              {dottedEdges.map((d, i) => (
+                <path
+                  key={`dotted-${i}`}
+                  d={d}
+                  fill="none"
+                  stroke="var(--muted-foreground)"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 4"
+                  opacity={0.6}
+                />
+              ))}
             </svg>
 
             {/* Company root */}
@@ -891,6 +912,7 @@ export function OrgChart() {
                 positionId: quickEdit.positionId,
                 officeId: quickEdit.officeId,
                 managerId: quickEdit.managerId,
+                additionalManagerIds: quickEdit.additionalManagerIds,
               }}
               departments={departments.map((d) => ({ id: d._id, label: d.name }))}
               positions={positions.map((p) => ({ id: p._id, label: p.title }))}

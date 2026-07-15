@@ -4,6 +4,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, OrgContext } from "./auth";
 import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
+import { isDirectManager } from "./model/org";
 import { writeAuditLog } from "./lib/audit";
 
 const actionItem = v.object({ label: v.string(), done: v.boolean() });
@@ -48,7 +49,7 @@ async function access(
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   if (own && own._id === employeeId) return { canView: true, canEdit: true };
   const target = await ctx.db.get(employeeId);
-  if (own && target && target.managerId === own._id)
+  if (own && target && isDirectManager(target, own._id))
     return { canView: true, canEdit: false };
   return { canView: false, canEdit: false };
 }

@@ -1,15 +1,21 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
-import { IconCurrentLocation, IconQrcode } from "@tabler/icons-react"
+import {
+  IconCurrentLocation,
+  IconQrcode,
+  IconPrinter,
+} from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Card,
   CardContent,
@@ -25,7 +31,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { QrKiosk } from "@/features/attendance/components/qr-kiosk"
+import { GeofenceMap } from "@/features/attendance/components/geofence-map"
+import { PosterQrInline } from "@/features/attendance/components/poster-qr-inline"
 import { getDeviceLocation } from "@/features/attendance/lib/geo"
+import { getErrorMessage } from "@/lib/errors"
 
 function OfficeCard({
   office,
@@ -35,51 +44,77 @@ function OfficeCard({
   onShowKiosk: (o: Doc<"offices">) => void
 }) {
   const setOfficeQr = useMutation(api.attendance.setOfficeQr)
+  const setOfficeQrMode = useMutation(api.attendance.setOfficeQrMode)
   const update = useMutation(api.offices.update)
 
-  const [lat, setLat] = React.useState(office.geo?.lat?.toString() ?? "")
-  const [lng, setLng] = React.useState(office.geo?.lng?.toString() ?? "")
+  const mode = office.qrMode ?? "poster"
+  const hasGeofence = Boolean(office.geo && office.radiusMeters)
+
+  async function changeMode(next: "poster" | "kiosk") {
+    try {
+      await setOfficeQrMode({ officeId: office._id, mode: next })
+    } catch (e) {
+      toast.error(
+        getErrorMessage(e, "We couldn't switch the QR type. Please try again."),
+      )
+    }
+  }
+
+  const [lat, setLat] = React.useState<number | null>(office.geo?.lat ?? null)
+  const [lng, setLng] = React.useState<number | null>(office.geo?.lng ?? null)
   const [radius, setRadius] = React.useState(
     office.radiusMeters?.toString() ?? "100",
   )
+  const [saving, setSaving] = React.useState(false)
+  const radiusN = Math.max(10, parseInt(radius, 10) || 100)
 
   async function toggleQr(enabled: boolean) {
     try {
       await setOfficeQr({ officeId: office._id, enabled })
-      toast.success(enabled ? "QR clock-in enabled" : "QR clock-in disabled")
+      toast.success(
+        enabled
+          ? "QR clock-in is now on for this office."
+          : "QR clock-in is now off for this office.",
+      )
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't update")
+      toast.error(
+        getErrorMessage(e, "We couldn't update QR clock-in. Please try again."),
+      )
     }
   }
 
   async function useMyLocation() {
     try {
       const fix = await getDeviceLocation()
-      setLat(fix.lat.toFixed(6))
-      setLng(fix.lng.toFixed(6))
-      toast.success("Filled in your current location")
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't get location")
+      setLat(Number(fix.lat.toFixed(6)))
+      setLng(Number(fix.lng.toFixed(6)))
+      toast.success("Centred the map on your current location.")
+    } catch {
+      toast.error(
+        "We couldn't get your location. Check that location access is allowed.",
+      )
     }
   }
 
   async function saveGeofence() {
-    const latN = parseFloat(lat)
-    const lngN = parseFloat(lng)
-    const radN = parseInt(radius, 10)
-    if (Number.isNaN(latN) || Number.isNaN(lngN)) {
-      toast.error("Enter a valid latitude and longitude.")
+    if (lat == null || lng == null) {
+      toast.error("Tap the map to drop a pin on the office first.")
       return
     }
+    setSaving(true)
     try {
       await update({
         id: office._id,
-        geo: { lat: latN, lng: lngN },
-        radiusMeters: Number.isNaN(radN) ? 100 : radN,
+        geo: { lat, lng },
+        radiusMeters: radiusN,
       })
-      toast.success("Geofence saved")
+      toast.success("Office location saved.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save")
+      toast.error(
+        getErrorMessage(e, "We couldn't save the location. Please try again."),
+      )
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -102,57 +137,117 @@ function OfficeCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`lat-${office._id}`}>Latitude</Label>
-            <Input
-              id={`lat-${office._id}`}
-              value={lat}
-              onChange={(e) => setLat(e.target.value)}
-              placeholder="1.3000"
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`lng-${office._id}`}>Longitude</Label>
-            <Input
-              id={`lng-${office._id}`}
-              value={lng}
-              onChange={(e) => setLng(e.target.value)}
-              placeholder="103.8000"
-            />
-          </div>
+        <div className="flex flex-col gap-2">
+          <Label>Office location</Label>
+          <p className="text-muted-foreground text-xs">
+            Tap the map to place the office, then drag the pin to fine-tune. The
+            shaded circle is how close staff must be to clock in.
+          </p>
+          <GeofenceMap
+            lat={lat}
+            lng={lng}
+            radiusMeters={radiusN}
+            onChange={(a, b) => {
+              setLat(Number(a.toFixed(6)))
+              setLng(Number(b.toFixed(6)))
+            }}
+          />
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`rad-${office._id}`}>Radius (m)</Label>
             <Input
               id={`rad-${office._id}`}
+              type="number"
+              min="10"
+              className="w-28"
               value={radius}
               onChange={(e) => setRadius(e.target.value)}
               placeholder="100"
             />
           </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={useMyLocation}>
             <IconCurrentLocation className="size-4" />
             Use my location
           </Button>
-          <Button size="sm" onClick={saveGeofence}>
-            Save geofence
+          <Button size="sm" onClick={saveGeofence} disabled={saving}>
+            {saving ? "Saving…" : "Save location"}
           </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!office.qrEnabled}
-            onClick={() => onShowKiosk(office)}
-          >
-            <IconQrcode className="size-4" />
-            Show QR
-          </Button>
+          {lat != null && lng != null && (
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {lat.toFixed(5)}, {lng.toFixed(5)}
+            </span>
+          )}
         </div>
+
+        {office.qrEnabled && (
+          <div className="flex flex-col gap-2 border-t pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <Label className="text-sm font-medium">QR code type</Label>
+                <p className="text-muted-foreground text-xs">
+                  {mode === "poster"
+                    ? "A static code you print once and paste on the wall."
+                    : "A rotating code shown on a device screen at reception."}
+                </p>
+              </div>
+              <ToggleGroup
+                type="single"
+                value={mode}
+                onValueChange={(v) => v && changeMode(v as "poster" | "kiosk")}
+                variant="outline"
+                size="sm"
+              >
+                <ToggleGroupItem value="poster" className="px-3">
+                  Poster
+                </ToggleGroupItem>
+                <ToggleGroupItem value="kiosk" className="px-3">
+                  Kiosk
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+            {mode === "poster" ? (
+              hasGeofence ? (
+                <div className="flex flex-col gap-3">
+                  <PosterQrInline
+                    officeId={office._id}
+                    officeName={office.name}
+                  />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="self-start"
+                    asChild
+                  >
+                    <Link href={`/attendance/poster/${office._id}`}>
+                      <IconPrinter className="size-4" />
+                      Open printable poster
+                    </Link>
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-xs">
+                  Save the office location above to enable the printed poster.
+                </p>
+              )
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="self-start"
+                onClick={() => onShowKiosk(office)}
+              >
+                <IconQrcode className="size-4" />
+                Show kiosk QR
+              </Button>
+            )}
+          </div>
+        )}
+
         {!office.geo && (
           <p className="text-muted-foreground text-xs">
-            No geofence set — clock-in will be allowed from anywhere until a
-            location and radius are saved.
+            No location set yet — until you save one, staff can clock in from
+            anywhere.
           </p>
         )}
       </CardContent>

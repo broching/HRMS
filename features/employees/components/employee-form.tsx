@@ -80,6 +80,8 @@ const schema = z.object({
   positionId: z.string().optional(),
   managerId: z.string().optional(),
   officeId: z.string().min(1, "Required"),
+  // Tri-state attendance override: inherit the org default, force on, or off.
+  attendanceRequired: z.enum(["default", "required", "exempt"]).optional(),
 })
 
 export type EmployeeFormValues = z.infer<typeof schema>
@@ -221,6 +223,7 @@ export function EmployeeForm({
       role: "employee",
       joinDate: new Date().toISOString().slice(0, 10),
       country: "SG",
+      attendanceRequired: "default",
       ...initial,
     },
   })
@@ -293,7 +296,19 @@ export function EmployeeForm({
       }
 
       if (employeeId) {
-        await update({ employeeId, employeeNumber: values.employeeNumber, ...common })
+        // "default" clears the override (null); required/exempt force it.
+        const attendanceRequired =
+          values.attendanceRequired === "required"
+            ? true
+            : values.attendanceRequired === "exempt"
+              ? false
+              : null
+        await update({
+          employeeId,
+          employeeNumber: values.employeeNumber,
+          ...common,
+          attendanceRequired,
+        })
         toast.success("Employee updated")
         router.push(`/employees/${employeeId}`)
       } else {
@@ -618,6 +633,18 @@ export function EmployeeForm({
               label="Office"
               options={offices.map((o) => ({ value: o._id, label: o.name }))}
             />
+            {employeeId && (
+              <SelectField
+                control={form.control}
+                name="attendanceRequired"
+                label="Attendance"
+                options={[
+                  { value: "default", label: "Org default" },
+                  { value: "required", label: "Required" },
+                  { value: "exempt", label: "Not required" },
+                ]}
+              />
+            )}
           </CardContent>
         </Card>
 

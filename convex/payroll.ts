@@ -1023,6 +1023,7 @@ export const removeAdjustment = mutation({
       adj.runId,
       adj.employeeId,
     );
+    await unmarkOvertimeForAdjustment(ctx, adj);
     await ctx.db.delete(adjustmentId);
     await recomputePayslip(ctx, slip);
     await recomputeRunTotals(ctx, adj.runId);
@@ -1190,7 +1191,10 @@ export const removeEmployeeFromRun = mutation({
         q.eq("runId", runId).eq("employeeId", employeeId),
       )
       .collect();
-    for (const a of adjustments) await ctx.db.delete(a._id);
+    for (const a of adjustments) {
+      await unmarkOvertimeForAdjustment(ctx, a);
+      await ctx.db.delete(a._id);
+    }
     await ctx.db.delete(slip._id);
     await recomputeRunTotals(ctx, runId);
     await writeAuditLog(ctx, {
@@ -1275,6 +1279,105 @@ export const pullClaims = mutation({
       orgId,
       actorUserId: userId,
       action: "payroll.pull_claims",
+      entity: "payrollRuns",
+      entityId: runId,
+      after: { added },
+    });
+    return added;
+  },
+});
+
+// ─── Overtime pull ──────────────────────────────────────────────────────────
+
+// Clear an overtime record's pull marks when its payroll adjustment is removed,
+// so it becomes eligible to pull again (or to cancel).
+async function unmarkOvertimeForAdjustment(
+  ctx: MutationCtx,
+  adj: Doc<"payrollAdjustments">,
+) {
+  if (adj.source !== "overtime" || !adj.sourceRefId) return;
+  const ot = await ctx.db.get(adj.sourceRefId as Id<"overtimeRecords">);
+  if (ot && ot.pulledRunId === adj.runId) {
+    await ctx.db.patch(ot._id, {
+      pulledRunId: undefined,
+      payrollAdjustmentId: undefined,
+    });
+  }
+}
+
+// Pull all approved, not-yet-paid overtime for the run's period into the run as
+// OT additions. Idempotent — each OT record carries its consuming run, so a
+// second pull skips ones already pulled. Amount is computed from the employee's
+// compensation at pay time (same as a manual OT entry).
+export const pullOvertime = mutation({
+  args: { runId: v.id("payrollRuns") },
+  returns: v.number(),
+  handler: async (ctx, { runId }) => {
+    const { orgId, userId } = await requirePermission(ctx, "payroll:manage");
+    const run = await ctx.db.get(runId);
+    if (!run || run.orgId !== orgId) throw new Error("Run not found.");
+    if (run.status !== "draft") throw new Error("Only draft runs can be edited.");
+
+    const slips = await ctx.db
+      .query("payslips")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const empIds = new Set(slips.map((s) => s.employeeId));
+
+    const approved = await ctx.db
+      .query("overtimeRecords")
+      .withIndex("by_org_status", (q) =>
+        q.eq("orgId", orgId).eq("status", "approved"),
+      )
+      .collect();
+
+    const periodEnd = periodEndDate(run.periodMonth);
+    const touched = new Set<Id<"employees">>();
+    let added = 0;
+    for (const ot of approved) {
+      if (ot.pulledRunId) continue; // already paid
+      if (!ot.date.startsWith(run.periodMonth)) continue;
+      if (!empIds.has(ot.employeeId)) continue;
+      const comp = await effectiveCompensation(ctx, ot.employeeId, periodEnd);
+      if (!comp) continue;
+      const hours = ot.actualHours ?? ot.plannedHours;
+      const amountCents = overtimePayCents(
+        comp.baseMonthlyCents,
+        hours,
+        ot.multiplier,
+      );
+      if (amountCents <= 0) continue;
+      const adjustmentId = await ctx.db.insert("payrollAdjustments", {
+        orgId,
+        runId,
+        employeeId: ot.employeeId,
+        kind: "addition",
+        source: "overtime",
+        label: `Overtime — ${ot.date} (rate × ${ot.multiplier})`,
+        amountCents,
+        cpfable: true,
+        affectsGross: false,
+        overtime: { hours, multiplier: ot.multiplier },
+        sourceRefId: ot._id,
+        createdBy: userId,
+      });
+      await ctx.db.patch(ot._id, {
+        pulledRunId: runId,
+        payrollAdjustmentId: adjustmentId,
+      });
+      touched.add(ot.employeeId);
+      added += 1;
+    }
+
+    for (const employeeId of touched) {
+      const slip = slips.find((s) => s.employeeId === employeeId);
+      if (slip) await recomputePayslip(ctx, slip);
+    }
+    if (added > 0) await recomputeRunTotals(ctx, runId);
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "payroll.pull_overtime",
       entity: "payrollRuns",
       entityId: runId,
       after: { added },
@@ -1398,10 +1501,20 @@ export const getRunWorkspace = query({
       if (leaveType && !leaveType.paid) unpaidLeaveDays += req.totalDays;
     }
 
-    const overtime = payslips.reduce(
-      (n, p) => n + p.adjustments.filter((a) => a.source === "overtime").length,
-      0,
-    );
+    // Approved overtime for this period that hasn't been pulled yet — the count
+    // of items the "pull overtime" action would bring in.
+    const approvedOvertime = await ctx.db
+      .query("overtimeRecords")
+      .withIndex("by_org_status", (q) =>
+        q.eq("orgId", orgId).eq("status", "approved"),
+      )
+      .collect();
+    const overtime = approvedOvertime.filter(
+      (o) =>
+        !o.pulledRunId &&
+        o.date.startsWith(run.periodMonth) &&
+        empIds.has(o.employeeId),
+    ).length;
 
     return {
       run: runRow(run),

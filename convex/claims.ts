@@ -9,6 +9,7 @@ import {
   OrgContext,
 } from "./auth";
 import { employeeByUserId } from "./employees";
+import { isDirectManager, managerUsers } from "./model/org";
 import {
   claimRow,
   claimDetail,
@@ -236,7 +237,7 @@ async function requireClaimAccess(ctx: QueryCtx, claimId: Id<"claims">) {
     return { orgCtx, claim };
   }
   const employee = await ctx.db.get(claim.employeeId);
-  if (own && employee && employee.managerId === own._id) {
+  if (own && employee && isDirectManager(employee, own._id)) {
     return { orgCtx, claim };
   }
   throw new ConvexError("Not authorized to view this claim.");
@@ -257,7 +258,7 @@ async function assertManagerStage(
   }
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const employee = await ctx.db.get(claim.employeeId);
-  if (own && employee && employee.managerId === own._id) return;
+  if (own && employee && isDirectManager(employee, own._id)) return;
   throw new ConvexError("Not authorized to act on this claim.");
 }
 
@@ -356,7 +357,7 @@ async function callerCanActOnManagerStep(
   }
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const employee = await ctx.db.get(claim.employeeId);
-  return !!(own && employee && employee.managerId === own._id);
+  return !!(own && employee && isDirectManager(employee, own._id));
 }
 
 // Whether a `pending_manager` claim's current chain step requires a signature.
@@ -499,12 +500,19 @@ async function buildApprovalChain(
     }
 
     let approverUserId: Id<"users"> | undefined;
+    // Set when a step resolves to multiple eligible approvers (e.g. a person
+    // with several managers) so any of them can act on it.
+    let approverUserIds: Id<"users">[] | undefined;
     let name = "";
     if (step.approverType === "position") {
-      if (step.value === "manager" && employee.managerId) {
-        const mgr = await ctx.db.get(employee.managerId);
-        approverUserId = mgr?.userId ?? undefined;
-        name = mgr ? `${mgr.firstName} ${mgr.lastName}` : "";
+      if (step.value === "manager") {
+        // Route to every manager (primary + additional); any can approve.
+        const mgrs = await managerUsers(ctx, employee);
+        if (mgrs.length > 0) {
+          approverUserId = mgrs[0].userId;
+          if (mgrs.length > 1) approverUserIds = mgrs.map((m) => m.userId);
+          name = mgrs.map((m) => m.name).join(", ");
+        }
       } else if (step.value === "department_head" && employee.departmentId) {
         const dept = await ctx.db.get(employee.departmentId);
         if (dept?.headEmployeeId) {
@@ -533,6 +541,7 @@ async function buildApprovalChain(
       value: step.value,
       workflowIndex: wi,
       approverUserId,
+      ...(approverUserIds ? { approverUserIds } : {}),
       label: name ? `${posLabel} — ${name}` : posLabel,
       requiresSignature: step.requiresSignature ?? false,
     });
@@ -1771,7 +1780,7 @@ export const get = query({
       } else {
         // Legacy chain-less claim → the claimant's manager decides.
         const employee = await ctx.db.get(claim.employeeId);
-        canApprove = !!own && employee?.managerId === own._id;
+        canApprove = !!own && !!employee && isDirectManager(employee, own._id);
       }
     }
 
@@ -1990,7 +1999,7 @@ async function claimsAwaitingCaller(
       if (step && stepEligible(step, orgCtx.userId)) out.push(c);
     } else if (own) {
       const emp = await ctx.db.get(c.employeeId);
-      if (emp?.managerId === own._id) out.push(c);
+      if (emp && isDirectManager(emp, own._id)) out.push(c);
     }
   }
   return out;
@@ -2166,7 +2175,7 @@ async function approverClaimView(
       // Legacy chain-less claim → the claimant's manager decides.
       if (own) {
         const emp = await ctx.db.get(claim.employeeId);
-        if (emp?.managerId === own._id) return gate("awaiting");
+        if (emp && isDirectManager(emp, own._id)) return gate("awaiting");
       }
       return isFinance ? "visible" : "hidden";
     }

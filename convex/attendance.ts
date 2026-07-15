@@ -14,7 +14,9 @@ import {
   attendanceStatusResult,
   presenceRow,
   correctionRow,
+  attendanceBoardResult,
 } from "./lib/validators";
+import { reportingSubtree } from "./model/org";
 import { writeAuditLog } from "./lib/audit";
 import {
   signQrToken,
@@ -23,7 +25,11 @@ import {
   newOfficeSecret,
 } from "./model/qrToken";
 import { checkGeofence } from "./model/geo";
-import { localDateISO } from "./model/datetime";
+import { localDateISO, localMinuteOfDay } from "./model/datetime";
+import {
+  getAttendanceSettings,
+  attendanceRequiredFor,
+} from "./attendanceSettings";
 
 // Rotating clock-in QR validity. Kept short so a screenshot is not reusable.
 const QR_TTL_MS = 90_000;
@@ -96,6 +102,22 @@ async function notify(
   });
 }
 
+// Caller may manage an employee's attendance: HR/admin (attendance:config) or
+// any manager above the employee in the reporting chain.
+async function assertCanManageAttendance(
+  ctx: QueryCtx,
+  orgCtx: OrgContext,
+  employeeId: Id<"employees">,
+) {
+  if (ctxHasPermission(orgCtx, "attendance:config")) return;
+  const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+  if (own) {
+    const subtree = await reportingSubtree(ctx, orgCtx.orgId, own._id);
+    if (subtree.has(employeeId)) return;
+  }
+  throw new Error("Not authorized to manage this employee's attendance.");
+}
+
 // Caller may review a correction: HR/admin (attendance:config) or the
 // requesting employee's direct manager.
 async function assertCorrectionReviewer(
@@ -103,11 +125,7 @@ async function assertCorrectionReviewer(
   orgCtx: OrgContext,
   correction: Doc<"attendanceCorrections">,
 ) {
-  if (ctxHasPermission(orgCtx, "attendance:config")) return;
-  const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
-  const emp = await ctx.db.get(correction.employeeId);
-  if (own && emp && emp.managerId === own._id) return;
-  throw new Error("Not authorized to review this correction.");
+  await assertCanManageAttendance(ctx, orgCtx, correction.employeeId);
 }
 
 // ─── Office QR configuration ─────────────────────────────────────────────────
@@ -133,6 +151,57 @@ export const setOfficeQr = mutation({
       entityId: officeId,
     });
     return null;
+  },
+});
+
+// Set an office's QR presentation mode. Poster mode (a static printed code)
+// requires a configured geofence, since the code never expires and the fence is
+// the only thing tying a clock-in to the physical office.
+export const setOfficeQrMode = mutation({
+  args: {
+    officeId: v.id("offices"),
+    mode: v.union(v.literal("poster"), v.literal("kiosk")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { officeId, mode }) => {
+    const { orgId, userId } = await requirePermission(ctx, "attendance:config");
+    const office = await ctx.db.get(officeId);
+    if (!office || office.orgId !== orgId) throw new Error("Office not found.");
+    if (mode === "poster" && !(office.geo && office.radiusMeters)) {
+      throw new Error(
+        "Set this office's geofence before switching to a printed poster code.",
+      );
+    }
+    await ctx.db.patch(officeId, { qrMode: mode });
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "attendance.qr_mode",
+      entity: "offices",
+      entityId: officeId,
+      after: { mode },
+    });
+    return null;
+  },
+});
+
+// Mint the office's static (never-expiring) poster token. Safe to print and
+// paste on a wall — a scan still has to pass the geofence to clock in.
+export const generateStaticQr = mutation({
+  args: { officeId: v.id("offices") },
+  returns: v.object({ token: v.string(), officeName: v.string() }),
+  handler: async (ctx, { officeId }) => {
+    const { orgId } = await requirePermission(ctx, "attendance:config");
+    const office = await ctx.db.get(officeId);
+    if (!office || office.orgId !== orgId) throw new Error("Office not found.");
+    if (!office.qrEnabled || !office.qrSecret) {
+      throw new Error("QR clock-in is not enabled for this office.");
+    }
+    if (!(office.geo && office.radiusMeters)) {
+      throw new Error("Set this office's geofence before generating a poster code.");
+    }
+    const token = await signQrToken(office.qrSecret, { o: officeId });
+    return { token, officeName: office.name };
   },
 });
 
@@ -192,7 +261,9 @@ export const clockIn = mutation({
     }
     const payload = await verifyQrToken(office.qrSecret, token);
     if (!payload) throw new Error("This QR code is invalid or has been tampered with.");
-    if (payload.e < Date.now()) {
+    // Kiosk (rotating) codes carry an expiry; static poster codes don't and rely
+    // on the geofence below instead.
+    if (payload.e !== undefined && payload.e < Date.now()) {
       throw new Error("This QR code has expired — scan the latest one on the display.");
     }
 
@@ -442,7 +513,119 @@ async function applyCorrection(
   }
 }
 
+// Manager/HR directly sets or inserts an attendance record — the fallback when
+// the system was down and an employee couldn't clock in/out normally. Creates a
+// new manual record, or updates an existing one when `recordId` is given.
+export const adjustRecord = mutation({
+  args: {
+    recordId: v.optional(v.id("attendanceRecords")),
+    employeeId: v.id("employees"),
+    date: v.string(),
+    clockInAt: v.number(),
+    clockOutAt: v.optional(v.number()),
+    note: v.optional(v.string()),
+  },
+  returns: v.id("attendanceRecords"),
+  handler: async (ctx, args) => {
+    const orgCtx = await requireOrg(ctx);
+    await assertCanManageAttendance(ctx, orgCtx, args.employeeId);
+    if (args.clockOutAt != null && args.clockOutAt < args.clockInAt) {
+      throw new Error("Clock-out can't be before clock-in.");
+    }
+    const completed = args.clockOutAt != null;
+    const workedMinutes = completed
+      ? Math.max(0, Math.round((args.clockOutAt! - args.clockInAt) / 60000))
+      : undefined;
+
+    let recordId: Id<"attendanceRecords">;
+    if (args.recordId) {
+      const rec = await ctx.db.get(args.recordId);
+      if (
+        !rec ||
+        rec.orgId !== orgCtx.orgId ||
+        rec.employeeId !== args.employeeId
+      ) {
+        throw new Error("Attendance record not found.");
+      }
+      await ctx.db.patch(args.recordId, {
+        clockInAt: args.clockInAt,
+        clockOutAt: args.clockOutAt,
+        status: completed ? "completed" : "open",
+        workedMinutes,
+        note: args.note?.trim() || rec.note,
+        correctedByUserId: orgCtx.userId,
+      });
+      recordId = args.recordId;
+    } else {
+      recordId = await ctx.db.insert("attendanceRecords", {
+        orgId: orgCtx.orgId,
+        employeeId: args.employeeId,
+        date: args.date,
+        clockInAt: args.clockInAt,
+        clockOutAt: args.clockOutAt,
+        status: completed ? "completed" : "open",
+        workedMinutes,
+        method: "manual",
+        note: args.note?.trim() || "Added by manager",
+        correctedByUserId: orgCtx.userId,
+      });
+    }
+
+    const emp = await ctx.db.get(args.employeeId);
+    await notify(
+      ctx,
+      orgCtx.orgId,
+      emp?.userId,
+      "attendance.adjusted",
+      "Attendance updated",
+      `Your attendance for ${args.date} was updated by your manager.`,
+      recordId,
+    );
+    await writeAuditLog(ctx, {
+      orgId: orgCtx.orgId,
+      actorUserId: orgCtx.userId,
+      action: "attendance.adjust",
+      entity: "attendanceRecords",
+      entityId: recordId,
+    });
+    return recordId;
+  },
+});
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
+
+// Whether the caller must clock attendance + whether they're currently open.
+// Drives the Home quick-access card (shown when required or mid-session).
+export const myAttendanceConfig = query({
+  args: {},
+  returns: v.object({
+    hasProfile: v.boolean(),
+    required: v.boolean(),
+    hasOpenSession: v.boolean(),
+  }),
+  handler: async (ctx) => {
+    const orgCtx = await getOrgContext(ctx);
+    if (!orgCtx) {
+      return { hasProfile: false, required: false, hasOpenSession: false };
+    }
+    const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    if (!own) {
+      return { hasProfile: false, required: false, hasOpenSession: false };
+    }
+    const settings = await getAttendanceSettings(ctx, orgCtx.orgId);
+    const open = await ctx.db
+      .query("attendanceRecords")
+      .withIndex("by_employee_status", (q) =>
+        q.eq("employeeId", own._id).eq("status", "open"),
+      )
+      .first();
+    return {
+      hasProfile: true,
+      required: attendanceRequiredFor(own, settings),
+      hasOpenSession: open !== null,
+    };
+  },
+});
 
 // The caller's live clock state + today's records (own self-service view).
 export const myStatus = query({
@@ -554,6 +737,144 @@ export const teamToday = query({
     );
     rows.sort((a, b) => a.clockInAt - b.clockInAt);
     return rows;
+  },
+});
+
+// A day's attendance as a timesheet-style board: one column per person with
+// their clock sessions as minute-of-day blocks. `scope: "team"` shows the
+// caller's reporting subtree; `scope: "org"` shows everyone (HR/admin only).
+export const attendanceDayBoard = query({
+  args: {
+    date: v.string(),
+    scope: v.union(v.literal("team"), v.literal("org")),
+    departmentId: v.optional(v.id("departments")),
+    teamId: v.optional(v.id("teams")),
+  },
+  returns: attendanceBoardResult,
+  handler: async (ctx, { date, scope, departmentId, teamId }) => {
+    const orgCtx = await getOrgContext(ctx);
+    const empty = { date, people: [], totalMinutes: 0, peopleCount: 0 };
+    if (!orgCtx) return empty;
+
+    // Resolve the employees whose columns to show. Org scope needs a privileged
+    // caller; team scope is the caller's reporting subtree.
+    const settings = await getAttendanceSettings(ctx, orgCtx.orgId);
+    let scopeEmployees: Doc<"employees">[];
+    if (scope === "org") {
+      if (
+        !ctxHasPermission(orgCtx, "attendance:config") &&
+        !ctxHasPermission(orgCtx, "employees:read:all")
+      ) {
+        return empty;
+      }
+      const all = await ctx.db
+        .query("employees")
+        .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+        .collect();
+      scopeEmployees = all.filter(
+        (e) => e.status !== "terminated" && !e.isVacant,
+      );
+    } else {
+      const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+      if (!me) return empty;
+      const ids = await reportingSubtree(ctx, orgCtx.orgId, me._id);
+      const docs = await Promise.all([...ids].map((id) => ctx.db.get(id)));
+      scopeEmployees = docs.filter(
+        (d): d is Doc<"employees"> =>
+          d !== null && d.status !== "terminated" && !d.isVacant,
+      );
+    }
+
+    const records = await ctx.db
+      .query("attendanceRecords")
+      .withIndex("by_org_date", (q) =>
+        q.eq("orgId", orgCtx.orgId).eq("date", date),
+      )
+      .take(3000);
+
+    const byEmp = new Map<Id<"employees">, Doc<"attendanceRecords">[]>();
+    for (const r of records) {
+      const arr = byEmp.get(r.employeeId) ?? [];
+      arr.push(r);
+      byEmp.set(r.employeeId, arr);
+    }
+
+    const orgTz = orgCtx.org.settings.timezone;
+    const officeCache = new Map<
+      string,
+      { tz: string; name: string | null }
+    >();
+    async function office(officeId?: Id<"offices">) {
+      if (!officeId) return { tz: orgTz, name: null };
+      const k = officeId as string;
+      const cached = officeCache.get(k);
+      if (cached) return cached;
+      const o = await ctx.db.get(officeId);
+      const val = { tz: o?.timezone ?? orgTz, name: o?.name ?? null };
+      officeCache.set(k, val);
+      return val;
+    }
+
+    const now = Date.now();
+    const people = [];
+    let totalMinutes = 0;
+    // Show a column for anyone who is attendance-required or has records that
+    // day — the set of people you'd add/adjust attendance for.
+    for (const emp of scopeEmployees) {
+      if (departmentId && emp.departmentId !== departmentId) continue;
+      if (teamId && emp.teamId !== teamId) continue;
+      const recs = byEmp.get(emp._id) ?? [];
+      if (recs.length === 0 && !attendanceRequiredFor(emp, settings)) continue;
+      const employeeId = emp._id;
+      const [position, photoUrl] = await Promise.all([
+        emp.positionId ? ctx.db.get(emp.positionId) : Promise.resolve(null),
+        emp.photoStorageId
+          ? ctx.storage.getUrl(emp.photoStorageId)
+          : Promise.resolve(null),
+      ]);
+
+      recs.sort((a, b) => a.clockInAt - b.clockInAt);
+      const blocks = [];
+      let personMinutes = 0;
+      let open = false;
+      let officeName: string | null = null;
+      for (const r of recs) {
+        const off = await office(r.officeId);
+        if (!officeName) officeName = off.name;
+        const clockOutMinute =
+          r.clockOutAt != null ? localMinuteOfDay(r.clockOutAt, off.tz) : null;
+        const worked =
+          r.workedMinutes ??
+          (r.clockOutAt != null
+            ? Math.max(0, Math.round((r.clockOutAt - r.clockInAt) / 60000))
+            : Math.max(0, Math.round((now - r.clockInAt) / 60000)));
+        personMinutes += worked;
+        if (r.status === "open") open = true;
+        blocks.push({
+          _id: r._id,
+          clockInMinute: localMinuteOfDay(r.clockInAt, off.tz),
+          clockOutMinute,
+          status: r.status,
+          method: r.method,
+          clockInAt: r.clockInAt,
+          clockOutAt: r.clockOutAt ?? null,
+          workedMinutes: r.workedMinutes ?? null,
+        });
+      }
+      totalMinutes += personMinutes;
+      people.push({
+        employeeId,
+        name: `${emp.firstName} ${emp.lastName}`,
+        jobTitle: position?.title ?? null,
+        photoUrl,
+        officeName,
+        blocks,
+        totalMinutes: personMinutes,
+        open,
+      });
+    }
+    people.sort((a, b) => a.name.localeCompare(b.name));
+    return { date, people, totalMinutes, peopleCount: people.length };
   },
 });
 

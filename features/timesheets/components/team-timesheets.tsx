@@ -331,13 +331,216 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
     )
   }
 
+  // Shared building blocks — reused by both the normal page layout and the
+  // focus-mode fullscreen overlay, so the board and panel behave identically.
+  const projectPanel = (
+    <ProjectBreakdown
+      byProject={byProject}
+      totalMinutes={stats.totalMinutes}
+      onCollapse={() => setProjectPanelOpen(false)}
+    />
+  )
+  const dayBoard = (
+    <Card className="gap-0 overflow-hidden p-0">
+      <TeamDayGrid
+        date={anchor}
+        people={dayPeople}
+        onSelectPerson={(p) =>
+          setSelected({
+            employeeId: p.employeeId,
+            name: p.name,
+            jobTitle: p.jobTitle,
+          })
+        }
+        canLogFor={canLogFor}
+        onLog={(person, d, minute, minutes) => {
+          const isSelf = person.employeeId === myEmployeeId
+          setDraft({
+            date: d,
+            startMinute: minute,
+            minutes: minutes ?? 60,
+            employeeId: isSelf ? undefined : person.employeeId,
+            employeeName: isSelf ? undefined : person.name,
+          })
+          setLogOpen(true)
+        }}
+        onEditEntry={(person, entry) => {
+          const isSelf = person.employeeId === myEmployeeId
+          setDraft({
+            entry,
+            employeeId: isSelf ? undefined : person.employeeId,
+            employeeName: isSelf ? undefined : person.name,
+          })
+          setLogOpen(true)
+        }}
+      />
+    </Card>
+  )
+  const calendar = (
+    <TeamCalendar
+      mode={view as "week" | "month"}
+      anchor={anchor}
+      people={calendarPeople}
+      onSelectPerson={(id) => {
+        const p = summary?.byEmployee.find((x) => x.employeeId === id)
+        if (p)
+          setSelected({
+            employeeId: p.employeeId,
+            name: p.name,
+            jobTitle: p.jobTitle,
+          })
+      }}
+    />
+  )
+  const heatmap = (
+    <PeopleHeatmap
+      people={roster}
+      total={summary?.byEmployee.length ?? 0}
+      dates={dates}
+      onSelect={(p) =>
+        setSelected({
+          employeeId: p.employeeId,
+          name: p.name,
+          jobTitle: p.jobTitle,
+        })
+      }
+    />
+  )
+  const overlays = (
+    <>
+      <PersonDialog
+        person={selected}
+        from={range.from}
+        to={range.to}
+        onClose={() => setSelected(null)}
+      />
+      <EntryDialog
+        open={logOpen}
+        draft={draft}
+        projects={projects}
+        onOpenChange={setLogOpen}
+      />
+      <TimesheetExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        scope={scope}
+        anchor={anchor}
+        view={view}
+        departmentId={dept}
+        teamId={tid}
+        projectId={pid}
+      />
+    </>
+  )
+
+  // Focus mode — a slim top bar (date nav + panel toggle + minimize on the
+  // right) over just the scheduling board and the collapsible project panel.
+  // Esc also exits (see the effect above). The board fills the viewport and
+  // scrolls internally; KPIs/filters/mode toggle are dropped for focus.
+  if (isFullscreen) {
+    const boardBody = loading ? (
+      <Skeleton className="h-full min-h-96 w-full" />
+    ) : isEmpty ? (
+      <EmptyState
+        scope={scope}
+        filtered={dept !== undefined || tid !== undefined || pid !== undefined}
+      />
+    ) : view === "day" ? (
+      dayBoard
+    ) : (
+      <div className="flex flex-col gap-4">
+        {calendar}
+        {heatmap}
+      </div>
+    )
+    return (
+      <div className="bg-background fixed inset-0 z-[60] flex flex-col">
+        {/* Always-visible exit, independent of the header layout. */}
+        <Button
+          variant="secondary"
+          size="icon"
+          className="absolute top-2.5 right-3 z-50 size-9 shadow-md"
+          title="Exit fullscreen (Esc)"
+          aria-label="Exit fullscreen"
+          onClick={() => setIsFullscreen(false)}
+        >
+          <IconX className="size-5" />
+        </Button>
+        <div className="flex items-center gap-2 border-b px-4 py-2 pr-16">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center rounded-lg border">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 rounded-r-none"
+                onClick={() => step(-1)}
+                aria-label="Previous"
+              >
+                <IconChevronLeft className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 rounded-l-none border-l"
+                onClick={() => step(1)}
+                aria-label="Next"
+              >
+                <IconChevronRight className="size-4" />
+              </Button>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setAnchor(todayIso())}>
+              Today
+            </Button>
+            <div className="ml-1 text-sm font-semibold">{rangeLabel}</div>
+            <ToggleGroup
+              type="single"
+              value={view}
+              onValueChange={(v) => v && setView(v as View)}
+              variant="outline"
+              size="sm"
+              className="ml-2 hidden sm:flex"
+            >
+              <ToggleGroupItem value="day" className="px-3">
+                Day
+              </ToggleGroupItem>
+              <ToggleGroupItem value="week" className="px-3">
+                Week
+              </ToggleGroupItem>
+              <ToggleGroupItem value="month" className="px-3">
+                Month
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-8"
+              title={projectPanelOpen ? "Hide project panel" : "Show project panel"}
+              aria-label={projectPanelOpen ? "Hide project panel" : "Show project panel"}
+              onClick={() => setProjectPanelOpen((o) => !o)}
+            >
+              {projectPanelOpen ? (
+                <IconLayoutSidebarRightCollapse className="size-4" />
+              ) : (
+                <IconLayoutSidebarRightExpand className="size-4" />
+              )}
+            </Button>
+          </div>
+        </div>
+        <div className="flex min-h-0 flex-1">
+          <div className="min-w-0 flex-1 overflow-auto p-4">{boardBody}</div>
+          {projectPanelOpen && !loading && !isEmpty && (
+            <aside className="w-80 shrink-0 overflow-auto border-l p-4">
+              {projectPanel}
+            </aside>
+          )}
+        </div>
+        {overlays}
+      </div>
+    )
+  }
+
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-4 px-4 lg:px-6",
-        isFullscreen && "bg-background fixed inset-0 z-40 overflow-y-auto py-4",
-      )}
-    >
+    <div className="flex flex-col gap-4 px-4 lg:px-6">
       {isOrg && !isFullscreen && <ModeToggle mode={mode} onChange={setMode} />}
 
       {/* Toolbar */}
@@ -507,120 +710,28 @@ export function TeamTimesheets({ scope = "team" }: { scope?: Scope }) {
                 projectPanelOpen && "xl:grid-cols-[minmax(0,1fr)_320px]",
               )}
             >
-              <Card className="gap-0 overflow-hidden p-0">
-                <TeamDayGrid
-                  date={anchor}
-                  people={dayPeople}
-                  onSelectPerson={(p) =>
-                    setSelected({
-                      employeeId: p.employeeId,
-                      name: p.name,
-                      jobTitle: p.jobTitle,
-                    })
-                  }
-                  canLogFor={canLogFor}
-                  onLog={(person, d, minute, minutes) => {
-                    const isSelf = person.employeeId === myEmployeeId
-                    setDraft({
-                      date: d,
-                      startMinute: minute,
-                      minutes: minutes ?? 60,
-                      employeeId: isSelf ? undefined : person.employeeId,
-                      employeeName: isSelf ? undefined : person.name,
-                    })
-                    setLogOpen(true)
-                  }}
-                  onEditEntry={(person, entry) => {
-                    const isSelf = person.employeeId === myEmployeeId
-                    setDraft({
-                      entry,
-                      employeeId: isSelf ? undefined : person.employeeId,
-                      employeeName: isSelf ? undefined : person.name,
-                    })
-                    setLogOpen(true)
-                  }}
-                />
-              </Card>
-              {projectPanelOpen && (
-                <ProjectBreakdown
-                  byProject={byProject}
-                  totalMinutes={stats.totalMinutes}
-                  onCollapse={() => setProjectPanelOpen(false)}
-                />
-              )}
+              {dayBoard}
+              {projectPanelOpen && projectPanel}
             </div>
           ) : (
             <>
               {/* Calendar first — who logged each day, coloured by top project. */}
-              <TeamCalendar
-                mode={view}
-                anchor={anchor}
-                people={calendarPeople}
-                onSelectPerson={(id) => {
-                  const p = summary?.byEmployee.find((x) => x.employeeId === id)
-                  if (p)
-                    setSelected({
-                      employeeId: p.employeeId,
-                      name: p.name,
-                      jobTitle: p.jobTitle,
-                    })
-                }}
-              />
+              {calendar}
               <div
                 className={cn(
                   "grid gap-4",
                   projectPanelOpen && "xl:grid-cols-[minmax(0,1fr)_320px]",
                 )}
               >
-                <PeopleHeatmap
-                  people={roster}
-                  total={summary?.byEmployee.length ?? 0}
-                  dates={dates}
-                  onSelect={(p) =>
-                    setSelected({
-                      employeeId: p.employeeId,
-                      name: p.name,
-                      jobTitle: p.jobTitle,
-                    })
-                  }
-                />
-                {projectPanelOpen && (
-                  <ProjectBreakdown
-                    byProject={byProject}
-                    totalMinutes={stats.totalMinutes}
-                    onCollapse={() => setProjectPanelOpen(false)}
-                  />
-                )}
+                {heatmap}
+                {projectPanelOpen && projectPanel}
               </div>
             </>
           )}
         </>
       )}
 
-      <PersonDialog
-        person={selected}
-        from={range.from}
-        to={range.to}
-        onClose={() => setSelected(null)}
-      />
-
-      <EntryDialog
-        open={logOpen}
-        draft={draft}
-        projects={projects}
-        onOpenChange={setLogOpen}
-      />
-
-      <TimesheetExportDialog
-        open={exportOpen}
-        onOpenChange={setExportOpen}
-        scope={scope}
-        anchor={anchor}
-        view={view}
-        departmentId={dept}
-        teamId={tid}
-        projectId={pid}
-      />
+      {overlays}
     </div>
   )
 }

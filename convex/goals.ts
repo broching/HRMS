@@ -4,6 +4,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, OrgContext } from "./auth";
 import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
+import { isDirectManager } from "./model/org";
 import { goalStatus } from "./lib/enums";
 import { goalRow } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
@@ -19,7 +20,7 @@ async function assertGoalAccess(
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   if (own && own._id === employeeId) return;
   const target = await ctx.db.get(employeeId);
-  if (own && target && target.managerId === own._id) return;
+  if (own && target && isDirectManager(target, own._id)) return;
   throw new Error("Not authorized to manage these goals.");
 }
 

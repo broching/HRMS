@@ -8,6 +8,7 @@ import {
   OrgContext,
 } from "./auth";
 import { employeeByUserId } from "./employees";
+import { managerUsers } from "./model/org";
 import { writeAuditLog } from "./lib/audit";
 import { pushNotification } from "./model/notify";
 import {
@@ -233,12 +234,19 @@ async function buildApprovalChain(
     }
 
     let approverUserId: Id<"users"> | undefined;
+    // Set when a step resolves to multiple eligible approvers (e.g. a person
+    // with several managers) so any of them can act on it.
+    let approverUserIds: Id<"users">[] | undefined;
     let name = "";
     if (step.approverType === "position") {
-      if (step.value === "manager" && employee.managerId) {
-        const mgr = await ctx.db.get(employee.managerId);
-        approverUserId = mgr?.userId ?? undefined;
-        name = mgr ? `${mgr.firstName} ${mgr.lastName}` : "";
+      if (step.value === "manager") {
+        // Route to every manager (primary + additional); any can approve.
+        const mgrs = await managerUsers(ctx, employee);
+        if (mgrs.length > 0) {
+          approverUserId = mgrs[0].userId;
+          if (mgrs.length > 1) approverUserIds = mgrs.map((m) => m.userId);
+          name = mgrs.map((m) => m.name).join(", ");
+        }
       } else if (step.value === "department_head" && employee.departmentId) {
         const dept = await ctx.db.get(employee.departmentId);
         if (dept?.headEmployeeId) {
@@ -266,6 +274,7 @@ async function buildApprovalChain(
       approverType: step.approverType,
       value: step.value,
       approverUserId,
+      ...(approverUserIds ? { approverUserIds } : {}),
       label: name ? `${posLabel} — ${name}` : posLabel,
       requiresSignature: step.requiresSignature ?? false,
     });

@@ -9,6 +9,7 @@
  */
 
 import type * as attendance from "../attendance.js";
+import type * as attendanceSettings from "../attendanceSettings.js";
 import type * as auth from "../auth.js";
 import type * as billing from "../billing.js";
 import type * as board from "../board.js";
@@ -68,6 +69,7 @@ import type * as notifications from "../notifications.js";
 import type * as offices from "../offices.js";
 import type * as orgMembers from "../orgMembers.js";
 import type * as organizations from "../organizations.js";
+import type * as overtime from "../overtime.js";
 import type * as paymentAttemptTypes from "../paymentAttemptTypes.js";
 import type * as paymentAttempts from "../paymentAttempts.js";
 import type * as paymentRequestSettings from "../paymentRequestSettings.js";
@@ -106,6 +108,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   attendance: typeof attendance;
+  attendanceSettings: typeof attendanceSettings;
   auth: typeof auth;
   billing: typeof billing;
   board: typeof board;
@@ -165,6 +168,7 @@ declare const fullApi: ApiFromModules<{
   offices: typeof offices;
   orgMembers: typeof orgMembers;
   organizations: typeof organizations;
+  overtime: typeof overtime;
   paymentAttemptTypes: typeof paymentAttemptTypes;
   paymentAttempts: typeof paymentAttempts;
   paymentRequestSettings: typeof paymentRequestSettings;

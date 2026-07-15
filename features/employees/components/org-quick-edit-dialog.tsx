@@ -10,6 +10,7 @@ import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -37,6 +38,7 @@ type Props = {
     positionId: Id<"positions"> | null
     officeId: Id<"offices"> | null
     managerId: Id<"employees"> | null
+    additionalManagerIds: Id<"employees">[]
   }
   departments: Option[]
   positions: Option[]
@@ -60,12 +62,16 @@ export function OrgQuickEditDialog({
 }: Props) {
   const quickUpdate = useMutation(api.employees.quickUpdateJob)
   const setManager = useMutation(api.employees.setManager)
+  const setAdditionalManagers = useMutation(api.employees.setAdditionalManagers)
 
   const [dept, setDept] = React.useState<string>(initial.departmentId ?? NONE)
   const [pos, setPos] = React.useState<string>(initial.positionId ?? NONE)
   const [office, setOffice] = React.useState<string>(initial.officeId ?? NONE)
   const [manager, setManagerId] = React.useState<string>(
     initial.managerId ?? NONE,
+  )
+  const [additional, setAdditional] = React.useState<Set<string>>(
+    () => new Set(initial.additionalManagerIds),
   )
   const [saving, setSaving] = React.useState(false)
 
@@ -76,6 +82,7 @@ export function OrgQuickEditDialog({
     setPos(initial.positionId ?? NONE)
     setOffice(initial.officeId ?? NONE)
     setManagerId(initial.managerId ?? NONE)
+    setAdditional(new Set(initial.additionalManagerIds))
   }, [open, initial])
 
   async function handleSave() {
@@ -86,6 +93,16 @@ export function OrgQuickEditDialog({
       const nextManager = manager === NONE ? null : (manager as Id<"employees">)
       if (nextManager !== (initial.managerId ?? null)) {
         await setManager({ employeeId, managerId: nextManager })
+      }
+      // Additional managers: exclude the primary (it's covered by managerId).
+      const nextAdditional = [...additional].filter((id) => id !== manager)
+      const before = [...initial.additionalManagerIds].sort().join(",")
+      const after = [...nextAdditional].sort().join(",")
+      if (before !== after) {
+        await setAdditionalManagers({
+          employeeId,
+          managerIds: nextAdditional as Id<"employees">[],
+        })
       }
       await quickUpdate({
         employeeId,
@@ -146,6 +163,20 @@ export function OrgQuickEditDialog({
               options={managerOptions}
             />
           </Field>
+          <Field label="Also reports to (dotted line)">
+            <AdditionalManagers
+              options={managerOptions.filter((o) => o.id !== manager)}
+              selected={additional}
+              onToggle={(id, checked) =>
+                setAdditional((cur) => {
+                  const next = new Set(cur)
+                  if (checked) next.add(id)
+                  else next.delete(id)
+                  return next
+                })
+              }
+            />
+          </Field>
         </div>
 
         <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -180,6 +211,40 @@ function Field({
     <div className="flex flex-col gap-1.5">
       <Label className="text-muted-foreground text-xs">{label}</Label>
       {children}
+    </div>
+  )
+}
+
+// Scrollable checkbox list of secondary (dotted-line) managers. Empty when
+// there are no eligible people (e.g. everyone is in this person's own subtree).
+function AdditionalManagers({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: Option[]
+  selected: Set<string>
+  onToggle: (id: string, checked: boolean) => void
+}) {
+  if (options.length === 0) {
+    return (
+      <p className="text-muted-foreground text-xs">No other people available.</p>
+    )
+  }
+  return (
+    <div className="max-h-40 overflow-y-auto rounded-md border p-1">
+      {options.map((o) => (
+        <label
+          key={o.id}
+          className="hover:bg-accent flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm"
+        >
+          <Checkbox
+            checked={selected.has(o.id)}
+            onCheckedChange={(c) => onToggle(o.id, c === true)}
+          />
+          <span className="truncate">{o.label}</span>
+        </label>
+      ))}
     </div>
   )
 }

@@ -692,6 +692,16 @@ export const shiftStatus = v.union(
 );
 export type ShiftStatus = "draft" | "published" | "cancelled";
 
+// An overtime record is `scheduled` when a manager/HR plans it, `approved` once
+// confirmed as worked (and eligible for payroll pull), or `rejected`/`cancelled`.
+export const overtimeStatus = v.union(
+  v.literal("scheduled"),
+  v.literal("approved"),
+  v.literal("rejected"),
+  v.literal("cancelled"),
+);
+export type OvertimeStatus = "scheduled" | "approved" | "rejected" | "cancelled";
+
 // ─── Payroll module ──────────────────────────────────────────────────────
 
 // CPF treatment for an employee.

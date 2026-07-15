@@ -9,6 +9,7 @@ import {
 } from "./auth";
 import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
+import { isDirectManager, managerEmployeeIds } from "./model/org";
 import { shiftAssignmentRow, schedulableEmployee } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
 import { shiftDurationMinutes, parseHHMM } from "./model/shiftTime";
@@ -28,13 +29,17 @@ async function schedulableScope(
   }
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   if (!own) return { all: false, ids: new Set() };
-  const reports = await ctx.db
+  // Direct reports via any manager link (primary or additional). Additional
+  // managers can't be served by `by_org_manager`, so scan the org once and
+  // filter on the combined manager set.
+  const all = await ctx.db
     .query("employees")
-    .withIndex("by_org_manager", (q) =>
-      q.eq("orgId", orgCtx.orgId).eq("managerId", own._id),
-    )
+    .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
     .collect();
-  return { all: false, ids: new Set(reports.map((r) => r._id)) };
+  const ids = new Set(
+    all.filter((r) => managerEmployeeIds(r).includes(own._id)).map((r) => r._id),
+  );
+  return { all: false, ids };
 }
 
 async function assertCanScheduleEmployee(
@@ -45,7 +50,7 @@ async function assertCanScheduleEmployee(
   if (ctxHasPermission(orgCtx, "scheduling:manage")) return;
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const target = await ctx.db.get(employeeId);
-  if (own && target && target.managerId === own._id) return;
+  if (own && target && isDirectManager(target, own._id)) return;
   throw new Error("Not authorized to schedule this employee.");
 }
 

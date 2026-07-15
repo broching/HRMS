@@ -41,6 +41,7 @@ import {
   attendanceStatus,
   correctionStatus,
   shiftStatus,
+  overtimeStatus,
   cpfStatus,
   payType,
   payrollStatus,
@@ -121,6 +122,7 @@ export const officeDoc = v.object({
   radiusMeters: v.optional(v.number()),
   mileageSettings: v.optional(officeMileageSettings),
   qrEnabled: v.boolean(),
+  qrMode: v.optional(v.union(v.literal("poster"), v.literal("kiosk"))),
 });
 
 // Full employee document (mirrors the schema, incl. system fields).
@@ -165,6 +167,7 @@ const employeeFields = {
   probationEndDate: v.optional(v.string()),
   status: employeeStatus,
   exitDate: v.optional(v.string()),
+  attendanceRequired: v.optional(v.boolean()),
   customFields: v.optional(v.record(v.string(), v.any())),
   searchName: v.string(),
   createdBy: v.optional(v.id("users")),
@@ -277,6 +280,7 @@ export const orgChartNode = v.object({
   name: v.string(),
   employeeNumber: v.string(),
   managerId: v.union(v.id("employees"), v.null()),
+  additionalManagerIds: v.array(v.id("employees")),
   positionId: v.union(v.id("positions"), v.null()),
   positionTitle: v.union(v.string(), v.null()),
   departmentId: v.union(v.id("departments"), v.null()),
@@ -787,6 +791,38 @@ export const correctionRow = v.object({
   decisionNote: v.union(v.string(), v.null()),
 });
 
+// One clock session on the attendance day board — minute-of-day (office tz).
+export const attendanceBlock = v.object({
+  _id: v.id("attendanceRecords"),
+  clockInMinute: v.number(),
+  // Null while still clocked in (renders as ongoing / to "now").
+  clockOutMinute: v.union(v.number(), v.null()),
+  status: attendanceStatus,
+  method: attendanceMethod,
+  clockInAt: v.number(),
+  clockOutAt: v.union(v.number(), v.null()),
+  workedMinutes: v.union(v.number(), v.null()),
+})
+
+// One person's column on the day board.
+export const attendanceBoardPerson = v.object({
+  employeeId: v.id("employees"),
+  name: v.string(),
+  jobTitle: v.union(v.string(), v.null()),
+  photoUrl: v.union(v.string(), v.null()),
+  officeName: v.union(v.string(), v.null()),
+  blocks: v.array(attendanceBlock),
+  totalMinutes: v.number(),
+  open: v.boolean(),
+})
+
+export const attendanceBoardResult = v.object({
+  date: v.string(),
+  people: v.array(attendanceBoardPerson),
+  totalMinutes: v.number(),
+  peopleCount: v.number(),
+})
+
 // ─── Scheduling ──────────────────────────────────────────────────────────
 
 export const shiftTemplateDoc = v.object({
@@ -827,6 +863,22 @@ export const schedulableEmployee = v.object({
   _id: v.id("employees"),
   name: v.string(),
   positionTitle: v.union(v.string(), v.null()),
+})
+
+// One overtime record, hydrated with the employee's name. `paid` reflects a
+// completed payroll pull.
+export const overtimeRow = v.object({
+  _id: v.id("overtimeRecords"),
+  _creationTime: v.number(),
+  employeeId: v.id("employees"),
+  employeeName: v.string(),
+  date: v.string(),
+  plannedHours: v.number(),
+  actualHours: v.union(v.number(), v.null()),
+  multiplier: v.number(),
+  status: overtimeStatus,
+  note: v.union(v.string(), v.null()),
+  paid: v.boolean(),
 })
 
 // ─── Payroll ─────────────────────────────────────────────────────────────

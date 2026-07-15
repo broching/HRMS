@@ -5,6 +5,7 @@ import { halfDay } from "./lib/enums";
 import { requireOrg, getOrgContext, OrgContext } from "./auth";
 import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
+import { isDirectManager, managerUsers } from "./model/org";
 import { ensureBalance } from "./leaveBalances";
 import { resolvePolicyForEmployee } from "./leavePolicies";
 import { computeEntitlement, effectiveCarryForward } from "./model/leavePolicy";
@@ -166,11 +167,12 @@ async function buildLeaveApprovalChain(
     let ids: Id<"users">[] = [];
     let label = "";
     if (step.approverType === "position") {
-      if (step.value === "manager" && employee.managerId) {
-        const mgr = await ctx.db.get(employee.managerId);
-        if (mgr?.userId) {
-          ids = [mgr.userId];
-          label = `Manager — ${mgr.firstName} ${mgr.lastName}`;
+      if (step.value === "manager") {
+        // Route to every manager (primary + additional); any can approve.
+        const mgrs = await managerUsers(ctx, employee);
+        if (mgrs.length > 0) {
+          ids = mgrs.map((m) => m.userId);
+          label = `Manager — ${mgrs.map((m) => m.name).join(", ")}`;
         }
       } else if (step.value === "department_head" && employee.departmentId) {
         const dept = await ctx.db.get(employee.departmentId);
@@ -377,7 +379,7 @@ async function assertCanApprove(
     if (ctxHasPermission(orgCtx, "leave:approve:all")) return;
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     const employee = await ctx.db.get(req.employeeId);
-    if (own && employee && employee.managerId === own._id) return;
+    if (own && employee && isDirectManager(employee, own._id)) return;
   }
   throw new Error("Not authorized to act on this request.");
 }

@@ -61,9 +61,11 @@ function initials(name: string) {
 function ValidateBanner({
   available,
   onOpenClaims,
+  onPullOvertime,
 }: {
   available: Workspace["available"]
   onOpenClaims: () => void
+  onPullOvertime: () => void
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border bg-muted/40 p-4">
@@ -94,7 +96,14 @@ function ValidateBanner({
       <div className="flex items-center gap-2 text-sm">
         <IconClock className="text-muted-foreground size-4" />
         Overtime
-        {available.overtime > 0 && <Badge variant="secondary">{available.overtime}</Badge>}
+        {available.overtime > 0 && (
+          <Badge variant="secondary">{available.overtime}</Badge>
+        )}
+        {available.overtime > 0 && (
+          <Button size="sm" variant="outline" onClick={onPullOvertime}>
+            Pull overtime
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -835,6 +844,7 @@ function EmployeeRow({
 
 export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
   const refreshRun = useMutation(api.payroll.refreshRun)
+  const pullOvertime = useMutation(api.payroll.pullOvertime)
   const [search, setSearch] = React.useState("")
   const [showEmployer, setShowEmployer] = React.useState(false)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
@@ -861,6 +871,18 @@ export function AdjustPayrollStep({ workspace }: { workspace: Workspace }) {
       <ValidateBanner
         available={available}
         onOpenClaims={() => setClaimsOpen(true)}
+        onPullOvertime={async () => {
+          try {
+            const n = await pullOvertime({ runId: run._id })
+            toast.success(
+              n > 0
+                ? `Pulled ${n} overtime item${n === 1 ? "" : "s"}`
+                : "No approved overtime to pull",
+            )
+          } catch (e) {
+            toast.error(getErrorMessage(e, "Couldn't pull overtime"))
+          }
+        }}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-2">

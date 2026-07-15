@@ -18,6 +18,7 @@ import {
 import { QrScanner } from "@/features/attendance/components/qr-scanner"
 import { getDeviceLocation } from "@/features/attendance/lib/geo"
 import { formatTime, elapsedSince } from "@/features/attendance/lib/labels"
+import { getErrorMessage } from "@/lib/errors"
 
 export function ClockCard() {
   const status = useQuery(api.attendance.myStatus)
@@ -47,7 +48,9 @@ export function ClockCard() {
       })
       toast.success(`Clocked in at ${res.officeName}`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't clock in")
+      toast.error(
+        getErrorMessage(e, "We couldn't clock you in. Please try again."),
+      )
     } finally {
       setBusy(null)
     }
@@ -65,7 +68,9 @@ export function ClockCard() {
       const m = res.workedMinutes % 60
       toast.success(`Clocked out · worked ${h}h ${m}m`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't clock out")
+      toast.error(
+        getErrorMessage(e, "We couldn't clock you out. Please try again."),
+      )
     } finally {
       setBusy(null)
     }

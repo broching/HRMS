@@ -13,7 +13,8 @@
 
 export interface QrPayload {
   o: string; // office id
-  e: number; // expiry, epoch ms
+  e?: number; // expiry, epoch ms. Absent = a static (printed poster) code that
+  // never expires — anti-fraud then rests entirely on the GPS geofence.
 }
 
 const enc = new TextEncoder();
@@ -74,7 +75,10 @@ export function peekQrPayload(token: string): QrPayload | null {
   if (!payloadB64) return null;
   try {
     const parsed = JSON.parse(dec.decode(b64urlToBytes(payloadB64)));
-    if (typeof parsed?.o === "string" && typeof parsed?.e === "number") {
+    if (
+      typeof parsed?.o === "string" &&
+      (typeof parsed?.e === "number" || parsed?.e === undefined)
+    ) {
       return parsed as QrPayload;
     }
     return null;

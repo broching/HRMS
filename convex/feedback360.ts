@@ -4,6 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { requireOrg, getOrgContext, OrgContext } from "./auth";
 import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
+import { isDirectManager } from "./model/org";
 import {
   feedback360Relationship,
   feedback360Answer,
@@ -24,7 +25,7 @@ async function assertCanManageSubject(
   if (ctxHasPermission(orgCtx, "performance:manage")) return;
   const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
   const subject = await ctx.db.get(subjectEmployeeId);
-  if (own && subject && subject.managerId === own._id) return;
+  if (own && subject && isDirectManager(subject, own._id)) return;
   throw new Error("Not authorized for this employee's 360 feedback.");
 }
 
