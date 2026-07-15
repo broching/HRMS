@@ -1,20 +1,16 @@
-import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
+import { clerkMiddleware } from '@clerk/nextjs/server'
 
-// Public routes render without auth. Everything else requires a signed-in user.
-// Active-organization enforcement happens in app/(app)/layout.tsx (OrgGuard).
-const isPublicRoute = createRouteMatcher([
-  '/',
-  '/leadmightyhr(.*)', // public marketing page for the HR product
-  '/sign-in(.*)',
-  '/sign-up(.*)',
-  '/boards(.*)', // public job board (careers page)
-])
-
-export default clerkMiddleware(async (auth, req) => {
-  if (!isPublicRoute(req)) {
-    await auth.protect()
-  }
-})
+// No auth checks run here. Per Clerk's guidance, `auth.protect()` must NOT live
+// in middleware: on a Clerk dev instance the short-lived session token expires
+// while the browser is away on an external site (e.g. the Stripe billing
+// portal), and the return navigation carries no `__clerk_db_jwt`, so the
+// middleware sees "signed-out" and `redirectToSignIn()` sends the user into an
+// infinite sign-in redirect loop. Instead, protection is enforced at the
+// resource level: app/(app)/layout.tsx (signed-in + active org) and
+// app/super-admin/layout.tsx (signed-in), with every data read authorized
+// server-side in Convex. Middleware still runs the Clerk session handshake for
+// every matched route.
+export default clerkMiddleware()
 
 export const config = {
   matcher: [

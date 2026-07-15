@@ -93,8 +93,11 @@ export const createCheckoutSession = action({
       subscription_data: { metadata: { orgId: auth.orgId } },
       allow_promotion_codes: true,
       billing_address_collection: "auto" as const,
-      success_url: `${base}/hr-lounge/billing?checkout=success`,
-      cancel_url: `${base}/hr-lounge/billing?checkout=cancel`,
+      // Return via the public /billing-return bridge so the client Clerk session
+      // re-syncs before the server-protected billing page renders (see
+      // features/billing/components/billing-return.tsx).
+      success_url: `${base}/billing-return?checkout=success`,
+      cancel_url: `${base}/billing-return?checkout=cancel`,
     };
 
     let session: Stripe.Checkout.Session;
@@ -143,7 +146,8 @@ export const createBillingPortalSession = action({
     const stripe = getStripe();
     const session = await stripe.billingPortal.sessions.create({
       customer: auth.stripeCustomerId,
-      return_url: `${appBaseUrl()}/hr-lounge/billing`,
+      // Return via the public /billing-return bridge (see createCheckoutSession).
+      return_url: `${appBaseUrl()}/billing-return`,
     });
     return { url: session.url };
   },
