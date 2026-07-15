@@ -95,7 +95,13 @@ export function OrgChart() {
   const { organization } = useOrganization()
   const member = useCurrentMember()
   const router = useRouter()
-  const canManage = permitted(member?.permissions, "employees:manage")
+  // Creating/archiving real employees stays employees:manage-only.
+  const canManageEmployees = permitted(member?.permissions, "employees:manage")
+  // Reassigning managers + editing cards from the chart: either the broad
+  // employees:manage permission or the narrower, chart-specific one. Everyone
+  // else can still drag cards to arrange their own personal view for free.
+  const canEditChart =
+    canManageEmployees || permitted(member?.permissions, "employees:org_chart")
 
   const saveLayout = useMutation(api.employees.saveLayoutPositions)
   const resetLayoutM = useMutation(api.employees.resetLayout)
@@ -309,11 +315,14 @@ export function OrgChart() {
     }))
   }
 
-  // ─── Node drag (whole subtree) + click-to-open ──────────────────────────
+  // ─── Node drag + click-to-open ───────────────────────────────────────────
+  // Repositioning a card is a free, per-user display preference open to
+  // everyone (saved via saveLayoutPositions, scoped to the caller). Dragging a
+  // whole subtree and dropping onto another card to reassign a reporting line
+  // is gated on canEditChart.
   function onCardPointerDown(e: React.PointerEvent, node: Node) {
     e.stopPropagation() // don't start a canvas pan
-    // Managers can drag a subtree; everyone gets click-to-open on pointer-up.
-    const subtree = canManage ? collectSubtree(node._id) : [node._id]
+    const subtree = canEditChart ? collectSubtree(node._id) : [node._id]
     const base = new Map<EmpId, XY>()
     for (const id of subtree) base.set(id, posOf(id))
     dragRef.current = {
@@ -328,7 +337,7 @@ export function OrgChart() {
   }
   function onCardPointerMove(e: React.PointerEvent) {
     const d = dragRef.current
-    if (!d || !canManage) return
+    if (!d) return
     if (
       !d.moved &&
       Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > DRAG_THRESHOLD
@@ -345,8 +354,11 @@ export function OrgChart() {
       m.set(id, { x: b.x + dx, y: b.y + dy })
     }
     setDragMap(m)
-    // Live: which node would become the new manager on drop?
-    setHoverTarget(hitTest(d.nodeId, m.get(d.nodeId)!, new Set(d.subtree)))
+    // Live: which node would become the new manager on drop? Only relevant
+    // (and only computed) when the caller can actually reassign.
+    if (canEditChart) {
+      setHoverTarget(hitTest(d.nodeId, m.get(d.nodeId)!, new Set(d.subtree)))
+    }
   }
   function onCardPointerUp(e: React.PointerEvent, node: Node) {
     const d = dragRef.current
@@ -356,9 +368,9 @@ export function OrgChart() {
     if (!d) return
     if (!d.moved) {
       setDragMap(null)
-      // A click (no drag): managers get the quick-edit modal; everyone else
-      // opens the full profile.
-      if (canManage) setQuickEdit(node)
+      // A click (no drag): chart editors get the quick-edit modal; everyone
+      // else opens the full profile.
+      if (canEditChart) setQuickEdit(node)
       else router.push(`/employees/${node._id}`)
       return
     }
@@ -378,10 +390,12 @@ export function OrgChart() {
       toast.error("Couldn't save the layout."),
     )
 
-    // Did we drop onto a valid new manager?
-    const dropped = next.get(node._id)!
-    const target = hitTest(node._id, dropped, new Set(d.subtree))
-    if (target) setReassign({ employeeId: node._id, targetId: target })
+    // Did we drop onto a valid new manager? Reassignment stays gated.
+    if (canEditChart) {
+      const dropped = next.get(node._id)!
+      const target = hitTest(node._id, dropped, new Set(d.subtree))
+      if (target) setReassign({ employeeId: node._id, targetId: target })
+    }
   }
 
   // Best-overlap node under the dragged card, excluding self + descendants.
@@ -465,7 +479,7 @@ export function OrgChart() {
         <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed py-20 text-center">
           <IconUsers className="text-muted-foreground size-10" stroke={1.5} />
           <p className="text-muted-foreground text-sm">No employees to chart yet.</p>
-          {canManage && (
+          {canManageEmployees && (
             <Button onClick={() => setAddOpen(true)}>
               <IconPlus className="size-4" />
               Add position
@@ -621,12 +635,11 @@ export function OrgChart() {
             <span className="text-primary">Vacant positions ({vacantCount})</span>
           </button>
 
-          {canManage && (
-            <p className="text-muted-foreground mt-6 text-[11px] leading-relaxed">
-              Drag any card to rearrange. Drop a person onto another to change who
-              they report to.
-            </p>
-          )}
+          <p className="text-muted-foreground mt-6 text-[11px] leading-relaxed">
+            Drag any card to rearrange your view.
+            {canEditChart &&
+              " Drop a person onto another to change who they report to."}
+          </p>
         </aside>
       )}
 
@@ -646,17 +659,15 @@ export function OrgChart() {
 
         {/* Toolbar (right) */}
         <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
-          {canManage && (
-            <>
-              <Button size="sm" variant="outline" onClick={autoArrange}>
-                <IconLayoutGrid className="size-4" />
-                Auto arrange
-              </Button>
-              <Button size="sm" onClick={() => setAddOpen(true)}>
-                <IconPlus className="size-4" />
-                Add
-              </Button>
-            </>
+          <Button size="sm" variant="outline" onClick={autoArrange}>
+            <IconLayoutGrid className="size-4" />
+            Auto arrange
+          </Button>
+          {canManageEmployees && (
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              <IconPlus className="size-4" />
+              Add
+            </Button>
           )}
           <div className="bg-background flex items-center rounded-md border">
             <Button variant="ghost" size="icon" className="size-8" onClick={() => zoom(-0.2)}>
@@ -792,7 +803,7 @@ export function OrgChart() {
                   <Card
                     className={cn(
                       "relative w-48 gap-0 p-3 shadow-sm transition-shadow hover:shadow-md",
-                      canManage && "cursor-grab active:cursor-grabbing",
+                      "cursor-grab active:cursor-grabbing",
                       node.isVacant && "border-dashed",
                       dimmed && "opacity-30",
                       isDragging && "shadow-xl",

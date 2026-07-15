@@ -156,3 +156,22 @@ export async function requirePermission(
   }
   return orgCtx;
 }
+
+/**
+ * Require that the caller's role grants at least one of `permissions` — for
+ * actions a broader permission already implies (e.g. `employees:manage`
+ * covers everything `employees:org_chart` does). Returns the org context.
+ */
+export async function requireAnyPermission(
+  ctx: QueryCtx,
+  permissions: Permission[],
+): Promise<OrgContext> {
+  const orgCtx = await requireOrg(ctx);
+  if (!permissions.some((p) => orgCtx.permissions.has(p))) {
+    throw new ConvexError({
+      code: "FORBIDDEN",
+      message: `Missing permission: one of ${permissions.join(", ")}.`,
+    });
+  }
+  return orgCtx;
+}

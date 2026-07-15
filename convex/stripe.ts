@@ -69,31 +69,53 @@ export const createCheckoutSession = action({
 
     // Reuse the org's Stripe customer, or create one on first checkout.
     let customerId = auth.stripeCustomerId;
-    if (!customerId) {
+    const createCustomer = async () => {
       const customer = await stripe.customers.create({
         name: auth.orgName,
         email: auth.email ?? undefined,
         metadata: { orgId: auth.orgId, clerkOrgId: auth.clerkOrgId },
       });
-      customerId = customer.id;
       await ctx.runMutation(internal.billing.setCustomerId, {
         orgId: auth.orgId,
-        stripeCustomerId: customerId,
+        stripeCustomerId: customer.id,
       });
+      return customer.id;
+    };
+    if (!customerId) {
+      customerId = await createCustomer();
     }
 
     const base = appBaseUrl();
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      customer: customerId,
+    const sessionParams = {
+      mode: "subscription" as const,
       line_items: [{ price: resolvePriceId(args.plan), quantity: seats }],
       client_reference_id: auth.orgId,
       subscription_data: { metadata: { orgId: auth.orgId } },
       allow_promotion_codes: true,
-      billing_address_collection: "auto",
+      billing_address_collection: "auto" as const,
       success_url: `${base}/hr-lounge/billing?checkout=success`,
       cancel_url: `${base}/hr-lounge/billing?checkout=cancel`,
-    });
+    };
+
+    let session: Stripe.Checkout.Session;
+    try {
+      session = await stripe.checkout.sessions.create({
+        ...sessionParams,
+        customer: customerId,
+      });
+    } catch (err) {
+      // The stored customer id can go stale (e.g. Stripe test data was
+      // cleared in the dashboard) — recreate the customer and retry once.
+      if (err instanceof Stripe.errors.StripeInvalidRequestError && err.code === "resource_missing") {
+        customerId = await createCustomer();
+        session = await stripe.checkout.sessions.create({
+          ...sessionParams,
+          customer: customerId,
+        });
+      } else {
+        throw err;
+      }
+    }
 
     if (!session.url) {
       throw new ConvexError({

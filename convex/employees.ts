@@ -15,7 +15,12 @@ import {
   personalFieldValidator,
   resumeEntryValidator,
 } from "./lib/enums";
-import { requireOrg, getOrgContext, requirePermission } from "./auth";
+import {
+  requireOrg,
+  getOrgContext,
+  requirePermission,
+  requireAnyPermission,
+} from "./auth";
 import { ctxHasPermission } from "./auth";
 import { internal } from "./_generated/api";
 import { memberByOrgAndUser } from "./members";
@@ -1428,7 +1433,10 @@ export const saveLayoutPositions = mutation({
   },
   returns: v.null(),
   handler: async (ctx, { positions }) => {
-    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    // Layout is per-user (see orgChartPositions' by_org_user index) — purely a
+    // personal display preference, so any org member may rearrange their own
+    // view. Reassigning a reporting line is a separate, gated action below.
+    const { orgId, userId } = await requireOrg(ctx);
     const now = Date.now();
     for (const p of positions) {
       // Defensive: only persist positions for employees in this org.
@@ -1463,7 +1471,8 @@ export const resetLayout = mutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
-    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    // Per-user layout — any org member can reset their own view.
+    const { orgId, userId } = await requireOrg(ctx);
     const rows = await ctx.db
       .query("orgChartPositions")
       .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
@@ -1476,7 +1485,7 @@ export const resetLayout = mutation({
 // Quick job edits from the org-chart card modal: department, position, office.
 // Focused + all-optional so it never touches name/compensation. `null` clears a
 // field; omit a field to leave it unchanged. Manager changes go through
-// `setManager` (cycle-guarded). Gated on employees:manage.
+// `setManager` (cycle-guarded). Gated on employees:manage OR employees:org_chart.
 export const quickUpdateJob = mutation({
   args: {
     employeeId: v.id("employees"),
@@ -1486,7 +1495,10 @@ export const quickUpdateJob = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    const { orgId, userId } = await requireAnyPermission(ctx, [
+      "employees:manage",
+      "employees:org_chart",
+    ]);
     const employee = await ctx.db.get(args.employeeId);
     if (!employee || employee.orgId !== orgId) {
       throw new ConvexError({ code: "NOT_FOUND", message: "Employee not found." });
@@ -1536,7 +1548,8 @@ export const quickUpdateJob = mutation({
 
 // Reassign a person's reporting line by dropping them onto a manager in the
 // chart. Guards against self-management and cycles (can't report into your own
-// subtree). Pass managerId: null to detach (report to no one).
+// subtree). Pass managerId: null to detach (report to no one). Gated on
+// employees:manage OR employees:org_chart.
 export const setManager = mutation({
   args: {
     employeeId: v.id("employees"),
@@ -1544,7 +1557,10 @@ export const setManager = mutation({
   },
   returns: v.null(),
   handler: async (ctx, { employeeId, managerId }) => {
-    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    const { orgId, userId } = await requireAnyPermission(ctx, [
+      "employees:manage",
+      "employees:org_chart",
+    ]);
 
     const employee = await ctx.db.get(employeeId);
     if (!employee || employee.orgId !== orgId) {
@@ -1613,7 +1629,7 @@ export const setManager = mutation({
 // same team visibility + approval rights as the primary manager but never draw
 // the solid org-chart hierarchy. Deduped; the person themselves and their
 // primary manager are dropped (the primary is already covered by `managerId`).
-// Pass an empty array to clear. Gated on employees:manage.
+// Pass an empty array to clear. Gated on employees:manage OR employees:org_chart.
 export const setAdditionalManagers = mutation({
   args: {
     employeeId: v.id("employees"),
@@ -1621,7 +1637,10 @@ export const setAdditionalManagers = mutation({
   },
   returns: v.null(),
   handler: async (ctx, { employeeId, managerIds }) => {
-    const { orgId, userId } = await requirePermission(ctx, "employees:manage");
+    const { orgId, userId } = await requireAnyPermission(ctx, [
+      "employees:manage",
+      "employees:org_chart",
+    ]);
 
     const employee = await ctx.db.get(employeeId);
     if (!employee || employee.orgId !== orgId) {

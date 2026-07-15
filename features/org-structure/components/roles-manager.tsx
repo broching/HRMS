@@ -9,6 +9,8 @@ import {
   IconChevronRight,
   IconChevronDown,
   IconLock,
+  IconSearch,
+  IconX,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
@@ -45,13 +47,31 @@ import { cn } from "@/lib/utils"
 
 type Role = FunctionReturnType<typeof api.roles.list>[number]
 
-// Permissions grouped by their module, in the canonical module order.
-const PERMISSIONS_BY_MODULE = PERMISSION_MODULES.map((module) => ({
-  module,
-  permissions: PERMISSIONS.filter((p) => PERMISSION_META[p].module === module),
-})).filter((g) => g.permissions.length > 0)
+// Permissions grouped by module, then by sub-header (`group`) within it, in
+// the order each first appears in the PERMISSIONS catalogue.
+const PERMISSIONS_BY_MODULE = PERMISSION_MODULES.map((module) => {
+  const modulePermissions = PERMISSIONS.filter(
+    (p) => PERMISSION_META[p].module === module,
+  )
+  const groups: { group: string; permissions: Permission[] }[] = []
+  for (const p of modulePermissions) {
+    const g = PERMISSION_META[p].group
+    const bucket = groups.find((b) => b.group === g)
+    if (bucket) bucket.permissions.push(p)
+    else groups.push({ group: g, permissions: [p] })
+  }
+  return { module, groups }
+}).filter((m) => m.groups.length > 0)
 
-// A grid of permission checkboxes grouped by module. Read-only when `disabled`.
+function matchesSearch(p: Permission, query: string): boolean {
+  if (!query) return true
+  const meta = PERMISSION_META[p]
+  const haystack = `${meta.label} ${meta.description} ${meta.group}`.toLowerCase()
+  return haystack.includes(query)
+}
+
+// A grid of permission checkboxes grouped by module + sub-header, with a
+// search box to filter a catalogue this long. Read-only when `disabled`.
 function PermissionGrid({
   selected,
   onToggle,
@@ -61,37 +81,87 @@ function PermissionGrid({
   onToggle?: (permission: Permission, checked: boolean) => void
   disabled?: boolean
 }) {
+  const [search, setSearch] = React.useState("")
+  const query = search.trim().toLowerCase()
+
+  const filtered = PERMISSIONS_BY_MODULE.map(({ module, groups }) => ({
+    module,
+    groups: groups
+      .map((g) => ({
+        group: g.group,
+        permissions: g.permissions.filter((p) => matchesSearch(p, query)),
+      }))
+      .filter((g) => g.permissions.length > 0),
+  })).filter((m) => m.groups.length > 0)
+
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      {PERMISSIONS_BY_MODULE.map(({ module, permissions }) => (
-        <div key={module} className="flex flex-col gap-2">
-          <span className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">
-            {module}
-          </span>
-          {permissions.map((p) => (
-            <label
-              key={p}
-              className={cn(
-                "flex items-start gap-2 text-sm",
-                disabled ? "cursor-default" : "cursor-pointer",
-              )}
-            >
-              <Checkbox
-                className="mt-0.5"
-                checked={selected.has(p)}
-                disabled={disabled}
-                onCheckedChange={(c) => onToggle?.(p, c === true)}
-              />
-              <span>
-                <span className="font-medium">{PERMISSION_META[p].label}</span>
-                <span className="text-muted-foreground block text-xs">
-                  {PERMISSION_META[p].description}
-                </span>
+    <div className="flex flex-col gap-3">
+      <div className="relative max-w-sm">
+        <IconSearch className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search permissions…"
+          className="pl-8 pr-8"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            className="text-muted-foreground hover:text-foreground absolute right-2.5 top-1/2 -translate-y-1/2"
+            aria-label="Clear search"
+          >
+            <IconX className="size-4" />
+          </button>
+        )}
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          No permissions match &ldquo;{search}&rdquo;.
+        </p>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {filtered.map(({ module, groups }) => (
+            <div key={module} className="flex flex-col gap-3">
+              <span className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">
+                {module}
               </span>
-            </label>
+              {groups.map(({ group, permissions }) => (
+                <div key={group} className="flex flex-col gap-2">
+                  {groups.length > 1 && (
+                    <span className="text-muted-foreground/80 text-[11px] font-medium tracking-wide uppercase">
+                      {group}
+                    </span>
+                  )}
+                  {permissions.map((p) => (
+                    <label
+                      key={p}
+                      className={cn(
+                        "flex items-start gap-2 text-sm",
+                        disabled ? "cursor-default" : "cursor-pointer",
+                      )}
+                    >
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={selected.has(p)}
+                        disabled={disabled}
+                        onCheckedChange={(c) => onToggle?.(p, c === true)}
+                      />
+                      <span>
+                        <span className="font-medium">{PERMISSION_META[p].label}</span>
+                        <span className="text-muted-foreground block text-xs">
+                          {PERMISSION_META[p].description}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ))}
+            </div>
           ))}
         </div>
-      ))}
+      )}
     </div>
   )
 }

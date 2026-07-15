@@ -34,6 +34,7 @@ export const PERMISSIONS = [
   "hr:access", // see the HR Lounge (HR + admin)
   "employees:manage", // create/edit/archive any employee
   "employees:read:all", // view every employee in the org
+  "employees:org_chart", // reassign managers + edit cards from the org chart
   "leave:config", // leave types, holidays
   "leave:approve:all", // approve any leave request in the org
   "claims:read:all", // HR Lounge → all-headcount claims oversight
@@ -68,168 +69,208 @@ export const PERMISSION_MODULES = [
 ] as const;
 export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 
+// `group` is a sub-header within a module — used to break long module lists
+// (e.g. HR Lounge's ~19 permissions) into scannable clusters in the roles UI.
 export const PERMISSION_META: Record<
   Permission,
-  { label: string; description: string; module: PermissionModule }
+  { label: string; description: string; module: PermissionModule; group: string }
 > = {
   // ── Team workspace ────────────────────────────────────────────────────────
   "team:access": {
     label: "Open Team workspace",
     description: "See the Team tab and its landing dashboard.",
     module: "Team workspace",
+    group: "General",
   },
   "leave:approve": {
     label: "Leave approvals",
     description: "See the team calendar and act on leave requests.",
     module: "Team workspace",
+    group: "Approvals",
   },
   "claims:approve": {
     label: "Claim approvals",
     description: "Act on claims awaiting you in Team → Claim Approvals.",
     module: "Team workspace",
+    group: "Approvals",
   },
   "claims:approve:finance": {
     label: "Finance claim approval",
     description: "Approve the finance stage and mark claims reimbursed.",
     module: "Team workspace",
+    group: "Approvals",
   },
   "payment_requests:approve": {
     label: "Payment request approvals",
     description: "Act on payment requests awaiting you in Team → Payment Requests.",
     module: "Team workspace",
+    group: "Approvals",
   },
   "payroll:approve": {
     label: "Payroll approvals",
     description: "Sign and approve payslips assigned to you before release.",
     module: "Team workspace",
+    group: "Approvals",
   },
   "attendance:team": {
     label: "Team attendance",
     description: "See who's clocked in and review correction requests.",
     module: "Team workspace",
+    group: "Team management",
   },
   "scheduling:roster": {
     label: "Team roster",
     description: "Build and publish the weekly schedule for your team.",
     module: "Team workspace",
+    group: "Team management",
   },
   "performance:team": {
     label: "Team reviews",
     description: "Complete performance reviews for your team.",
     module: "Team workspace",
+    group: "Team management",
   },
   "timesheets:team": {
     label: "Team timesheets",
     description: "View timesheets for your whole reporting tree.",
     module: "Team workspace",
+    group: "Team management",
   },
   "timesheets:log:team": {
     label: "Log time for your team",
     description: "Log and edit time entries on behalf of anyone in your reporting tree.",
     module: "Team workspace",
+    group: "Team management",
   },
   "tasks:manage": {
     label: "Manage tasks",
     description:
       "Create and edit project tasks, assign people, and mark any task complete.",
     module: "Team workspace",
+    group: "Team management",
   },
   // ── HR Lounge ─────────────────────────────────────────────────────────────
   "hr:access": {
     label: "Open HR Lounge",
     description: "See the HR Lounge and its overview.",
     module: "HR Lounge",
+    group: "General",
   },
   "employees:manage": {
     label: "Manage employees",
     description: "Create, edit and archive any employee.",
     module: "HR Lounge",
+    group: "Employees",
   },
   "employees:read:all": {
     label: "View all employees",
     description: "View every employee profile in the org.",
     module: "HR Lounge",
+    group: "Employees",
+  },
+  "employees:org_chart": {
+    label: "Edit org chart",
+    description:
+      "Reassign direct managers and edit employee cards from the org chart. Everyone can already rearrange their own view for free.",
+    module: "HR Lounge",
+    group: "Employees",
   },
   "leave:config": {
     label: "Configure leave",
     description: "Manage leave types, policies and holidays.",
     module: "HR Lounge",
+    group: "Leave",
   },
   "leave:approve:all": {
     label: "Approve all leave",
     description: "Approve any leave request in the organization.",
     module: "HR Lounge",
+    group: "Leave",
   },
   "claims:read:all": {
     label: "Expense Claims (all headcount)",
     description: "See and export every employee's claims in the HR Lounge.",
     module: "HR Lounge",
+    group: "Claims & payments",
   },
   "payment_requests:read:all": {
     label: "Payment Requests (all headcount)",
     description: "Configure, review and export every payment request in the HR Lounge.",
     module: "HR Lounge",
+    group: "Claims & payments",
   },
   "payroll:manage": {
     label: "Payroll & compensation",
     description: "Prepare runs, compensation and payslips.",
     module: "HR Lounge",
+    group: "Payroll",
   },
   "recruitment:manage": {
     label: "Recruitment",
     description: "Manage jobs, candidates and the job board.",
     module: "HR Lounge",
+    group: "Recruitment",
   },
   "performance:manage": {
     label: "Performance",
     description: "Manage review cycles and org-wide appraisals.",
     module: "HR Lounge",
+    group: "Performance",
   },
   "scheduling:manage": {
     label: "Shift templates & rosters",
     description: "Manage shift templates and org-wide rosters.",
     module: "HR Lounge",
+    group: "Attendance & scheduling",
   },
   "attendance:config": {
     label: "Configure attendance",
     description: "Manage offices, QR and geofence settings.",
     module: "HR Lounge",
+    group: "Attendance & scheduling",
   },
   "projects:manage": {
     label: "Projects & timesheets",
     description: "Manage projects and tasks, and see org-wide timesheets.",
     module: "HR Lounge",
+    group: "Projects & timesheets",
   },
   "timesheets:log:all": {
     label: "Log time for anyone",
     description: "Log and edit time entries on behalf of any employee in the org.",
     module: "HR Lounge",
+    group: "Projects & timesheets",
   },
   "reports:view": {
     label: "Reports",
     description: "Access statistics and the report builder.",
     module: "HR Lounge",
+    group: "Reports",
   },
   // ── Organization ──────────────────────────────────────────────────────────
   "org:manage": {
     label: "Manage organization",
     description: "Edit organization settings, country and locale.",
     module: "Organization",
+    group: "General",
   },
   "members:manage": {
     label: "Manage members",
     description: "Invite/remove members and change their roles.",
     module: "Organization",
+    group: "General",
   },
   "roles:manage": {
     label: "Manage roles",
     description: "Create, edit and delete roles and their permissions.",
     module: "Organization",
+    group: "General",
   },
   "audit:view": {
     label: "View audit log",
     description: "See the organization's audit trail.",
     module: "Organization",
+    group: "General",
   },
 };
 
