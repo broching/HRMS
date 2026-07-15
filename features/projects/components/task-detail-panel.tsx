@@ -11,6 +11,7 @@ import {
   IconCalendarEvent,
   IconFlag,
   IconUsers,
+  IconClock,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
@@ -28,6 +29,7 @@ import {
 import { DocumentViewer } from "@/components/shared/document-viewer"
 import { ConfirmDialog } from "@/features/claims/components/confirm-dialog"
 import { cn } from "@/lib/utils"
+import { formatMinutes } from "@/features/timesheets/lib/time"
 import {
   dueMeta,
   dueToneClasses,
@@ -43,6 +45,11 @@ import {
   TaskEditorDialog,
   type TaskEditorValue,
 } from "@/features/projects/components/task-editor-dialog"
+import {
+  RichTextView,
+  isRichTextEmpty,
+} from "@/features/projects/components/task-rich-editor"
+import { TaskComments } from "@/features/projects/components/task-comments"
 
 /**
  * Full task view. Anyone assigned can read it and mark it complete; task
@@ -111,6 +118,7 @@ export function TaskDetailPanel({
         description: detail.description,
         priority: detail.priority as TaskPriority | null,
         dueDate: detail.dueDate,
+        estimateMinutes: detail.estimateMinutes,
         // Editor manages task-level assignees; project-level ones remain.
         assigneeIds: detail.assignees.map((a) => a.employeeId),
       }
@@ -119,7 +127,7 @@ export function TaskDetailPanel({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           {detail === undefined ? (
             <div className="flex flex-col gap-3">
               <Skeleton className="h-6 w-2/3" />
@@ -200,13 +208,62 @@ export function TaskDetailPanel({
                 </p>
               )}
 
+              {/* Logged vs estimate (from the timesheet) */}
+              {(detail.estimateMinutes || detail.loggedMinutes > 0) && (
+                <div className="bg-muted/30 flex flex-col gap-1.5 rounded-lg border p-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground flex items-center gap-1.5">
+                      <IconClock className="size-3.5" />
+                      Time logged
+                    </span>
+                    <span className="tabular-nums">
+                      <span className="font-medium">
+                        {formatMinutes(detail.loggedMinutes)}
+                      </span>
+                      {detail.estimateMinutes ? (
+                        <span
+                          className={cn(
+                            "text-muted-foreground",
+                            detail.loggedMinutes > detail.estimateMinutes &&
+                              "text-red-600 dark:text-red-400",
+                          )}
+                        >
+                          {" "}
+                          / {formatMinutes(detail.estimateMinutes)} est
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                  {detail.estimateMinutes ? (
+                    <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+                      <div
+                        className={cn(
+                          "h-full rounded-full",
+                          detail.loggedMinutes > detail.estimateMinutes
+                            ? "bg-red-500"
+                            : "bg-primary",
+                        )}
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            Math.round(
+                              (detail.loggedMinutes / detail.estimateMinutes) * 100,
+                            ),
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
               {/* Description */}
-              {detail.description && (
+              {!isRichTextEmpty(detail.description) && (
                 <div className="flex flex-col gap-1">
                   <Label className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
                     Description
                   </Label>
-                  <p className="text-sm whitespace-pre-wrap">{detail.description}</p>
+                  <RichTextView html={detail.description} />
                 </div>
               )}
 
@@ -317,6 +374,11 @@ export function TaskDetailPanel({
                     {done ? "Reopen" : "Mark complete"}
                   </Button>
                 )}
+              </div>
+
+              {/* Comments / activity */}
+              <div className="border-t pt-3">
+                <TaskComments taskId={detail._id} />
               </div>
             </>
           )}

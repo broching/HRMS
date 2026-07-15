@@ -72,3 +72,39 @@ export function dueToneClasses(tone: "overdue" | "soon" | "normal"): string {
       return "text-muted-foreground"
   }
 }
+
+// Two-letter initials from a display name, for compact avatars.
+export function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return "?"
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+// A deterministic muted colour for an avatar, derived from the name.
+const AVATAR_TONES = [
+  "bg-blue-500/15 text-blue-600 dark:text-blue-300",
+  "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300",
+  "bg-violet-500/15 text-violet-600 dark:text-violet-300",
+  "bg-amber-500/15 text-amber-600 dark:text-amber-300",
+  "bg-rose-500/15 text-rose-600 dark:text-rose-300",
+  "bg-teal-500/15 text-teal-600 dark:text-teal-300",
+]
+export function avatarTone(name: string): string {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return AVATAR_TONES[h % AVATAR_TONES.length]
+}
+
+// Convert a decimal-hours input (e.g. "1.5") to whole minutes, or null.
+export function hoursToMinutes(input: string): number | null {
+  const n = Number(input)
+  if (!input.trim() || Number.isNaN(n) || n < 0) return null
+  return Math.round(n * 60)
+}
+
+// Minutes → decimal hours string for an <input type=number> (trims trailing 0s).
+export function minutesToHours(minutes: number | null | undefined): string {
+  if (!minutes || minutes <= 0) return ""
+  return String(Math.round((minutes / 60) * 100) / 100)
+}

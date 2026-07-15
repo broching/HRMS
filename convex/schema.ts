@@ -94,6 +94,7 @@ import {
   feedback360Status,
   feedback360Answer,
   taskPriority,
+  projectPhase,
 } from "./lib/enums";
 
 // Per-module email notification config. `enabled` gates whether emails send for
@@ -346,11 +347,30 @@ export default defineSchema({
     color: v.optional(v.string()),
     leadEmployeeId: v.optional(v.id("employees")),
     status: v.union(v.literal("active"), v.literal("archived")),
+    // Portfolio lifecycle phase, for the project-level Kanban. Absent = "active".
+    phase: v.optional(projectPhase),
+    // Optional manual time budget (minutes). When unset, the project budget is
+    // rolled up from the sum of its tasks' estimates.
+    budgetMinutes: v.optional(v.number()),
     createdBy: v.optional(v.id("users")),
     updatedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
+
+  // Kanban columns for a project's board. Ordered; one or more terminal columns
+  // (`isDone`) drive completion % and keep each task's binary `status` in sync.
+  // Managed by tasks:manage / projects:manage.
+  projectStages: defineTable({
+    orgId: v.id("organizations"),
+    projectId: v.id("projects"),
+    name: v.string(),
+    color: v.optional(v.string()),
+    order: v.number(),
+    isDone: v.boolean(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_org", ["orgId"]),
 
   // Tasks within a project. Time can be logged to a project with or without one.
   // Tasks carry richer detail (description/due/priority/attachments) so they can
@@ -358,22 +378,43 @@ export default defineSchema({
   projectTasks: defineTable({
     orgId: v.id("organizations"),
     projectId: v.id("projects"),
+    // Kanban column the task sits in. Optional to widen safely; the migration
+    // backfills existing rows and new tasks always set it.
+    stageId: v.optional(v.id("projectStages")),
     name: v.string(),
+    // Rich-text HTML (legacy rows may hold plain text, which renders fine).
     description: v.optional(v.string()),
     status: v.union(v.literal("open"), v.literal("done")),
     priority: v.optional(taskPriority),
     dueDate: v.optional(v.string()), // ISO "YYYY-MM-DD"
+    // Time estimate in minutes, for progress / burn-down against logged time.
+    estimateMinutes: v.optional(v.number()),
     // Up to a small cap of supporting files (parallel arrays: id + display name).
     attachmentStorageIds: v.optional(v.array(v.id("_storage"))),
     attachmentNames: v.optional(v.array(v.string())),
     completedAt: v.optional(v.number()),
     completedBy: v.optional(v.id("employees")),
+    // Sort order within the task's stage column.
     order: v.optional(v.number()),
     archivedAt: v.optional(v.number()),
     createdBy: v.optional(v.id("users")),
     updatedAt: v.optional(v.number()),
   })
     .index("by_project", ["projectId"])
+    .index("by_stage", ["stageId"])
+    .index("by_org", ["orgId"]),
+
+  // Comment / activity thread on a task. Visible to anyone who can see the task
+  // (assignees + managers); authored by employees.
+  taskComments: defineTable({
+    orgId: v.id("organizations"),
+    projectId: v.id("projects"),
+    taskId: v.id("projectTasks"),
+    authorEmployeeId: v.id("employees"),
+    body: v.string(), // rich-text HTML
+    editedAt: v.optional(v.number()),
+  })
+    .index("by_task", ["taskId"])
     .index("by_org", ["orgId"]),
 
   // Who is assigned to a whole project. A project assignee is implicitly on every

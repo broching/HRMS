@@ -3,7 +3,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, requirePermission, type OrgContext } from "./auth";
-import { taskPriority } from "./lib/enums";
+import { taskPriority, projectPhase } from "./lib/enums";
 import { writeAuditLog } from "./lib/audit";
 import { employeeByUserId } from "./employees";
 import {
@@ -42,6 +42,8 @@ const projectDoc = v.object({
   color: v.optional(v.string()),
   leadEmployeeId: v.optional(v.id("employees")),
   status: projectStatus,
+  phase: v.optional(projectPhase),
+  budgetMinutes: v.optional(v.number()),
   createdBy: v.optional(v.id("users")),
   updatedAt: v.optional(v.number()),
 });
@@ -137,6 +139,97 @@ function toTaskView(
   };
 }
 
+// ── Stages (Kanban columns) ──────────────────────────────────────────────────
+
+const stageView = v.object({
+  _id: v.id("projectStages"),
+  projectId: v.id("projects"),
+  name: v.string(),
+  color: v.union(v.string(), v.null()),
+  order: v.number(),
+  isDone: v.boolean(),
+});
+
+// Default columns seeded for every project. The last is terminal (isDone).
+const DEFAULT_STAGES: { name: string; color: string; isDone: boolean }[] = [
+  { name: "To Do", color: "#94a3b8", isDone: false },
+  { name: "In Progress", color: "#3b82f6", isDone: false },
+  { name: "In Review", color: "#a855f7", isDone: false },
+  { name: "Done", color: "#22c55e", isDone: true },
+];
+
+async function seedStages(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  projectId: Id<"projects">,
+): Promise<Doc<"projectStages">[]> {
+  const ids: Id<"projectStages">[] = [];
+  for (let i = 0; i < DEFAULT_STAGES.length; i++) {
+    const s = DEFAULT_STAGES[i];
+    ids.push(
+      await ctx.db.insert("projectStages", {
+        orgId,
+        projectId,
+        name: s.name,
+        color: s.color,
+        order: i,
+        isDone: s.isDone,
+      }),
+    );
+  }
+  const rows: Doc<"projectStages">[] = [];
+  for (const id of ids) {
+    const r = await ctx.db.get(id);
+    if (r) rows.push(r);
+  }
+  return rows;
+}
+
+// Ordered stages for a project. Seeds the default set on first use so projects
+// created before the board existed still get columns.
+async function ensureStages(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  projectId: Id<"projects">,
+): Promise<Doc<"projectStages">[]> {
+  const rows = await ctx.db
+    .query("projectStages")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .collect();
+  if (rows.length === 0) return seedStages(ctx, orgId, projectId);
+  rows.sort((a, b) => a.order - b.order);
+  return rows;
+}
+
+async function orderedStages(
+  ctx: QueryCtx,
+  projectId: Id<"projects">,
+): Promise<Doc<"projectStages">[]> {
+  const rows = await ctx.db
+    .query("projectStages")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .collect();
+  rows.sort((a, b) => a.order - b.order);
+  return rows;
+}
+
+// Roll up logged minutes per task (and untasked) for a whole project.
+async function loggedByTask(
+  ctx: QueryCtx,
+  projectId: Id<"projects">,
+): Promise<Map<Id<"projectTasks"> | "none", number>> {
+  const rows = await ctx.db
+    .query("timeEntries")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .collect();
+  const map = new Map<Id<"projectTasks"> | "none", number>();
+  for (const r of rows) {
+    const key = r.taskId ?? "none";
+    map.set(key, (map.get(key) ?? 0) + r.minutes);
+  }
+  return map;
+}
+
 // ── Reads ────────────────────────────────────────────────────────────────────
 
 export const list = query({
@@ -154,6 +247,20 @@ export const list = query({
     return all.filter(
       (p) => p.status === "active" && access.visibleProjectIds.has(p._id),
     );
+  },
+});
+
+// A single project the caller may see (privileged, or assigned/visible).
+export const get = query({
+  args: { projectId: v.id("projects") },
+  returns: v.union(projectDoc, v.null()),
+  handler: async (ctx, { projectId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const project = await ctx.db.get(projectId);
+    if (!project || project.orgId !== orgCtx.orgId) return null;
+    const access = await callerAccess(ctx, orgCtx);
+    if (access && !access.visibleProjectIds.has(projectId)) return null;
+    return project;
   },
 });
 
@@ -237,6 +344,132 @@ export const stats = query({
         contributors: people.size,
         assignees: projAssignees.length,
         openTasks: tasks.filter((t) => !t.archivedAt && t.status === "open").length,
+      });
+    }
+    return out;
+  },
+});
+
+// Enriched cards for the portfolio dashboard + project-level Kanban: per-project
+// progress, logged-vs-budget health, involved people (for avatars), and phase.
+// Visibility mirrors `list` (privileged see all; others their assigned set).
+export const dashboard = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("projects"),
+      name: v.string(),
+      code: v.union(v.string(), v.null()),
+      description: v.union(v.string(), v.null()),
+      clientName: v.union(v.string(), v.null()),
+      color: v.union(v.string(), v.null()),
+      status: projectStatus,
+      phase: projectPhase,
+      leadEmployeeId: v.union(v.id("employees"), v.null()),
+      leadName: v.union(v.string(), v.null()),
+      minutes: v.number(),
+      openTasks: v.number(),
+      doneTasks: v.number(),
+      totalTasks: v.number(),
+      budgetMinutes: v.number(),
+      estimateTotal: v.number(),
+      overBudget: v.boolean(),
+      contributors: v.number(),
+      people: v.array(assigneeView),
+      updatedAt: v.union(v.number(), v.null()),
+    }),
+  ),
+  handler: async (ctx) => {
+    const orgCtx = await requireOrg(ctx);
+    let projects = await ctx.db
+      .query("projects")
+      .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+      .collect();
+    const access = await callerAccess(ctx, orgCtx);
+    if (access) {
+      projects = projects.filter(
+        (p) => p.status === "active" && access.visibleProjectIds.has(p._id),
+      );
+    }
+
+    const nameCache = new Map<Id<"employees">, string>();
+    const nameFor = async (id: Id<"employees">) => {
+      const cached = nameCache.get(id);
+      if (cached) return cached;
+      const e = await ctx.db.get(id);
+      const n = e ? displayName(e) : "—";
+      nameCache.set(id, n);
+      return n;
+    };
+
+    const out = [];
+    for (const p of projects) {
+      const [entries, tasks, projAssign, taskAssign] = await Promise.all([
+        ctx.db
+          .query("timeEntries")
+          .withIndex("by_project", (q) => q.eq("projectId", p._id))
+          .collect(),
+        ctx.db
+          .query("projectTasks")
+          .withIndex("by_project", (q) => q.eq("projectId", p._id))
+          .collect(),
+        ctx.db
+          .query("projectAssignments")
+          .withIndex("by_project", (q) => q.eq("projectId", p._id))
+          .collect(),
+        ctx.db
+          .query("taskAssignments")
+          .withIndex("by_project", (q) => q.eq("projectId", p._id))
+          .collect(),
+      ]);
+
+      let minutes = 0;
+      const contributors = new Set<Id<"employees">>();
+      for (const r of entries) {
+        minutes += r.minutes;
+        contributors.add(r.employeeId);
+      }
+
+      const live = tasks.filter((t) => !t.archivedAt);
+      let doneTasks = 0;
+      let estimateTotal = 0;
+      for (const t of live) {
+        if (t.status === "done") doneTasks += 1;
+        estimateTotal += t.estimateMinutes ?? 0;
+      }
+      const budgetMinutes = p.budgetMinutes ?? estimateTotal;
+
+      // Involved people = project-level + task-level assignees (deduped).
+      const peopleIds = new Set<Id<"employees">>();
+      for (const r of projAssign) peopleIds.add(r.employeeId);
+      for (const r of taskAssign) peopleIds.add(r.employeeId);
+      const people = [];
+      for (const id of peopleIds) {
+        people.push({ employeeId: id, name: await nameFor(id) });
+      }
+      people.sort((a, b) => a.name.localeCompare(b.name));
+
+      out.push({
+        _id: p._id,
+        name: p.name,
+        code: p.code ?? null,
+        description: p.description ?? null,
+        clientName: p.clientName ?? null,
+        color: p.color ?? null,
+        status: p.status,
+        phase: p.phase ?? "active",
+        leadEmployeeId: p.leadEmployeeId ?? null,
+        leadName: p.leadEmployeeId ? await nameFor(p.leadEmployeeId) : null,
+        minutes,
+        openTasks: live.filter((t) => t.status === "open").length,
+        doneTasks,
+        totalTasks: live.length,
+        budgetMinutes,
+        estimateTotal,
+        overBudget: budgetMinutes > 0 && minutes > budgetMinutes,
+        contributors: contributors.size,
+        people,
+        updatedAt: p.updatedAt ?? null,
       });
     }
     return out;
@@ -384,13 +617,17 @@ export const taskDetail = query({
       projectId: v.id("projects"),
       projectName: v.string(),
       projectColor: v.union(v.string(), v.null()),
+      stageId: v.union(v.id("projectStages"), v.null()),
       name: v.string(),
       description: v.union(v.string(), v.null()),
       status: taskStatus,
       priority: v.union(taskPriority, v.null()),
       dueDate: v.union(v.string(), v.null()),
+      estimateMinutes: v.union(v.number(), v.null()),
+      loggedMinutes: v.number(),
       completedAt: v.union(v.number(), v.null()),
       completedByName: v.union(v.string(), v.null()),
+      commentCount: v.number(),
       assignees: v.array(assigneeView),
       attachments: v.array(
         v.object({
@@ -453,6 +690,15 @@ export const taskDetail = query({
       completedByName = e ? displayName(e) : null;
     }
 
+    // Logged time against this specific task (from the timesheet).
+    const logged = await loggedByTask(ctx, task.projectId);
+    const loggedMinutes = logged.get(task._id) ?? 0;
+
+    const comments = await ctx.db
+      .query("taskComments")
+      .withIndex("by_task", (q) => q.eq("taskId", task._id))
+      .collect();
+
     // Assignees may complete their own task; managers may complete any.
     const canComplete = manage || isAssignee;
 
@@ -461,13 +707,17 @@ export const taskDetail = query({
       projectId: task.projectId,
       projectName: project?.name ?? "—",
       projectColor: project?.color ?? null,
+      stageId: task.stageId ?? null,
       name: task.name,
       description: task.description ?? null,
       status: task.status,
       priority: task.priority ?? null,
       dueDate: task.dueDate ?? null,
+      estimateMinutes: task.estimateMinutes ?? null,
+      loggedMinutes,
       completedAt: task.completedAt ?? null,
       completedByName,
+      commentCount: comments.length,
       assignees,
       attachments,
       canManage: manage,
@@ -572,6 +822,7 @@ export const create = mutation({
     clientName: v.optional(v.string()),
     color: v.optional(v.string()),
     leadEmployeeId: v.optional(v.id("employees")),
+    phase: v.optional(projectPhase),
   },
   returns: v.id("projects"),
   handler: async (ctx, args) => {
@@ -587,9 +838,12 @@ export const create = mutation({
       color: args.color,
       leadEmployeeId: args.leadEmployeeId,
       status: "active",
+      phase: args.phase ?? "planning",
       createdBy: userId,
       updatedAt: Date.now(),
     });
+    // Seed the default Kanban columns so the board is usable immediately.
+    await seedStages(ctx, orgId, id);
     await writeAuditLog(ctx, {
       orgId,
       actorUserId: userId,
@@ -611,6 +865,8 @@ export const update = mutation({
     color: v.optional(v.string()),
     leadEmployeeId: v.optional(v.union(v.id("employees"), v.null())),
     status: v.optional(projectStatus),
+    phase: v.optional(projectPhase),
+    budgetMinutes: v.optional(v.union(v.number(), v.null())),
   },
   returns: v.null(),
   handler: async (ctx, { projectId, ...args }) => {
@@ -630,6 +886,12 @@ export const update = mutation({
     if (args.leadEmployeeId !== undefined)
       patch.leadEmployeeId = args.leadEmployeeId ?? undefined;
     if (args.status !== undefined) patch.status = args.status;
+    if (args.phase !== undefined) patch.phase = args.phase;
+    if (args.budgetMinutes !== undefined)
+      patch.budgetMinutes =
+        args.budgetMinutes && args.budgetMinutes > 0
+          ? Math.round(args.budgetMinutes)
+          : undefined;
     await ctx.db.patch(projectId, patch);
     await writeAuditLog(ctx, {
       orgId,
@@ -638,6 +900,21 @@ export const update = mutation({
       entity: "projects",
       entityId: projectId,
     });
+    return null;
+  },
+});
+
+// Move a project between portfolio phases (project-level Kanban).
+export const setProjectPhase = mutation({
+  args: { projectId: v.id("projects"), phase: projectPhase },
+  returns: v.null(),
+  handler: async (ctx, { projectId, phase }) => {
+    const { orgId } = await requirePermission(ctx, "projects:manage");
+    const project = await ctx.db.get(projectId);
+    if (!project || project.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Project not found." });
+    }
+    await ctx.db.patch(projectId, { phase, updatedAt: Date.now() });
     return null;
   },
 });
@@ -668,6 +945,8 @@ export const createTask = mutation({
     description: v.optional(v.string()),
     priority: v.optional(taskPriority),
     dueDate: v.optional(v.string()),
+    estimateMinutes: v.optional(v.number()),
+    stageId: v.optional(v.id("projectStages")),
     assigneeIds: v.optional(v.array(v.id("employees"))),
   },
   returns: v.id("projectTasks"),
@@ -679,19 +958,38 @@ export const createTask = mutation({
     }
     const trimmed = args.name.trim();
     if (!trimmed) throw new ConvexError({ code: "INPUT", message: "Name is required." });
+
+    // Resolve the target column: an explicit valid stage, else the first one
+    // (seeding the default set for legacy projects that have none yet).
+    const stages = await ensureStages(ctx, orgId, args.projectId);
+    let stage = stages[0];
+    if (args.stageId) {
+      const chosen = stages.find((s) => s._id === args.stageId);
+      if (chosen) stage = chosen;
+    }
+
     const existing = await ctx.db
       .query("projectTasks")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .collect();
+    const inStage = existing.filter(
+      (t) => !t.archivedAt && t.stageId === stage._id,
+    ).length;
     const id = await ctx.db.insert("projectTasks", {
       orgId,
       projectId: args.projectId,
+      stageId: stage._id,
       name: trimmed,
       description: args.description?.trim() || undefined,
-      status: "open",
+      status: stage.isDone ? "done" : "open",
       priority: args.priority,
       dueDate: args.dueDate || undefined,
-      order: existing.length,
+      estimateMinutes:
+        args.estimateMinutes && args.estimateMinutes > 0
+          ? Math.round(args.estimateMinutes)
+          : undefined,
+      completedAt: stage.isDone ? Date.now() : undefined,
+      order: inStage,
       createdBy: userId,
       updatedAt: Date.now(),
     });
@@ -726,6 +1024,7 @@ export const updateTask = mutation({
     description: v.optional(v.union(v.string(), v.null())),
     priority: v.optional(v.union(taskPriority, v.null())),
     dueDate: v.optional(v.union(v.string(), v.null())),
+    estimateMinutes: v.optional(v.union(v.number(), v.null())),
     status: v.optional(taskStatus),
     archived: v.optional(v.boolean()),
   },
@@ -743,6 +1042,11 @@ export const updateTask = mutation({
       patch.description = args.description?.trim() || undefined;
     if (args.priority !== undefined) patch.priority = args.priority ?? undefined;
     if (args.dueDate !== undefined) patch.dueDate = args.dueDate || undefined;
+    if (args.estimateMinutes !== undefined)
+      patch.estimateMinutes =
+        args.estimateMinutes && args.estimateMinutes > 0
+          ? Math.round(args.estimateMinutes)
+          : undefined;
     if (args.status !== undefined) {
       patch.status = args.status;
       if (args.status === "done") {
@@ -930,6 +1234,628 @@ export const removeTaskAttachment = mutation({
       attachmentNames: names,
       updatedAt: Date.now(),
     });
+    return null;
+  },
+});
+
+// ── Stages (Kanban columns) ──────────────────────────────────────────────────
+
+export const listStages = query({
+  args: { projectId: v.id("projects") },
+  returns: v.array(stageView),
+  handler: async (ctx, { projectId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const project = await ctx.db.get(projectId);
+    if (!project || project.orgId !== orgCtx.orgId) return [];
+    const access = await callerAccess(ctx, orgCtx);
+    if (access && !access.visibleProjectIds.has(projectId)) return [];
+    const stages = await orderedStages(ctx, projectId);
+    return stages.map((s) => ({
+      _id: s._id,
+      projectId: s.projectId,
+      name: s.name,
+      color: s.color ?? null,
+      order: s.order,
+      isDone: s.isDone,
+    }));
+  },
+});
+
+export const createStage = mutation({
+  args: {
+    projectId: v.id("projects"),
+    name: v.string(),
+    color: v.optional(v.string()),
+    isDone: v.optional(v.boolean()),
+  },
+  returns: v.id("projectStages"),
+  handler: async (ctx, args) => {
+    const { orgId } = await requireTaskManage(ctx);
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Project not found." });
+    }
+    const name = args.name.trim();
+    if (!name) throw new ConvexError({ code: "INPUT", message: "Name is required." });
+    const stages = await orderedStages(ctx, args.projectId);
+    const order = stages.length ? stages[stages.length - 1].order + 1 : 0;
+    return await ctx.db.insert("projectStages", {
+      orgId,
+      projectId: args.projectId,
+      name,
+      color: args.color,
+      order,
+      isDone: args.isDone ?? false,
+    });
+  },
+});
+
+export const updateStage = mutation({
+  args: {
+    stageId: v.id("projectStages"),
+    name: v.optional(v.string()),
+    color: v.optional(v.union(v.string(), v.null())),
+    isDone: v.optional(v.boolean()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { stageId, ...args }) => {
+    const { orgId } = await requireTaskManage(ctx);
+    const stage = await ctx.db.get(stageId);
+    if (!stage || stage.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Stage not found." });
+    }
+    const patch: Record<string, unknown> = {};
+    if (args.name !== undefined) patch.name = args.name.trim() || stage.name;
+    if (args.color !== undefined) patch.color = args.color ?? undefined;
+    if (args.isDone !== undefined) patch.isDone = args.isDone;
+    await ctx.db.patch(stageId, patch);
+    // When a column's terminal flag changes, resync the binary status of every
+    // task in it so completion / roll-ups stay correct.
+    if (args.isDone !== undefined && args.isDone !== stage.isDone) {
+      const tasks = await ctx.db
+        .query("projectTasks")
+        .withIndex("by_stage", (q) => q.eq("stageId", stageId))
+        .collect();
+      for (const t of tasks) {
+        if (t.archivedAt) continue;
+        await ctx.db.patch(t._id, {
+          status: args.isDone ? "done" : "open",
+          completedAt: args.isDone ? t.completedAt ?? Date.now() : undefined,
+          completedBy: args.isDone ? t.completedBy : undefined,
+        });
+      }
+    }
+    return null;
+  },
+});
+
+export const reorderStages = mutation({
+  args: {
+    projectId: v.id("projects"),
+    orderedStageIds: v.array(v.id("projectStages")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { projectId, orderedStageIds }) => {
+    const { orgId } = await requireTaskManage(ctx);
+    const project = await ctx.db.get(projectId);
+    if (!project || project.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Project not found." });
+    }
+    for (let i = 0; i < orderedStageIds.length; i++) {
+      const s = await ctx.db.get(orderedStageIds[i]);
+      if (s && s.projectId === projectId) await ctx.db.patch(s._id, { order: i });
+    }
+    return null;
+  },
+});
+
+export const deleteStage = mutation({
+  args: {
+    stageId: v.id("projectStages"),
+    reassignToStageId: v.id("projectStages"),
+  },
+  returns: v.null(),
+  handler: async (ctx, { stageId, reassignToStageId }) => {
+    const { orgId } = await requireTaskManage(ctx);
+    const stage = await ctx.db.get(stageId);
+    if (!stage || stage.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Stage not found." });
+    }
+    if (stageId === reassignToStageId) {
+      throw new ConvexError({ code: "INPUT", message: "Pick a different column to move tasks to." });
+    }
+    const target = await ctx.db.get(reassignToStageId);
+    if (!target || target.projectId !== stage.projectId) {
+      throw new ConvexError({ code: "INPUT", message: "Target column is invalid." });
+    }
+    const all = await orderedStages(ctx, stage.projectId);
+    if (all.length <= 1) {
+      throw new ConvexError({ code: "INPUT", message: "A project needs at least one column." });
+    }
+    // Move every task off the doomed column onto the target, appended in order.
+    const moving = await ctx.db
+      .query("projectTasks")
+      .withIndex("by_stage", (q) => q.eq("stageId", stageId))
+      .collect();
+    const existingTarget = await ctx.db
+      .query("projectTasks")
+      .withIndex("by_stage", (q) => q.eq("stageId", reassignToStageId))
+      .collect();
+    let order = existingTarget.filter((t) => !t.archivedAt).length;
+    for (const t of moving) {
+      await ctx.db.patch(t._id, {
+        stageId: reassignToStageId,
+        status: target.isDone ? "done" : "open",
+        completedAt: target.isDone ? t.completedAt ?? Date.now() : undefined,
+        completedBy: target.isDone ? t.completedBy : undefined,
+        order: t.archivedAt ? t.order : order++,
+      });
+    }
+    await ctx.db.delete(stageId);
+    return null;
+  },
+});
+
+// ── Board + move ─────────────────────────────────────────────────────────────
+
+const taskCardView = v.object({
+  _id: v.id("projectTasks"),
+  projectId: v.id("projects"),
+  stageId: v.union(v.id("projectStages"), v.null()),
+  name: v.string(),
+  status: taskStatus,
+  priority: v.union(taskPriority, v.null()),
+  dueDate: v.union(v.string(), v.null()),
+  estimateMinutes: v.union(v.number(), v.null()),
+  loggedMinutes: v.number(),
+  attachmentCount: v.number(),
+  assigneeCount: v.number(),
+  assignees: v.array(assigneeView),
+  order: v.union(v.number(), v.null()),
+  completedAt: v.union(v.number(), v.null()),
+});
+
+// The whole board in one round-trip: ordered stages + enriched task cards
+// (assignees, logged-vs-estimate, counts). Reused by the List tab too.
+export const board = query({
+  args: { projectId: v.id("projects") },
+  returns: v.object({
+    stages: v.array(stageView),
+    tasks: v.array(taskCardView),
+  }),
+  handler: async (ctx, { projectId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const project = await ctx.db.get(projectId);
+    if (!project || project.orgId !== orgCtx.orgId) {
+      return { stages: [], tasks: [] };
+    }
+    const access = await callerAccess(ctx, orgCtx);
+    if (access && !access.visibleProjectIds.has(projectId)) {
+      return { stages: [], tasks: [] };
+    }
+
+    const stages = await orderedStages(ctx, projectId);
+
+    let tasks = (
+      await ctx.db
+        .query("projectTasks")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect()
+    ).filter((t) => !t.archivedAt);
+    if (access && !access.projectIds.has(projectId)) {
+      tasks = tasks.filter((t) => access.taskIds.has(t._id));
+    }
+
+    const logged = await loggedByTask(ctx, projectId);
+
+    // Assignees: project-level (apply to every task) + task-level.
+    const [projRows, taskRows] = await Promise.all([
+      ctx.db
+        .query("projectAssignments")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect(),
+      ctx.db
+        .query("taskAssignments")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect(),
+    ]);
+    const empIds = new Set<Id<"employees">>();
+    for (const r of projRows) empIds.add(r.employeeId);
+    for (const r of taskRows) empIds.add(r.employeeId);
+    const nameMap = new Map<Id<"employees">, string>();
+    for (const id of empIds) {
+      const e = await ctx.db.get(id);
+      nameMap.set(id, e ? displayName(e) : "—");
+    }
+    const projectLevel = projRows.map((r) => ({
+      employeeId: r.employeeId,
+      name: nameMap.get(r.employeeId) ?? "—",
+    }));
+    const perTask = new Map<Id<"projectTasks">, { employeeId: Id<"employees">; name: string }[]>();
+    for (const r of taskRows) {
+      const arr = perTask.get(r.taskId) ?? [];
+      arr.push({ employeeId: r.employeeId, name: nameMap.get(r.employeeId) ?? "—" });
+      perTask.set(r.taskId, arr);
+    }
+
+    tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    const cards = tasks.map((t) => {
+      const seen = new Set<Id<"employees">>();
+      const assignees: { employeeId: Id<"employees">; name: string }[] = [];
+      for (const a of [...projectLevel, ...(perTask.get(t._id) ?? [])]) {
+        if (seen.has(a.employeeId)) continue;
+        seen.add(a.employeeId);
+        assignees.push(a);
+      }
+      return {
+        _id: t._id,
+        projectId: t.projectId,
+        stageId: t.stageId ?? null,
+        name: t.name,
+        status: t.status,
+        priority: t.priority ?? null,
+        dueDate: t.dueDate ?? null,
+        estimateMinutes: t.estimateMinutes ?? null,
+        loggedMinutes: logged.get(t._id) ?? 0,
+        attachmentCount: t.attachmentStorageIds?.length ?? 0,
+        assigneeCount: assignees.length,
+        assignees,
+        order: t.order ?? null,
+        completedAt: t.completedAt ?? null,
+      };
+    });
+
+    return {
+      stages: stages.map((s) => ({
+        _id: s._id,
+        projectId: s.projectId,
+        name: s.name,
+        color: s.color ?? null,
+        order: s.order,
+        isDone: s.isDone,
+      })),
+      tasks: cards,
+    };
+  },
+});
+
+// Drag-drop target. Moves a task to `stageId` and writes the destination
+// column's full order in one shot (handles cross-column + reorder). Syncs the
+// binary status from the destination column's terminal flag.
+export const moveTask = mutation({
+  args: {
+    taskId: v.id("projectTasks"),
+    stageId: v.id("projectStages"),
+    orderedTaskIds: v.array(v.id("projectTasks")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { taskId, stageId, orderedTaskIds }) => {
+    const { orgId, userId } = await requireTaskManage(ctx);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Task not found." });
+    }
+    const stage = await ctx.db.get(stageId);
+    if (!stage || stage.projectId !== task.projectId) {
+      throw new ConvexError({ code: "INPUT", message: "Invalid column." });
+    }
+    const me = await employeeByUserId(ctx, orgId, userId);
+    await ctx.db.patch(taskId, {
+      stageId,
+      status: stage.isDone ? "done" : "open",
+      completedAt: stage.isDone ? task.completedAt ?? Date.now() : undefined,
+      completedBy: stage.isDone ? task.completedBy ?? me?._id : undefined,
+      updatedAt: Date.now(),
+    });
+    // Normalize order for the destination column.
+    for (let i = 0; i < orderedTaskIds.length; i++) {
+      const t = await ctx.db.get(orderedTaskIds[i]);
+      if (t && t.projectId === task.projectId) await ctx.db.patch(t._id, { order: i });
+    }
+    return null;
+  },
+});
+
+// ── Overview (projects:manage) ───────────────────────────────────────────────
+
+export const overview = query({
+  args: { projectId: v.id("projects") },
+  returns: v.object({
+    totalMinutes: v.number(),
+    budgetMinutes: v.number(),
+    estimateTotal: v.number(),
+    completion: v.object({ total: v.number(), done: v.number() }),
+    byStage: v.array(
+      v.object({
+        stageId: v.id("projectStages"),
+        name: v.string(),
+        color: v.union(v.string(), v.null()),
+        count: v.number(),
+        isDone: v.boolean(),
+      }),
+    ),
+    byEmployee: v.array(
+      v.object({
+        employeeId: v.id("employees"),
+        name: v.string(),
+        minutes: v.number(),
+        entries: v.number(),
+        assigned: v.number(),
+        estimateMinutes: v.number(),
+      }),
+    ),
+    byTask: v.array(
+      v.object({
+        taskId: v.union(v.id("projectTasks"), v.null()),
+        name: v.string(),
+        minutes: v.number(),
+      }),
+    ),
+    burndown: v.array(v.object({ date: v.string(), logged: v.number() })),
+  }),
+  handler: async (ctx, { projectId }) => {
+    const { orgId } = await requirePermission(ctx, "projects:manage");
+    const project = await ctx.db.get(projectId);
+    const empty = {
+      totalMinutes: 0,
+      budgetMinutes: 0,
+      estimateTotal: 0,
+      completion: { total: 0, done: 0 },
+      byStage: [],
+      byEmployee: [],
+      byTask: [],
+      burndown: [],
+    };
+    if (!project || project.orgId !== orgId) return empty;
+
+    const entries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect();
+    const tasks = (
+      await ctx.db
+        .query("projectTasks")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect()
+    ).filter((t) => !t.archivedAt);
+    const stages = await orderedStages(ctx, projectId);
+    const doneStageIds = new Set(stages.filter((s) => s.isDone).map((s) => s._id));
+    const tName = new Map(tasks.map((t) => [t._id, t.name]));
+
+    // Estimates + completion.
+    let estimateTotal = 0;
+    let done = 0;
+    for (const t of tasks) {
+      estimateTotal += t.estimateMinutes ?? 0;
+      const isDone = t.stageId ? doneStageIds.has(t.stageId) : t.status === "done";
+      if (isDone) done += 1;
+    }
+    const budgetMinutes = project.budgetMinutes ?? estimateTotal;
+
+    // Tasks per stage.
+    const stageCount = new Map<Id<"projectStages">, number>();
+    for (const t of tasks) {
+      if (t.stageId) stageCount.set(t.stageId, (stageCount.get(t.stageId) ?? 0) + 1);
+    }
+
+    // Time by employee + by task, plus cumulative burn-down by date.
+    let totalMinutes = 0;
+    const empAgg = new Map<Id<"employees">, { minutes: number; entries: number }>();
+    const taskAgg = new Map<string, number>();
+    const byDate = new Map<string, number>();
+    for (const r of entries) {
+      totalMinutes += r.minutes;
+      const e = empAgg.get(r.employeeId) ?? { minutes: 0, entries: 0 };
+      e.minutes += r.minutes;
+      e.entries += 1;
+      empAgg.set(r.employeeId, e);
+      const key = r.taskId ?? "none";
+      taskAgg.set(key, (taskAgg.get(key) ?? 0) + r.minutes);
+      byDate.set(r.date, (byDate.get(r.date) ?? 0) + r.minutes);
+    }
+
+    // Assignment-derived workload per employee.
+    const [projRows, taskRows] = await Promise.all([
+      ctx.db
+        .query("projectAssignments")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect(),
+      ctx.db
+        .query("taskAssignments")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect(),
+    ]);
+    const projAssignees = new Set(projRows.map((r) => r.employeeId));
+    const perEmpTasks = new Map<Id<"employees">, Set<Id<"projectTasks">>>();
+    for (const r of taskRows) {
+      const s = perEmpTasks.get(r.employeeId) ?? new Set();
+      s.add(r.taskId);
+      perEmpTasks.set(r.employeeId, s);
+    }
+    const allTaskIds = new Set(tasks.map((t) => t._id));
+    const estimateFor = new Map<Id<"projectTasks">, number>(
+      tasks.map((t) => [t._id, t.estimateMinutes ?? 0]),
+    );
+
+    const workforce = new Set<Id<"employees">>([
+      ...empAgg.keys(),
+      ...projAssignees,
+      ...perEmpTasks.keys(),
+    ]);
+    const byEmployee = [];
+    for (const employeeId of workforce) {
+      const emp = await ctx.db.get(employeeId);
+      const agg = empAgg.get(employeeId) ?? { minutes: 0, entries: 0 };
+      const assignedIds = projAssignees.has(employeeId)
+        ? allTaskIds
+        : perEmpTasks.get(employeeId) ?? new Set<Id<"projectTasks">>();
+      let est = 0;
+      for (const tid of assignedIds) est += estimateFor.get(tid) ?? 0;
+      byEmployee.push({
+        employeeId,
+        name: emp ? displayName(emp) : "—",
+        minutes: agg.minutes,
+        entries: agg.entries,
+        assigned: assignedIds.size,
+        estimateMinutes: est,
+      });
+    }
+    byEmployee.sort((a, b) => b.minutes - a.minutes || b.assigned - a.assigned);
+
+    const byTask = [...taskAgg.entries()]
+      .map(([key, minutes]) => ({
+        taskId: key === "none" ? null : (key as Id<"projectTasks">),
+        name: key === "none" ? "No task" : (tName.get(key as Id<"projectTasks">) ?? "—"),
+        minutes,
+      }))
+      .sort((a, b) => b.minutes - a.minutes);
+
+    const burndown: { date: string; logged: number }[] = [];
+    let cumulative = 0;
+    for (const date of [...byDate.keys()].sort()) {
+      cumulative += byDate.get(date) ?? 0;
+      burndown.push({ date, logged: cumulative });
+    }
+
+    return {
+      totalMinutes,
+      budgetMinutes,
+      estimateTotal,
+      completion: { total: tasks.length, done },
+      byStage: stages.map((s) => ({
+        stageId: s._id,
+        name: s.name,
+        color: s.color ?? null,
+        count: stageCount.get(s._id) ?? 0,
+        isDone: s.isDone,
+      })),
+      byEmployee,
+      byTask,
+      burndown,
+    };
+  },
+});
+
+// ── Comments ─────────────────────────────────────────────────────────────────
+
+// Resolve a task the caller may view (manager or assignee) plus their identity.
+async function taskViewer(ctx: QueryCtx, taskId: Id<"projectTasks">) {
+  const orgCtx = await requireOrg(ctx);
+  const task = await ctx.db.get(taskId);
+  if (!task || task.orgId !== orgCtx.orgId) return null;
+  const manage = isProjectPrivileged(orgCtx);
+  const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+  let isAssignee = false;
+  if (!manage && me) {
+    const access = await accessForEmployee(ctx, me._id);
+    isAssignee = access.projectIds.has(task.projectId) || access.taskIds.has(taskId);
+  }
+  if (!manage && !isAssignee) return null;
+  return { orgCtx, task, manage, me };
+}
+
+export const listComments = query({
+  args: { taskId: v.id("projectTasks") },
+  returns: v.array(
+    v.object({
+      _id: v.id("taskComments"),
+      authorEmployeeId: v.id("employees"),
+      authorName: v.string(),
+      body: v.string(),
+      createdAt: v.number(),
+      editedAt: v.union(v.number(), v.null()),
+      canEdit: v.boolean(),
+    }),
+  ),
+  handler: async (ctx, { taskId }) => {
+    const viewer = await taskViewer(ctx, taskId);
+    if (!viewer) return [];
+    const rows = await ctx.db
+      .query("taskComments")
+      .withIndex("by_task", (q) => q.eq("taskId", taskId))
+      .collect();
+    rows.sort((a, b) => a._creationTime - b._creationTime);
+    const out = [];
+    for (const r of rows) {
+      const e = await ctx.db.get(r.authorEmployeeId);
+      out.push({
+        _id: r._id,
+        authorEmployeeId: r.authorEmployeeId,
+        authorName: e ? displayName(e) : "—",
+        body: r.body,
+        createdAt: r._creationTime,
+        editedAt: r.editedAt ?? null,
+        canEdit:
+          viewer.manage || (!!viewer.me && viewer.me._id === r.authorEmployeeId),
+      });
+    }
+    return out;
+  },
+});
+
+export const addComment = mutation({
+  args: { taskId: v.id("projectTasks"), body: v.string() },
+  returns: v.id("taskComments"),
+  handler: async (ctx, { taskId, body }) => {
+    const viewer = await taskViewer(ctx, taskId);
+    if (!viewer || !viewer.me) {
+      throw new ConvexError({ code: "FORBIDDEN", message: "You can't comment on this task." });
+    }
+    const trimmed = body.trim();
+    if (!trimmed || trimmed === "<p></p>") {
+      throw new ConvexError({ code: "INPUT", message: "Comment is empty." });
+    }
+    return await ctx.db.insert("taskComments", {
+      orgId: viewer.orgCtx.orgId,
+      projectId: viewer.task.projectId,
+      taskId,
+      authorEmployeeId: viewer.me._id,
+      body: trimmed,
+    });
+  },
+});
+
+export const updateComment = mutation({
+  args: { commentId: v.id("taskComments"), body: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { commentId, body }) => {
+    const orgCtx = await requireOrg(ctx);
+    const comment = await ctx.db.get(commentId);
+    if (!comment || comment.orgId !== orgCtx.orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Comment not found." });
+    }
+    const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const canEdit =
+      isProjectPrivileged(orgCtx) || (!!me && me._id === comment.authorEmployeeId);
+    if (!canEdit) {
+      throw new ConvexError({ code: "FORBIDDEN", message: "You can't edit this comment." });
+    }
+    const trimmed = body.trim();
+    if (!trimmed || trimmed === "<p></p>") {
+      throw new ConvexError({ code: "INPUT", message: "Comment is empty." });
+    }
+    await ctx.db.patch(commentId, { body: trimmed, editedAt: Date.now() });
+    return null;
+  },
+});
+
+export const deleteComment = mutation({
+  args: { commentId: v.id("taskComments") },
+  returns: v.null(),
+  handler: async (ctx, { commentId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const comment = await ctx.db.get(commentId);
+    if (!comment || comment.orgId !== orgCtx.orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Comment not found." });
+    }
+    const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const canDelete =
+      isProjectPrivileged(orgCtx) || (!!me && me._id === comment.authorEmployeeId);
+    if (!canDelete) {
+      throw new ConvexError({ code: "FORBIDDEN", message: "You can't delete this comment." });
+    }
+    await ctx.db.delete(commentId);
     return null;
   },
 });

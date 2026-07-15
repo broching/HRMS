@@ -54,6 +54,7 @@ import type * as lib_plans from "../lib/plans.js";
 import type * as lib_sgDefaults from "../lib/sgDefaults.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as members from "../members.js";
+import type * as migrations from "../migrations.js";
 import type * as model_cpf from "../model/cpf.js";
 import type * as model_datetime from "../model/datetime.js";
 import type * as model_employee from "../model/employee.js";
@@ -156,6 +157,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sgDefaults": typeof lib_sgDefaults;
   "lib/validators": typeof lib_validators;
   members: typeof members;
+  migrations: typeof migrations;
   "model/cpf": typeof model_cpf;
   "model/datetime": typeof model_datetime;
   "model/employee": typeof model_employee;

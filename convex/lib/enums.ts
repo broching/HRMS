@@ -1289,3 +1289,13 @@ export const taskPriority = v.union(
   v.literal("high"),
 );
 export type TaskPriority = "low" | "medium" | "high";
+
+// Portfolio lifecycle phase for a project, used by the project-level Kanban.
+// Optional on a project (treated as "active" when unset).
+export const projectPhase = v.union(
+  v.literal("planning"),
+  v.literal("active"),
+  v.literal("on_hold"),
+  v.literal("completed"),
+);
+export type ProjectPhase = "planning" | "active" | "on_hold" | "completed";
