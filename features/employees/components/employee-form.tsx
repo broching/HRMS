@@ -13,6 +13,7 @@ import type { HrmsRole } from "@/convex/lib/enums"
 import type { Id, TableNames } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardContent,
@@ -79,6 +80,7 @@ const schema = z.object({
   teamId: z.string().optional(),
   positionId: z.string().optional(),
   managerId: z.string().optional(),
+  additionalManagerIds: z.array(z.string()).optional(),
   officeId: z.string().min(1, "Required"),
   // Tri-state attendance override: inherit the org default, force on, or off.
   attendanceRequired: z.enum(["default", "required", "exempt"]).optional(),
@@ -136,7 +138,7 @@ function TextField({
               type={type}
               placeholder={placeholder}
               {...field}
-              value={field.value ?? ""}
+              value={(field.value as string | undefined) ?? ""}
             />
           </FormControl>
           <FormMessage />
@@ -167,7 +169,7 @@ function SelectField({
         <FormItem>
           <FormLabel>{label}</FormLabel>
           <Select
-            value={field.value || (includeNone ? NONE : undefined)}
+            value={(field.value as string) || (includeNone ? NONE : undefined)}
             onValueChange={field.onChange}
           >
             <FormControl>
@@ -191,6 +193,58 @@ function SelectField({
   )
 }
 
+// Multiselect list of secondary (dotted-line) managers. The primary manager is
+// excluded from the options so the two fields can't disagree.
+function MultiManagerField({
+  control,
+  options,
+}: {
+  control: Control<EmployeeFormValues>
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <FormField
+      control={control}
+      name="additionalManagerIds"
+      render={({ field }) => {
+        const selected = new Set(field.value ?? [])
+        const toggle = (id: string, checked: boolean) => {
+          const next = new Set(selected)
+          if (checked) next.add(id)
+          else next.delete(id)
+          field.onChange([...next])
+        }
+        return (
+          <FormItem>
+            <FormLabel>Additional managers</FormLabel>
+            {options.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No other people available.
+              </p>
+            ) : (
+              <div className="max-h-40 overflow-y-auto rounded-md border p-1">
+                {options.map((o) => (
+                  <label
+                    key={o.value}
+                    className="hover:bg-accent flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm"
+                  >
+                    <Checkbox
+                      checked={selected.has(o.value)}
+                      onCheckedChange={(c) => toggle(o.value, c === true)}
+                    />
+                    <span className="truncate">{o.label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <FormMessage />
+          </FormItem>
+        )
+      }}
+    />
+  )
+}
+
 // ─── Form ────────────────────────────────────────────────────────────────
 
 export function EmployeeForm({
@@ -204,6 +258,7 @@ export function EmployeeForm({
   const { organization } = useOrganization()
   const create = useMutation(api.employees.create)
   const update = useMutation(api.employees.update)
+  const setAdditionalManagers = useMutation(api.employees.setAdditionalManagers)
   const addByUsername = useAction(api.orgMembers.addByUsername)
 
   const departments = useQuery(api.departments.list) ?? []
@@ -221,6 +276,7 @@ export function EmployeeForm({
       employmentType: "full_time",
       status: "active",
       role: "employee",
+      additionalManagerIds: [],
       joinDate: new Date().toISOString().slice(0, 10),
       country: "SG",
       attendanceRequired: "default",
@@ -295,6 +351,14 @@ export function EmployeeForm({
         officeId: optId<"offices">(values.officeId),
       }
 
+      // Secondary (dotted-line) managers: drop the primary and any blanks so the
+      // two fields never disagree. Persisted via a dedicated mutation (cycle- and
+      // ownership-guarded server-side) after the main record is saved.
+      const primaryManagerId = optId<"employees">(values.managerId)
+      const additionalManagerIds = (values.additionalManagerIds ?? []).filter(
+        (id) => id && id !== NONE && id !== primaryManagerId,
+      ) as Id<"employees">[]
+
       if (employeeId) {
         // "default" clears the override (null); required/exempt force it.
         const attendanceRequired =
@@ -308,6 +372,10 @@ export function EmployeeForm({
           employeeNumber: values.employeeNumber,
           ...common,
           attendanceRequired,
+        })
+        await setAdditionalManagers({
+          employeeId,
+          managerIds: additionalManagerIds,
         })
         toast.success("Employee updated")
         router.push(`/employees/${employeeId}`)
@@ -348,6 +416,13 @@ export function EmployeeForm({
           invitedRole: values.role,
           ...common,
         })
+
+        if (additionalManagerIds.length > 0) {
+          await setAdditionalManagers({
+            employeeId: id,
+            managerIds: additionalManagerIds,
+          })
+        }
 
         // Then wire up access (best-effort — a failure here doesn't undo the
         // profile). Email → Clerk org invitation. Username → direct org-add of
@@ -402,6 +477,9 @@ export function EmployeeForm({
       value: e._id,
       label: `${e.preferredName ?? e.firstName} ${e.lastName}`,
     }))
+
+  // Keep the additional-manager list from offering the primary manager.
+  const watchedManagerId = form.watch("managerId")
 
   return (
     <Form {...form}>
@@ -633,6 +711,14 @@ export function EmployeeForm({
               label="Office"
               options={offices.map((o) => ({ value: o._id, label: o.name }))}
             />
+            <div className="sm:col-span-2">
+              <MultiManagerField
+                control={form.control}
+                options={managerOptions.filter(
+                  (o) => o.value !== watchedManagerId,
+                )}
+              />
+            </div>
             {employeeId && (
               <SelectField
                 control={form.control}

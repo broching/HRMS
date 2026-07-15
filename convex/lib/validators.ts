@@ -160,6 +160,7 @@ const employeeFields = {
   teamId: v.optional(v.id("teams")),
   positionId: v.optional(v.id("positions")),
   managerId: v.optional(v.id("employees")),
+  additionalManagerIds: v.optional(v.array(v.id("employees"))),
   employmentType: employmentType,
   officeId: v.optional(v.id("offices")),
   joinDate: v.string(),

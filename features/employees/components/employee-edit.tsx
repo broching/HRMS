@@ -51,6 +51,7 @@ export function EmployeeEdit({ employeeId }: { employeeId: Id<"employees"> }) {
     teamId: employee.teamId ?? "",
     positionId: employee.positionId ?? "",
     managerId: employee.managerId ?? "",
+    additionalManagerIds: employee.additionalManagerIds ?? [],
     officeId: employee.officeId ?? "",
     attendanceRequired:
       employee.attendanceRequired === true
