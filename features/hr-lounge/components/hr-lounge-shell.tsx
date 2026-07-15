@@ -16,11 +16,9 @@ import {
   IconSitemap,
   IconBuildingCog,
   IconCreditCard,
-  IconUserPlus,
   IconBriefcase,
   IconFolders,
   IconClockHour4,
-  IconClockCog,
   IconCalendarTime,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
@@ -81,7 +79,6 @@ const ITEMS: Item[] = [
     permission: "performance:manage",
     group: "People",
   },
-  { label: "Onboarding", icon: IconUserPlus, comingSoon: true, group: "People" },
   // ── Payroll & claims ──
   {
     label: "Payroll",
@@ -138,13 +135,6 @@ const ITEMS: Item[] = [
     label: "Attendance",
     icon: IconClockHour4,
     href: "/hr-lounge/attendance",
-    permission: "attendance:config",
-    group: "Leave & attendance",
-  },
-  {
-    label: "Attendance Config",
-    icon: IconClockCog,
-    href: "/settings/attendance",
     permission: "attendance:config",
     group: "Leave & attendance",
   },

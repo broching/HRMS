@@ -11,7 +11,6 @@ import {
   IconFileInvoice,
   IconSearch,
   IconStars,
-  IconUserPlus,
   IconUsersPlus,
   type Icon,
 } from "@tabler/icons-react"
@@ -66,11 +65,6 @@ const CARDS: TeamCard[] = [
     description: "See time logged across your reporting line",
     icon: IconClockPlay,
     href: "/timesheets/team",
-  },
-  {
-    title: "Onboarding",
-    description: "Any new member joining your team?",
-    icon: IconUserPlus,
   },
   {
     title: "Recruitment",

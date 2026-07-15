@@ -208,6 +208,109 @@ export const list = query({
   },
 });
 
+// Flat, spreadsheet-ready export of every employee — HR bulk download. Unlike
+// `list`, this isn't paginated for a table: it's meant to be piped straight
+// into a CSV/Excel builder. Personal fields (dob, gender, marital status,
+// nationality, address, personal email/phone) are included only when the
+// caller also holds employees:read:all, mirroring the redaction in `get`.
+export const exportRows = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      employeeNumber: v.string(),
+      firstName: v.string(),
+      lastName: v.string(),
+      preferredName: v.optional(v.string()),
+      status: employeeStatus,
+      employmentType: employmentType,
+      departmentName: v.optional(v.string()),
+      positionTitle: v.optional(v.string()),
+      teamName: v.optional(v.string()),
+      officeName: v.optional(v.string()),
+      managerName: v.optional(v.string()),
+      joinDate: v.string(),
+      confirmationDate: v.optional(v.string()),
+      probationEndDate: v.optional(v.string()),
+      exitDate: v.optional(v.string()),
+      workEmail: v.optional(v.string()),
+      personalEmail: v.optional(v.string()),
+      phone: v.optional(v.string()),
+      dob: v.optional(v.string()),
+      gender: v.optional(gender),
+      maritalStatus: v.optional(maritalStatus),
+      nationality: v.optional(v.string()),
+      addressLine1: v.optional(v.string()),
+      addressLine2: v.optional(v.string()),
+      city: v.optional(v.string()),
+      state: v.optional(v.string()),
+      postalCode: v.optional(v.string()),
+      country: v.optional(v.string()),
+    }),
+  ),
+  handler: async (ctx) => {
+    const orgCtx = await requirePermission(ctx, "employees:manage");
+    const { orgId } = orgCtx;
+    const canViewPersonal = ctxHasPermission(orgCtx, "employees:read:all");
+
+    const employees = await ctx.db
+      .query("employees")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(2000);
+
+    const [departments, positions, offices, teams] = await Promise.all([
+      ctx.db.query("departments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("positions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("offices").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("teams").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+    ]);
+    const deptName = new Map(departments.map((d) => [d._id, d.name]));
+    const posTitle = new Map(positions.map((p) => [p._id, p.title]));
+    const officeName = new Map(offices.map((o) => [o._id, o.name]));
+    const teamNameById = new Map(teams.map((t) => [t._id, t.name]));
+    const empById = new Map(employees.map((e) => [e._id, e]));
+
+    const rows = employees
+      .filter((e) => !e.isVacant)
+      .map((e) => {
+        const manager = e.managerId ? empById.get(e.managerId) : undefined;
+        return {
+          employeeNumber: e.employeeNumber,
+          firstName: e.firstName,
+          lastName: e.lastName,
+          preferredName: e.preferredName,
+          status: e.status,
+          employmentType: e.employmentType,
+          departmentName: e.departmentId ? deptName.get(e.departmentId) : undefined,
+          positionTitle: e.positionId ? posTitle.get(e.positionId) : undefined,
+          teamName: e.teamId ? teamNameById.get(e.teamId) : undefined,
+          officeName: e.officeId ? officeName.get(e.officeId) : undefined,
+          managerName: manager
+            ? `${manager.preferredName ?? manager.firstName} ${manager.lastName}`
+            : undefined,
+          joinDate: e.joinDate,
+          confirmationDate: e.confirmationDate,
+          probationEndDate: e.probationEndDate,
+          exitDate: e.exitDate,
+          workEmail: e.contact?.workEmail,
+          personalEmail: canViewPersonal ? e.contact?.personalEmail : undefined,
+          phone: canViewPersonal ? e.contact?.phone : undefined,
+          dob: canViewPersonal ? e.dob : undefined,
+          gender: canViewPersonal ? e.gender : undefined,
+          maritalStatus: canViewPersonal ? e.maritalStatus : undefined,
+          nationality: canViewPersonal ? e.nationality : undefined,
+          addressLine1: canViewPersonal ? e.address?.line1 : undefined,
+          addressLine2: canViewPersonal ? e.address?.line2 : undefined,
+          city: canViewPersonal ? e.address?.city : undefined,
+          state: canViewPersonal ? e.address?.state : undefined,
+          postalCode: canViewPersonal ? e.address?.postalCode : undefined,
+          country: canViewPersonal ? e.address?.country : undefined,
+        };
+      });
+    rows.sort((a, b) => a.employeeNumber.localeCompare(b.employeeNumber));
+    return rows;
+  },
+});
+
 // Minimal name list for pickers (e.g. targeting a feed post to specific
 // people). Available to any member — names only, no sensitive fields.
 export const directoryOptions = query({

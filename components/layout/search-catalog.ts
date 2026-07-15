@@ -96,7 +96,7 @@ const CATALOG: SearchEntry[] = [
   { label: "Org Structure", context: "HR Lounge", href: "/hr-lounge/org-structure", icon: IconSitemap, permission: "employees:manage", keywords: ["departments", "offices", "hierarchy"] },
   { label: "Organization Settings", context: "HR Lounge", href: "/hr-lounge/org-settings", icon: IconBuildingCog, permission: "org:manage", keywords: ["logo", "locale", "name", "org profile", "currency"] },
   { label: "Billing & plan", context: "HR Lounge", href: "/hr-lounge/billing", icon: IconCreditCard, permission: "org:manage", keywords: ["subscription", "stripe", "pricing", "plan", "seats", "upgrade", "payment method", "invoice"] },
-  { label: "Attendance Config", context: "HR Lounge", href: "/settings/attendance", icon: IconClockCog, permission: "attendance:config", keywords: ["qr", "geofence", "office", "clock in"] },
+  { label: "Attendance", context: "HR Lounge", href: "/hr-lounge/attendance", icon: IconClockCog, permission: "attendance:config", keywords: ["qr", "geofence", "office", "clock in", "clock-ins", "corrections", "attendance config"] },
   { label: "Shift Templates", context: "HR Lounge", href: "/settings/shift-templates", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "shifts", "schedule"] },
 ]
 

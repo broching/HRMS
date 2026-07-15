@@ -22,7 +22,7 @@ export default function OfficePosterPage({
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8 lg:px-6">
       <div className="qr-poster-noprint">
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/settings/attendance">
+          <Link href="/hr-lounge/attendance/config">
             <IconArrowLeft className="size-4" />
             Back to attendance settings
           </Link>
