@@ -9,7 +9,6 @@ import {
   sanitizePermissions,
 } from "./lib/permissions";
 import {
-  MODULES,
   ModuleKey,
   MODULE_FOR_PERMISSION,
   enabledModulesFromDisabled,
@@ -89,10 +88,6 @@ export async function resolveEnabledModules(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
 ): Promise<Set<ModuleKey>> {
-  // A dedicated Enterprise deployment always has every module on — billing is
-  // handled manually, so no `orgModules` row (or a stray super-admin toggle) can
-  // ever lock the enterprise out of a feature.
-  if (isDedicated()) return new Set(MODULES);
   const row = await ctx.db
     .query("orgModules")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))

@@ -22,6 +22,7 @@ import type * as competencies from "../competencies.js";
 import type * as crons from "../crons.js";
 import type * as customFields from "../customFields.js";
 import type * as dashboard from "../dashboard.js";
+import type * as dedicated from "../dedicated.js";
 import type * as departments from "../departments.js";
 import type * as developmentPlans from "../developmentPlans.js";
 import type * as email from "../email.js";
@@ -129,6 +130,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customFields: typeof customFields;
   dashboard: typeof dashboard;
+  dedicated: typeof dedicated;
   departments: typeof departments;
   developmentPlans: typeof developmentPlans;
   email: typeof email;
