@@ -76,7 +76,7 @@ const CATALOG: SearchEntry[] = [
   { label: "Team Attendance", context: "Team", href: "/attendance/team", icon: IconClockHour4, permission: "attendance:team", keywords: ["clock in", "timesheet"] },
   { label: "Team Timesheets", context: "Team", href: "/timesheets/team", icon: IconClockHour4, permission: "timesheets:team", keywords: ["log time", "hours", "team hours", "timesheet"] },
   { label: "Projects & Tasks", context: "Team", href: "/projects", icon: IconFolders, permission: "tasks:manage", keywords: ["project", "task", "assign", "create task"] },
-  { label: "Roster", context: "Team", href: "/scheduling/roster", icon: IconCalendarTime, permission: "scheduling:roster", keywords: ["schedule", "shift", "rota"] },
+  { label: "Roster & Overtime", context: "Team", href: "/scheduling/roster", icon: IconCalendarTime, permission: "scheduling:roster", keywords: ["schedule", "shift", "rota", "overtime", "ot"] },
   { label: "Team Reviews", context: "Team", href: "/performance/team", icon: IconChartBar, permission: "performance:team", keywords: ["performance", "appraisal", "review"] },
 
   // ── HR Lounge ─────────────────────────────────────────────────────────────
@@ -97,7 +97,8 @@ const CATALOG: SearchEntry[] = [
   { label: "Organization Settings", context: "HR Lounge", href: "/hr-lounge/org-settings", icon: IconBuildingCog, permission: "org:manage", keywords: ["logo", "locale", "name", "org profile", "currency"] },
   { label: "Billing & plan", context: "HR Lounge", href: "/hr-lounge/billing", icon: IconCreditCard, permission: "org:manage", keywords: ["subscription", "stripe", "pricing", "plan", "seats", "upgrade", "payment method", "invoice"] },
   { label: "Attendance", context: "HR Lounge", href: "/hr-lounge/attendance", icon: IconClockCog, permission: "attendance:config", keywords: ["qr", "geofence", "office", "clock in", "clock-ins", "corrections", "attendance config"] },
-  { label: "Shift Templates", context: "HR Lounge", href: "/settings/shift-templates", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "shifts", "schedule"] },
+  { label: "Roster & Overtime", context: "HR Lounge", href: "/hr-lounge/roster", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "overtime", "schedule", "shift", "attendance report"] },
+  { label: "Scheduling", context: "HR Lounge", href: "/settings/scheduling", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "shifts", "schedule", "working hours", "pattern", "shift template"] },
 ]
 
 function canSee(

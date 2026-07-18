@@ -110,6 +110,13 @@ const ITEMS: Item[] = [
   },
   // ── Time & projects ──
   {
+    label: "Roster & OT",
+    icon: IconCalendarTime,
+    href: "/hr-lounge/roster",
+    permission: "scheduling:manage",
+    group: "Time & projects",
+  },
+  {
     label: "Projects",
     icon: IconFolders,
     href: "/hr-lounge/projects",
@@ -139,9 +146,9 @@ const ITEMS: Item[] = [
     group: "Leave & attendance",
   },
   {
-    label: "Shift Templates",
+    label: "Scheduling",
     icon: IconCalendarTime,
-    href: "/settings/shift-templates",
+    href: "/settings/scheduling",
     permission: "scheduling:manage",
     group: "Leave & attendance",
   },

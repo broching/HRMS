@@ -877,12 +877,225 @@ export const overtimeRow = v.object({
   employeeId: v.id("employees"),
   employeeName: v.string(),
   date: v.string(),
+  startTime: v.union(v.string(), v.null()),
+  endTime: v.union(v.string(), v.null()),
   plannedHours: v.number(),
   actualHours: v.union(v.number(), v.null()),
   multiplier: v.number(),
   status: overtimeStatus,
   note: v.union(v.string(), v.null()),
   paid: v.boolean(),
+})
+
+// ─── Work patterns + unified roster board ────────────────────────────────
+
+export const workPatternDay = v.object({
+  off: v.boolean(),
+  startTime: v.union(v.string(), v.null()),
+  endTime: v.union(v.string(), v.null()),
+  breakMinutes: v.union(v.number(), v.null()),
+})
+
+export const workPatternDoc = v.object({
+  _id: v.id("workPatterns"),
+  _creationTime: v.number(),
+  orgId: v.id("organizations"),
+  name: v.string(),
+  days: v.array(workPatternDay),
+  color: v.union(v.string(), v.null()),
+  officeId: v.union(v.id("offices"), v.null()),
+  isDefault: v.boolean(),
+})
+
+// One block on the roster day hour-grid. `kind` distinguishes a scheduled shift,
+// scheduled overtime, and actual clocked attendance overlaid on the same column.
+// `derived` marks a virtual shift generated from a work pattern (no concrete row
+// yet). Ids are per-kind: shiftId for shifts, overtimeId for OT, recordId for
+// actual attendance sessions.
+export const rosterBlock = v.object({
+  kind: v.union(
+    v.literal("scheduled"),
+    v.literal("overtime"),
+    v.literal("actual"),
+  ),
+  startMinute: v.number(),
+  endMinute: v.union(v.number(), v.null()), // null = ongoing (actual, still in)
+  derived: v.boolean(),
+  color: v.union(v.string(), v.null()),
+  label: v.union(v.string(), v.null()),
+  shiftId: v.union(v.id("shiftAssignments"), v.null()),
+  overtimeId: v.union(v.id("overtimeRecords"), v.null()),
+  recordId: v.union(v.id("attendanceRecords"), v.null()),
+  status: v.union(v.string(), v.null()),
+  // Editable source values (null on actual-attendance blocks).
+  startTime: v.union(v.string(), v.null()),
+  endTime: v.union(v.string(), v.null()),
+  breakMinutes: v.union(v.number(), v.null()),
+  multiplier: v.union(v.number(), v.null()),
+  note: v.union(v.string(), v.null()),
+})
+
+// Schedule-vs-actual variance for one person on one day.
+export const rosterVariance = v.object({
+  lateStartMin: v.number(),
+  earlyLeaveMin: v.number(),
+  absent: v.boolean(),
+  unscheduled: v.boolean(),
+  workedBeyondEndMin: v.number(),
+})
+
+// A suggested OT record derived from attendance running past the scheduled end,
+// awaiting a manager's confirmation (not yet persisted).
+export const otSuggestion = v.object({
+  startTime: v.string(),
+  endTime: v.string(),
+  hours: v.number(),
+})
+
+export const rosterDayPerson = v.object({
+  employeeId: v.id("employees"),
+  name: v.string(),
+  jobTitle: v.union(v.string(), v.null()),
+  photoUrl: v.union(v.string(), v.null()),
+  payType: payType,
+  blocks: v.array(rosterBlock),
+  scheduledMinutes: v.number(),
+  overtimeMinutes: v.number(),
+  actualMinutes: v.number(),
+  open: v.boolean(),
+  variance: rosterVariance,
+  otSuggestion: v.union(otSuggestion, v.null()),
+})
+
+export const rosterDayResult = v.object({
+  date: v.string(),
+  people: v.array(rosterDayPerson),
+  peopleCount: v.number(),
+})
+
+// One day's summary for a person in the week chip grid.
+export const rosterWeekDay = v.object({
+  date: v.string(),
+  off: v.boolean(),
+  shifts: v.array(
+    v.object({
+      shiftId: v.union(v.id("shiftAssignments"), v.null()),
+      startTime: v.string(),
+      endTime: v.string(),
+      breakMinutes: v.number(),
+      color: v.string(),
+      derived: v.boolean(),
+      status: v.union(shiftStatus, v.null()),
+      note: v.union(v.string(), v.null()),
+    }),
+  ),
+  overtime: v.array(
+    v.object({
+      overtimeId: v.id("overtimeRecords"),
+      startTime: v.union(v.string(), v.null()),
+      endTime: v.union(v.string(), v.null()),
+      plannedHours: v.number(),
+      multiplier: v.number(),
+      status: overtimeStatus,
+    }),
+  ),
+})
+
+export const rosterWeekRow = v.object({
+  employeeId: v.id("employees"),
+  name: v.string(),
+  jobTitle: v.union(v.string(), v.null()),
+  payType: payType,
+  workPatternName: v.union(v.string(), v.null()),
+  days: v.array(rosterWeekDay),
+})
+
+export const rosterWeekResult = v.object({
+  start: v.string(),
+  end: v.string(),
+  rows: v.array(rosterWeekRow),
+  draftCount: v.number(),
+})
+
+// The signed-in employee's own upcoming schedule (self-service Home card).
+export const myScheduleDay = v.object({
+  date: v.string(),
+  off: v.boolean(),
+  shifts: v.array(
+    v.object({
+      startTime: v.string(),
+      endTime: v.string(),
+      breakMinutes: v.number(),
+      color: v.string(),
+      derived: v.boolean(),
+      note: v.union(v.string(), v.null()),
+    }),
+  ),
+  overtime: v.array(
+    v.object({
+      startTime: v.union(v.string(), v.null()),
+      endTime: v.union(v.string(), v.null()),
+      plannedHours: v.number(),
+      multiplier: v.number(),
+      status: overtimeStatus,
+    }),
+  ),
+})
+
+export const myScheduleResult = v.object({
+  payType: payType,
+  days: v.array(myScheduleDay),
+})
+
+// ─── Roster reports (attendance × roster × timesheets) ───────────────────
+
+export const rosterReportResult = v.object({
+  // True when any table scan or the date range hit its safety cap.
+  truncated: v.boolean(),
+  peopleCount: v.number(),
+  totals: v.object({
+    scheduledMinutes: v.number(),
+    actualMinutes: v.number(),
+    loggedMinutes: v.number(),
+    billableMinutes: v.number(),
+    overtimeMinutes: v.number(),
+    expectedDays: v.number(),
+    presentDays: v.number(),
+    lateCount: v.number(),
+    absentCount: v.number(),
+  }),
+  byDay: v.array(
+    v.object({
+      date: v.string(),
+      scheduledMinutes: v.number(),
+      actualMinutes: v.number(),
+      loggedMinutes: v.number(),
+    }),
+  ),
+  byEmployee: v.array(
+    v.object({
+      employeeId: v.id("employees"),
+      name: v.string(),
+      scheduledMinutes: v.number(),
+      actualMinutes: v.number(),
+      loggedMinutes: v.number(),
+      billableMinutes: v.number(),
+      overtimeMinutes: v.number(),
+      expectedDays: v.number(),
+      presentDays: v.number(),
+      lateCount: v.number(),
+      absentCount: v.number(),
+    }),
+  ),
+  byProject: v.array(
+    v.object({
+      projectId: v.id("projects"),
+      name: v.string(),
+      color: v.union(v.string(), v.null()),
+      loggedMinutes: v.number(),
+      billableMinutes: v.number(),
+    }),
+  ),
 })
 
 // ─── Payroll ─────────────────────────────────────────────────────────────

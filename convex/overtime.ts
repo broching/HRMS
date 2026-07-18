@@ -12,6 +12,7 @@ import { isDirectManager } from "./model/org";
 import { getAttendanceSettings } from "./attendanceSettings";
 import { overtimeRow } from "./lib/validators";
 import { writeAuditLog } from "./lib/audit";
+import { hoursBetween } from "./model/roster";
 
 // ─── Scope / auth ────────────────────────────────────────────────────────────
 // Overtime is scheduled by the same people who build rosters: HR/admin
@@ -55,6 +56,8 @@ async function hydrate(ctx: QueryCtx, r: Doc<"overtimeRecords">) {
     employeeId: r.employeeId,
     employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
     date: r.date,
+    startTime: r.startTime ?? null,
+    endTime: r.endTime ?? null,
     plannedHours: r.plannedHours,
     actualHours: r.actualHours ?? null,
     multiplier: r.multiplier,
@@ -90,20 +93,34 @@ function validHours(h: number): boolean {
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 // Schedule an employee for overtime on a date. Employees can only be paid OT
-// that originates here.
+// that originates here. Times are optional: when a start/end window is given
+// (roster board), `plannedHours` is derived from it; otherwise pass hours.
 export const schedule = mutation({
   args: {
     employeeId: v.id("employees"),
     date: v.string(),
-    plannedHours: v.number(),
+    plannedHours: v.optional(v.number()),
+    startTime: v.optional(v.string()),
+    endTime: v.optional(v.string()),
     multiplier: v.optional(v.number()),
     note: v.optional(v.string()),
   },
   returns: v.id("overtimeRecords"),
-  handler: async (ctx, { employeeId, date, plannedHours, multiplier, note }) => {
+  handler: async (
+    ctx,
+    { employeeId, date, plannedHours, startTime, endTime, multiplier, note },
+  ) => {
     const orgCtx = await requireOrg(ctx);
     await assertCanScheduleEmployee(ctx, orgCtx, employeeId);
-    if (!validHours(plannedHours)) {
+
+    // Derive hours from the window when both ends are given.
+    let hours = plannedHours;
+    if (startTime && endTime) {
+      const derived = hoursBetween(startTime, endTime);
+      if (derived === null) throw new Error("Overtime times must be HH:MM.");
+      hours = derived;
+    }
+    if (hours === undefined || !validHours(hours)) {
       throw new Error("Enter valid overtime hours (0–24).");
     }
     const target = await ctx.db.get(employeeId);
@@ -120,7 +137,9 @@ export const schedule = mutation({
       orgId: orgCtx.orgId,
       employeeId,
       date,
-      plannedHours,
+      startTime: startTime || undefined,
+      endTime: endTime || undefined,
+      plannedHours: hours,
       multiplier: mult,
       status: "scheduled",
       note: note?.trim() || undefined,
@@ -132,7 +151,7 @@ export const schedule = mutation({
       target.userId,
       "overtime.scheduled",
       "Overtime scheduled",
-      `You've been scheduled for ${plannedHours}h overtime on ${date}.`,
+      `You've been scheduled for ${hours}h overtime on ${date}.`,
     );
     await writeAuditLog(ctx, {
       orgId: orgCtx.orgId,
@@ -184,6 +203,48 @@ export const approve = mutation({
       action: "overtime.approve",
       entity: "overtimeRecords",
       entityId: overtimeId,
+    });
+    return null;
+  },
+});
+
+// Edit a scheduled OT record's window / multiplier / note (before approval).
+export const update = mutation({
+  args: {
+    overtimeId: v.id("overtimeRecords"),
+    startTime: v.optional(v.string()),
+    endTime: v.optional(v.string()),
+    plannedHours: v.optional(v.number()),
+    multiplier: v.optional(v.number()),
+    note: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { overtimeId, startTime, endTime, plannedHours, multiplier, note }) => {
+    const orgCtx = await requireOrg(ctx);
+    const rec = await ctx.db.get(overtimeId);
+    if (!rec || rec.orgId !== orgCtx.orgId) throw new Error("Not found.");
+    if (rec.status !== "scheduled") {
+      throw new Error("Only scheduled overtime can be edited.");
+    }
+    await assertCanScheduleEmployee(ctx, orgCtx, rec.employeeId);
+
+    let hours = plannedHours ?? rec.plannedHours;
+    if (startTime && endTime) {
+      const derived = hoursBetween(startTime, endTime);
+      if (derived === null) throw new Error("Overtime times must be HH:MM.");
+      hours = derived;
+    }
+    if (!validHours(hours)) throw new Error("Enter valid overtime hours (0–24).");
+    const mult = multiplier ?? rec.multiplier;
+    if (!Number.isFinite(mult) || mult <= 0) {
+      throw new Error("Overtime multiplier must be a positive number.");
+    }
+    await ctx.db.patch(overtimeId, {
+      startTime: startTime !== undefined ? startTime || undefined : rec.startTime,
+      endTime: endTime !== undefined ? endTime || undefined : rec.endTime,
+      plannedHours: hours,
+      multiplier: mult,
+      note: note !== undefined ? note.trim() || undefined : rec.note,
     });
     return null;
   },

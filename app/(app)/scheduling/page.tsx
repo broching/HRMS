@@ -1,14 +1,14 @@
 import { PageHeader } from "@/components/shared/page-header"
-import { MyShifts } from "@/features/scheduling/components/my-shifts"
+import { MySchedule } from "@/features/scheduling/components/my-schedule"
 
 export default function SchedulingPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="My schedule"
-        description="Your upcoming published shifts."
+        description="Your upcoming shifts, working hours and overtime."
       />
-      <MyShifts />
+      <MySchedule />
     </div>
   )
 }

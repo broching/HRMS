@@ -291,6 +291,10 @@ export default defineSchema({
     // Whether this person must clock attendance (QR/GPS). Absent = inherit the
     // org-wide default from `attendanceSettings`. Set true/false to override.
     attendanceRequired: v.optional(v.boolean()),
+    // Standing weekly working-hours pattern used to auto-fill the roster. Absent
+    // = for fixed pay, fall back to the org default pattern; hourly staff stay
+    // flexible (no auto-fill) unless explicitly assigned one. See workPatterns.
+    workPatternId: v.optional(v.id("workPatterns")),
 
     // Extensibility + denormalized search
     customFields: v.optional(v.record(v.string(), v.any())),
@@ -1018,6 +1022,29 @@ export default defineSchema({
 
   // ─── Scheduling & shifts ─────────────────────────────────────────────────
 
+  // A standing weekly working-hours pattern (e.g. "Office Mon–Fri 09:00–18:00").
+  // `days` is a fixed 7-length array, Monday-first (index 0 = Mon … 6 = Sun); an
+  // `off` day (or absent times) means no scheduled work. Fixed-pay employees
+  // without an explicit `employees.workPatternId` inherit the org `isDefault`
+  // pattern; the roster derives *virtual* shifts from this until a concrete
+  // `shiftAssignments` row overrides a given day.
+  workPatterns: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    days: v.array(
+      v.object({
+        off: v.boolean(),
+        startTime: v.optional(v.string()), // "HH:MM"
+        endTime: v.optional(v.string()), // "HH:MM"
+        breakMinutes: v.optional(v.number()),
+      }),
+    ),
+    color: v.optional(v.string()),
+    officeId: v.optional(v.id("offices")),
+    isDefault: v.boolean(),
+    updatedBy: v.optional(v.id("users")),
+  }).index("by_org", ["orgId"]),
+
   // Reusable shift definition (e.g. "Morning 09:00–17:00") used to stamp out
   // assignments quickly. Times are wall-clock "HH:MM" in the office timezone.
   shiftTemplates: defineTable({
@@ -1062,6 +1089,10 @@ export default defineSchema({
     orgId: v.id("organizations"),
     employeeId: v.id("employees"),
     date: v.string(), // ISO "YYYY-MM-DD"
+    // Optional wall-clock window so OT sits on the roster hour-grid next to the
+    // shift (e.g. 18:00–20:00). When present, `plannedHours` is derived from it.
+    startTime: v.optional(v.string()), // "HH:MM"
+    endTime: v.optional(v.string()), // "HH:MM"
     plannedHours: v.number(),
     // Hours actually worked, set on approval. Falls back to plannedHours.
     actualHours: v.optional(v.number()),

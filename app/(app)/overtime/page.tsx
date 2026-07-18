@@ -1,14 +1,6 @@
-import { PageHeader } from "@/components/shared/page-header"
-import { MyOvertime } from "@/features/overtime/components/my-overtime"
+import { redirect } from "next/navigation"
 
+// The employee's overtime now lives in My Schedule.
 export default function OvertimePage() {
-  return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Overtime"
-        description="Overtime scheduled for you."
-      />
-      <MyOvertime />
-    </div>
-  )
+  redirect("/scheduling")
 }

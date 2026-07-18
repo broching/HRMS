@@ -67,6 +67,7 @@ import type * as model_org from "../model/org.js";
 import type * as model_projectAccess from "../model/projectAccess.js";
 import type * as model_proration from "../model/proration.js";
 import type * as model_qrToken from "../model/qrToken.js";
+import type * as model_roster from "../model/roster.js";
 import type * as model_shiftTime from "../model/shiftTime.js";
 import type * as notifications from "../notifications.js";
 import type * as offices from "../offices.js";
@@ -103,6 +104,7 @@ import type * as superAdmin from "../superAdmin.js";
 import type * as teams from "../teams.js";
 import type * as timeEntries from "../timeEntries.js";
 import type * as users from "../users.js";
+import type * as workPatterns from "../workPatterns.js";
 
 import type {
   ApiFromModules,
@@ -170,6 +172,7 @@ declare const fullApi: ApiFromModules<{
   "model/projectAccess": typeof model_projectAccess;
   "model/proration": typeof model_proration;
   "model/qrToken": typeof model_qrToken;
+  "model/roster": typeof model_roster;
   "model/shiftTime": typeof model_shiftTime;
   notifications: typeof notifications;
   offices: typeof offices;
@@ -206,6 +209,7 @@ declare const fullApi: ApiFromModules<{
   teams: typeof teams;
   timeEntries: typeof timeEntries;
   users: typeof users;
+  workPatterns: typeof workPatterns;
 }>;
 
 /**

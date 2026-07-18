@@ -8,6 +8,7 @@ import {
   IconChevronRight,
   IconClockHour4,
   IconClockPlay,
+  IconCalendarTime,
   IconId,
   IconReceipt,
   IconFileInvoice,
@@ -112,6 +113,12 @@ export function HomeTiles() {
       mobileOrder: 6,
     },
     ...(attendanceLeads ? [] : [attendanceTile]),
+    {
+      title: "My Schedule",
+      description: "Your upcoming shifts, working hours and overtime",
+      icon: IconCalendarTime,
+      href: "/scheduling",
+    },
     {
       title: "My Timesheet",
       description: "Log time against projects and tasks",
