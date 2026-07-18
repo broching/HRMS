@@ -186,7 +186,7 @@ export function EntryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[90vh] overflow-x-hidden overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <IconClockHour4 className="size-5" />
@@ -206,7 +206,7 @@ export function EntryDialog({
           </div>
         )}
 
-        <div className="flex flex-col gap-4 py-1">
+        <div className="flex min-w-0 flex-col gap-4 py-1">
           {/* Project → task → comment: the logging spine */}
           <div className="flex flex-col gap-1.5">
             <Label className="text-xs">Project</Label>
@@ -217,7 +217,7 @@ export function EntryDialog({
                 setTaskId(NONE)
               }}
             >
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full min-w-0">
                 <SelectValue placeholder="Select a project" />
               </SelectTrigger>
               <SelectContent>
@@ -239,7 +239,7 @@ export function EntryDialog({
           <div className="flex flex-col gap-1.5">
             <Label className="text-xs">Task</Label>
             <Select value={taskId} onValueChange={setTaskId} disabled={!projectId}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full min-w-0">
                 <SelectValue placeholder="No task" />
               </SelectTrigger>
               <SelectContent>
@@ -268,9 +268,9 @@ export function EntryDialog({
             />
           </div>
 
-          {/* When + how long. `min-w-0` lets the native date/time inputs shrink
-              inside the grid instead of forcing horizontal overflow on mobile. */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* When + how long. Stacks on mobile so the native date/time inputs
+              never get cramped; `min-w-0` lets them shrink inside the grid. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex min-w-0 flex-col gap-1.5">
               <Label className="text-xs">Date</Label>
               <Input

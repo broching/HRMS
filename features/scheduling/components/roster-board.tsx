@@ -38,6 +38,7 @@ import {
 import { RosterDayGrid, type RosterPerson } from "./roster-day-grid"
 import { RosterWeekGrid, type AddOpts } from "./roster-week-grid"
 import { ShiftEditorDialog } from "./shift-editor-dialog"
+import { ConfirmDialog } from "@/components/shared/confirm-dialog"
 
 const ALL = "__all__"
 
@@ -97,6 +98,8 @@ export function RosterBoard({ scope }: { scope: "team" | "org" }) {
 
   const publish = useMutation(api.schedules.publishWeek)
   const scheduleOt = useMutation(api.overtime.schedule)
+  const [confirmPublish, setConfirmPublish] = React.useState(false)
+  const [otConfirm, setOtConfirm] = React.useState<RosterPerson | null>(null)
 
   // ── Filtering (client-side name search) ──
   const q = search.trim().toLowerCase()
@@ -200,7 +203,10 @@ export function RosterBoard({ scope }: { scope: "team" | "org" }) {
           </span>
         </div>
         {view === "week" && (
-          <Button onClick={handlePublish} disabled={(week?.draftCount ?? 0) === 0}>
+          <Button
+            onClick={() => setConfirmPublish(true)}
+            disabled={(week?.draftCount ?? 0) === 0}
+          >
             <IconSend className="size-4" />
             Publish week{week && week.draftCount > 0 ? ` (${week.draftCount})` : ""}
           </Button>
@@ -342,7 +348,7 @@ export function RosterBoard({ scope }: { scope: "team" | "org" }) {
                   },
                 })
               }
-              onConfirmOt={confirmSuggestion}
+              onConfirmOt={(person) => setOtConfirm(person)}
             />
           </Card>
         </>
@@ -362,6 +368,37 @@ export function RosterBoard({ scope }: { scope: "team" | "org" }) {
           defaultEnd={dialog.defaultEnd}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmPublish}
+        onOpenChange={setConfirmPublish}
+        title="Publish this week?"
+        description={
+          week && week.draftCount > 0
+            ? `${week.draftCount} draft shift${
+                week.draftCount === 1 ? "" : "s"
+              } for ${weekRangeLabel(monday)} will be released. Employees will see their published schedule.`
+            : `Shifts for ${weekRangeLabel(monday)} will be released to employees.`
+        }
+        confirmLabel="Publish week"
+        onConfirm={handlePublish}
+      />
+
+      <ConfirmDialog
+        open={otConfirm !== null}
+        onOpenChange={(o) => !o && setOtConfirm(null)}
+        title="Schedule overtime?"
+        description={
+          otConfirm?.otSuggestion
+            ? `Schedule ${otConfirm.otSuggestion.hours}h of overtime for ${otConfirm.name} (${otConfirm.otSuggestion.startTime}–${otConfirm.otSuggestion.endTime}). It's added to the roster and can be pulled into payroll.`
+            : "Schedule this overtime and add it to the roster?"
+        }
+        confirmLabel="Schedule OT"
+        onConfirm={async () => {
+          if (otConfirm) await confirmSuggestion(otConfirm)
+          setOtConfirm(null)
+        }}
+      />
     </div>
   )
 }

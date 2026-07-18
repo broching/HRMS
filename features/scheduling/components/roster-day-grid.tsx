@@ -13,6 +13,7 @@ import {
   formatMinutes,
   todayIso,
 } from "@/features/timesheets/lib/time"
+import { packLanes } from "@/features/timesheets/lib/layout"
 
 type Board = FunctionReturnType<typeof api.schedules.rosterDay>
 export type RosterPerson = Board["people"][number]
@@ -282,47 +283,65 @@ export function RosterDayGrid({
                     </button>
                   ))}
 
-                {/* Overtime blocks */}
-                {person.blocks
-                  .filter((b) => b.kind === "overtime")
-                  .map((b, i) => (
-                    <button
-                      key={`o${i}`}
-                      data-block
-                      onClick={() => onEditOvertime(person, b)}
-                      className="absolute inset-x-0.5 z-20 cursor-pointer overflow-hidden rounded-md border border-amber-500/70 bg-amber-400/25 px-1.5 py-1 text-left text-amber-800 hover:bg-amber-400/40 dark:text-amber-200"
-                      style={blockStyle(b)}
-                      title="Scheduled overtime"
-                    >
-                      <div className="text-[10px] font-semibold tabular-nums">{b.label}</div>
-                    </button>
-                  ))}
-
-                {/* Actual attendance (solid, semi-transparent, on top) */}
-                {person.blocks
-                  .filter((b) => b.kind === "actual")
-                  .map((b, i) => {
-                    const ongoing = b.endMinute == null
+                {/* Foreground events (overtime + actual attendance). Overlapping
+                    records are packed into side-by-side lanes — like the
+                    timesheet grid — so none obscure another. The scheduled ghost
+                    above stays full-width behind as the plan backdrop. */}
+                {packLanes(
+                  person.blocks
+                    .filter((b) => b.kind === "overtime" || b.kind === "actual")
+                    .map((b) => ({
+                      block: b,
+                      startMinute: b.startMinute,
+                      minutes: Math.max(15, endOf(b) - b.startMinute),
+                    })),
+                ).map(({ item, lane, lanes }, i) => {
+                  const b = item.block
+                  const { top, height } = blockStyle(b)
+                  const widthPct = 100 / lanes
+                  const pos: React.CSSProperties = {
+                    top,
+                    height,
+                    left: `calc(${lane * widthPct}% + 2px)`,
+                    width: `calc(${widthPct}% - 4px)`,
+                  }
+                  if (b.kind === "overtime") {
                     return (
-                      <div
-                        key={`a${i}`}
+                      <button
+                        key={`o${i}`}
                         data-block
-                        className={cn(
-                          "pointer-events-none absolute inset-x-2 z-20 overflow-hidden rounded-md border-l-2 px-1 py-0.5 text-left shadow-sm",
-                          ongoing
-                            ? "border-emerald-500 bg-emerald-200/70 text-emerald-900 dark:bg-emerald-800/60 dark:text-emerald-50"
-                            : "border-sky-500 bg-sky-200/70 text-sky-900 dark:bg-sky-800/60 dark:text-sky-50",
-                        )}
-                        style={blockStyle(b)}
-                        title="Actual clocked time"
+                        onClick={() => onEditOvertime(person, b)}
+                        className="absolute z-20 cursor-pointer overflow-hidden rounded-md border border-amber-500/70 bg-amber-400/25 px-1 py-1 text-left text-amber-800 hover:z-30 hover:bg-amber-400/40 dark:text-amber-200"
+                        style={pos}
+                        title="Scheduled overtime"
                       >
-                        <div className="text-[9px] font-semibold tabular-nums">
-                          {formatClock(b.startMinute)}–
-                          {b.endMinute != null ? formatClock(b.endMinute) : "now"}
+                        <div className="truncate text-[10px] font-semibold tabular-nums">
+                          {b.label}
                         </div>
-                      </div>
+                      </button>
                     )
-                  })}
+                  }
+                  const ongoing = b.endMinute == null
+                  return (
+                    <div
+                      key={`a${i}`}
+                      data-block
+                      className={cn(
+                        "pointer-events-none absolute z-20 overflow-hidden rounded-md border-l-2 px-1 py-0.5 text-left shadow-sm",
+                        ongoing
+                          ? "border-emerald-500 bg-emerald-200/70 text-emerald-900 dark:bg-emerald-800/60 dark:text-emerald-50"
+                          : "border-sky-500 bg-sky-200/70 text-sky-900 dark:bg-sky-800/60 dark:text-sky-50",
+                      )}
+                      style={pos}
+                      title="Actual clocked time"
+                    >
+                      <div className="truncate text-[9px] font-semibold tabular-nums">
+                        {formatClock(b.startMinute)}–
+                        {b.endMinute != null ? formatClock(b.endMinute) : "now"}
+                      </div>
+                    </div>
+                  )
+                })}
 
                 {/* OT suggestion */}
                 {person.otSuggestion && (

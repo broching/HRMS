@@ -5,13 +5,13 @@ import Link from "next/link";
 import { Menu, X } from "lucide-react";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
-import { PrismMark, Wordmark } from "./prism-mark";
-import Image from "next/image";
+import { LogoMark, Wordmark } from "./prism-mark";
 
 const LINKS = [
   { name: "Modules", href: "/#modules" },
   { name: "Pricing", href: "/#pricing" },
   { name: "FAQ", href: "/#faq" },
+  { name: "Support", href: "/support" },
   { name: "Contact", href: "/#contact" },
 ];
 
@@ -40,14 +40,7 @@ export function LandingNav() {
         }}
       >
         <Link href="/" aria-label="LeadMighty home" className="flex items-center gap-2">
-          <Image
-            src="/LeadMightylogo.png"
-            alt="LeadMighty Logo"
-            width={56}
-            height={56}
-            className="h-13 w-13"
-            priority
-          />
+          <LogoMark className="h-9 w-9" />
           <Wordmark />
         </Link>
 

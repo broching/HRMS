@@ -1,17 +1,7 @@
-import { PageHeader } from "@/components/shared/page-header"
-import { SchedulingSettings } from "@/features/scheduling/components/scheduling-settings"
-import { HrLoungeShell } from "@/features/hr-lounge/components/hr-lounge-shell"
+import { redirect } from "next/navigation"
 
+// Shift setup (work patterns + shift templates) now lives as a tab under
+// Roster & overtime (HR Lounge). Old links redirect there.
 export default function SchedulingSettingsPage() {
-  return (
-    <HrLoungeShell>
-      <div className="flex flex-col gap-6">
-        <PageHeader
-          title="Scheduling"
-          description="Work patterns auto-fill the roster for salaried staff; shift templates are reusable presets for building shifts quickly."
-        />
-        <SchedulingSettings />
-      </div>
-    </HrLoungeShell>
-  )
+  redirect("/hr-lounge/roster?view=setup")
 }

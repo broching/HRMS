@@ -145,13 +145,8 @@ const ITEMS: Item[] = [
     permission: "attendance:config",
     group: "Leave & attendance",
   },
-  {
-    label: "Scheduling",
-    icon: IconCalendarTime,
-    href: "/settings/scheduling",
-    permission: "scheduling:manage",
-    group: "Leave & attendance",
-  },
+  // Shift setup (work patterns + shift templates) now lives as a tab under
+  // Roster & OT above — no separate nav entry.
   // ── Insights ──
   {
     label: "Reports",

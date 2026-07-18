@@ -101,7 +101,7 @@ const CATALOG: SearchEntry[] = [
   { label: "Billing & plan", context: "HR Lounge", href: "/hr-lounge/billing", icon: IconCreditCard, permission: "org:manage", keywords: ["subscription", "stripe", "pricing", "plan", "seats", "upgrade", "payment method", "invoice"] },
   { label: "Attendance", context: "HR Lounge", href: "/hr-lounge/attendance", icon: IconClockCog, permission: "attendance:config", keywords: ["qr", "geofence", "office", "clock in", "clock-ins", "corrections", "attendance config"] },
   { label: "Roster & Overtime", context: "HR Lounge", href: "/hr-lounge/roster", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "overtime", "schedule", "shift", "attendance report"] },
-  { label: "Scheduling", context: "HR Lounge", href: "/settings/scheduling", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "shifts", "schedule", "working hours", "pattern", "shift template"] },
+  { label: "Shift setup", context: "HR Lounge", href: "/hr-lounge/roster?view=setup", icon: IconCalendarTime, permission: "scheduling:manage", keywords: ["roster", "shifts", "schedule", "working hours", "work pattern", "shift template", "scheduling"] },
 ]
 
 function canSee(

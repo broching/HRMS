@@ -21,7 +21,10 @@ export default function LeadMightyHrPage() {
       <LandingNav />
       <HrHero />
 
-      <div id="modules" className="scroll-mt-24 pt-16 md:pt-24">
+      <div
+        id="modules"
+        className="lm-blueprint scroll-mt-24 pt-16 pb-16 md:pt-24 md:pb-24"
+      >
         <div className="mx-auto mb-4 max-w-6xl px-5">
           <Reveal>
             <p className="lm-eyebrow" style={{ color: "var(--lm-accent)" }}>
@@ -37,7 +40,9 @@ export default function LeadMightyHrPage() {
 
       <PricingSection />
 
-      <FaqSection />
+      <div className="lm-blueprint">
+        <FaqSection />
+      </div>
 
       <ContactSection />
 

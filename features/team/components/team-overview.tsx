@@ -5,10 +5,15 @@ import Link from "next/link"
 import { useQuery } from "convex/react"
 import {
   IconCalendarStats,
+  IconCalendarCheck,
+  IconCalendarTime,
   IconChevronRight,
+  IconClockHour4,
   IconClockPlay,
   IconReceipt2,
+  IconFileDollar,
   IconFileInvoice,
+  IconFolders,
   IconSearch,
   IconStars,
   IconUsersPlus,
@@ -16,6 +21,8 @@ import {
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import { permitted, type Permission } from "@/convex/lib/permissions"
+import { useCurrentMember } from "@/hooks/use-current-member"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -45,43 +52,92 @@ type TeamCard = {
   description: string
   icon: Icon
   href?: string
+  // When set, the card only shows if the caller holds this permission. Mirrors
+  // the Team nav rail (nav-config.ts) so cards and nav stay in lockstep.
+  permission?: Permission
 }
 
+// Ordered approvals-first (the actions managers come here to do), then the team
+// views, then a coming-soon. Each card is gated by the same permission as its
+// Team nav entry, so people only see what they can actually open.
 const CARDS: TeamCard[] = [
+  // ── Approvals ──
   {
-    title: "Team Leave",
-    description: "Check your team leave planning",
-    icon: IconCalendarStats,
-    href: "/leave/calendar",
-  },
-  {
-    title: "Team Performance",
-    description: "Check your team goals for this quarter",
-    icon: IconStars,
-    href: "/performance/team",
-  },
-  {
-    title: "Team Timesheets",
-    description: "See time logged across your reporting line",
-    icon: IconClockPlay,
-    href: "/timesheets/team",
-  },
-  {
-    title: "Recruitment",
-    description: "Hiring a new employee in your team?",
-    icon: IconUsersPlus,
-  },
-  {
-    title: "Expense Claims",
-    description: "Check and approve your team's claims",
+    title: "Claim Approvals",
+    description: "Review and approve your team's expense claims",
     icon: IconReceipt2,
     href: "/claims/requests",
+    permission: "claims:approve",
   },
   {
     title: "Payment Requests",
     description: "Review and approve payment requests",
     icon: IconFileInvoice,
     href: "/payment-requests/requests",
+    permission: "payment_requests:approve",
+  },
+  {
+    title: "Payslip Approvals",
+    description: "Approve and sign off payroll payslips",
+    icon: IconFileDollar,
+    href: "/payroll/approvals",
+    permission: "payroll:approve",
+  },
+  {
+    title: "Leave Approvals",
+    description: "Approve leave requests from your team",
+    icon: IconCalendarCheck,
+    href: "/leave/requests",
+    permission: "leave:approve",
+  },
+  // ── Team views ──
+  {
+    title: "Team Calendar",
+    description: "See who's away across your team",
+    icon: IconCalendarStats,
+    href: "/leave/calendar",
+    permission: "leave:approve",
+  },
+  {
+    title: "Team Attendance",
+    description: "Review clocked attendance for your team",
+    icon: IconClockHour4,
+    href: "/attendance/team",
+    permission: "attendance:team",
+  },
+  {
+    title: "Team Timesheets",
+    description: "See time logged across your reporting line",
+    icon: IconClockPlay,
+    href: "/timesheets/team",
+    permission: "timesheets:team",
+  },
+  {
+    title: "Projects & Tasks",
+    description: "Manage your team's projects and tasks",
+    icon: IconFolders,
+    href: "/projects",
+    permission: "tasks:manage",
+  },
+  {
+    title: "Roster & OT",
+    description: "Schedule shifts and overtime",
+    icon: IconCalendarTime,
+    href: "/scheduling/roster",
+    permission: "scheduling:roster",
+  },
+  {
+    title: "Team Performance",
+    description: "Track your team's goals and reviews",
+    icon: IconStars,
+    href: "/performance/team",
+    permission: "performance:team",
+  },
+  // ── Coming soon ──
+  {
+    title: "Recruitment",
+    description: "Hiring a new employee in your team?",
+    icon: IconUsersPlus,
   },
 ]
 
@@ -90,9 +146,16 @@ function initials(first: string, last: string) {
 }
 
 export function TeamOverview() {
+  const member = useCurrentMember()
   const reports = useQuery(api.employees.myTeamRows)
   const departments = useQuery(api.departments.list) ?? []
   const offices = useQuery(api.offices.list) ?? []
+
+  // Only show a card the caller can actually open (undefined permission = always,
+  // e.g. the Recruitment "coming soon" teaser).
+  const visibleCards = CARDS.filter(
+    (c) => !c.permission || permitted(member?.permissions, c.permission),
+  )
 
   const [search, setSearch] = React.useState("")
   const [departmentId, setDepartmentId] = React.useState(ALL)
@@ -119,22 +182,21 @@ export function TeamOverview() {
   return (
     <div className="flex flex-col gap-6 px-4 lg:px-6">
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-        {/* Cards — on lg the column stretches to the "Who's away" card height;
-            capping the grid at 85% keeps the cards 15% shorter than it. */}
-        <div className="h-full">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:h-[85%] xl:grid-cols-3">
-          {CARDS.map((c) => {
+        {/* Compact quick actions — approvals first, then team views. Denser grid
+            so more fit per row across several rows. */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {visibleCards.map((c) => {
             const inner = (
               <Card
                 className={cn(
-                  "group h-full p-5 transition-colors",
+                  "group h-full gap-0 p-4 transition-colors",
                   c.href
                     ? "hover:border-primary/40 hover:bg-accent/40 cursor-pointer"
-                    : "opacity-70",
+                    : "opacity-60",
                 )}
               >
-                <div className="flex flex-col gap-6">
-                  <c.icon className="text-primary size-8" stroke={1.5} />
+                <div className="flex flex-col gap-3">
+                  <c.icon className="text-primary size-6" stroke={1.5} />
                   <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-1 font-semibold">
                       {c.title}
@@ -142,13 +204,11 @@ export function TeamOverview() {
                         <IconChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
                       ) : (
                         <span className="text-muted-foreground ml-1 text-[10px] font-normal uppercase">
-                          Coming soon
+                          Soon
                         </span>
                       )}
                     </div>
-                    <p className="text-muted-foreground text-sm">
-                      {c.description}
-                    </p>
+                    <p className="text-muted-foreground text-sm">{c.description}</p>
                   </div>
                 </div>
               </Card>
@@ -163,7 +223,6 @@ export function TeamOverview() {
               </div>
             )
           })}
-        </div>
         </div>
 
         {/* Who's away */}

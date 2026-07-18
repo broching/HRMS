@@ -215,6 +215,91 @@
   background: var(--lm-line-2);
 }
 
+/* ── Second surface: the cyanotype blueprint ───────────────────────────────
+   The printed inverse of the drafting sheet — a deep Prussian-navy ground with
+   a cyan hairline grid and white ink. Applied as a full-bleed band; it just
+   re-declares the palette tokens, so every child component (cards, eyebrows,
+   buttons, headings) inverts automatically with no per-component change. Pages
+   alternate .lm-root (paper) and .lm-blueprint bands down their length. */
+.lm-blueprint {
+  /* A bluer drafting sheet — a gentle tint that alternates with the near-white
+     paper, not a dark inversion. Ink + accent stay the light-theme navy/blue
+     (inherited), so the shift reads as "a different sheet," subtly. */
+  --lm-paper: #d9e6fb;
+  --lm-paper-2: #cfe0fa;
+  --lm-panel: #ffffff;      /* white cards pop on the tint */
+  --lm-panel-2: #eaf1fd;
+  --lm-line: #bfd2f1;
+  --lm-line-2: #a9c2ea;
+
+  position: relative;
+  isolation: isolate;
+  border-top: 1px solid #c4d6f2;
+  border-bottom: 1px solid #d0def6;
+  background-color: #d9e6fb;
+  background-image:
+    linear-gradient(to right, rgba(48, 100, 210, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(48, 100, 210, 0.08) 1px, transparent 1px);
+  background-size: 30px 30px, 30px 30px;
+}
+/* A soft blue wash so the tinted sheet has depth, not a flat fill. */
+.lm-blueprint::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58rem 34rem at 82% -12%, rgba(70, 125, 230, 0.1), transparent 64%),
+    radial-gradient(42rem 28rem at 2% 112%, rgba(90, 140, 235, 0.07), transparent 60%);
+}
+.lm-blueprint > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* An island that forces the light drafting palette inside any band — used to
+   keep the app-window recreations reading as light "printouts" when they sit on
+   a blueprint band. Mirrors the .lm-root token values. */
+.lm-sheet {
+  --lm-paper: #eef3fb;
+  --lm-paper-2: #e5edf9;
+  --lm-panel: #ffffff;
+  --lm-panel-2: #f5f8fe;
+  --lm-ink: #0c1a3a;
+  --lm-ink-2: #33436b;
+  --lm-muted: #64729a;
+  --lm-muted-2: #93a1c4;
+  --lm-line: #d3ddf0;
+  --lm-line-2: #b9c8e6;
+  --lm-accent: #1e56e8;
+  --lm-accent-2: #4b82ff;
+  --lm-shadow: 0 1px 2px rgba(12, 26, 58, 0.04), 0 12px 30px -18px rgba(12, 26, 58, 0.28);
+  --lm-shadow-lg: 0 2px 6px rgba(12, 26, 58, 0.05), 0 30px 60px -28px rgba(12, 26, 58, 0.35);
+  color: var(--lm-ink);
+}
+
+/* Smooth anchor jumps between sections (respects reduced motion below). */
+html:has(.lm-root) {
+  scroll-behavior: smooth;
+}
+
+/* Hero auto-advance progress bar — scales left→right over one dwell. */
+@keyframes lm-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.lm-progress-bar {
+  transform-origin: left center;
+  animation-name: lm-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
 /* Focus visibility (accessibility floor) */
 .lm-root :focus-visible {
   outline: 2px solid var(--lm-accent);
@@ -292,5 +377,8 @@
   }
   .lm-ink-draw {
     stroke-dashoffset: 0;
+  }
+  html:has(.lm-root) {
+    scroll-behavior: auto;
   }
 }

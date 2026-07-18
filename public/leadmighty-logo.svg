@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 268 60" width="268" height="60" fill="none">
+  <g transform="translate(6 6)">
+    <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#lm-tile)"/>
+    <path d="M9 24h8" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" opacity="0.95"/>
+    <path d="M17 13.5 34 24 17 34.5V13.5Z" fill="#ffffff" fill-opacity="0.16" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M34 24l7-6" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M34 24h8.5" stroke="#bcd4ff" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M34 24l7 6" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>
+  </g>
+  <text x="68" y="39" font-family="'Bricolage Grotesque','Segoe UI',system-ui,-apple-system,sans-serif" font-size="30" font-weight="700" letter-spacing="-1.2">
+    <tspan fill="#0C1A3A">Lead</tspan><tspan fill="#1E56E8">Mighty</tspan>
+  </text>
+  <defs>
+    <linearGradient id="lm-tile" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4B82FF"/>
+      <stop offset="1" stop-color="#1E56E8"/>
+    </linearGradient>
+  </defs>
+</svg>

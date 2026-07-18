@@ -16,7 +16,7 @@ import {
 // product," while the drafting tag keeps it in the blueprint register.
 function Frame({ tag, path, children }: { tag: string; path: string; children: React.ReactNode }) {
   return (
-    <div className="lm-frame">
+    <div className="lm-sheet lm-frame">
       <div className="lm-frame-bar">
         <span className="lm-frame-dot" />
         <span className="lm-frame-dot" />

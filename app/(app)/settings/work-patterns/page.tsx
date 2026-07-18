@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation"
 
-// Work patterns + shift templates are merged into one tabbed Scheduling page.
+// Work patterns live under the Roster & overtime → Shift setup tab.
 export default function WorkPatternsPage() {
-  redirect("/settings/scheduling")
+  redirect("/hr-lounge/roster?view=setup")
 }
