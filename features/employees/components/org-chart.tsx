@@ -135,6 +135,9 @@ export function OrgChart() {
     startY: number
     base: Map<EmpId, XY>
     moved: boolean
+    // Touch must hold ~250ms before a drag arms; a quick swipe does nothing
+    // (prevents accidental card moves + layout saves on phones).
+    armed: boolean
   } | null>(null)
 
   // Pending reporting-line reassignment awaiting confirmation.
@@ -380,23 +383,34 @@ export function OrgChart() {
     const subtree = canEditChart ? collectSubtree(node._id) : [node._id]
     const base = new Map<EmpId, XY>()
     for (const id of subtree) base.set(id, posOf(id))
-    dragRef.current = {
+    const isTouch = e.pointerType === "touch"
+    const ref = {
       nodeId: node._id,
       subtree,
       startX: e.clientX,
       startY: e.clientY,
       base,
       moved: false,
+      armed: !isTouch,
+    }
+    dragRef.current = ref
+    if (isTouch) {
+      window.setTimeout(() => {
+        if (dragRef.current === ref) ref.armed = true
+      }, 250)
     }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }
   function onCardPointerMove(e: React.PointerEvent) {
     const d = dragRef.current
     if (!d) return
-    if (
-      !d.moved &&
-      Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > DRAG_THRESHOLD
-    ) {
+    const dist = Math.hypot(e.clientX - d.startX, e.clientY - d.startY)
+    // A quick touch swipe (moved before the hold armed) is not a drag — drop it.
+    if (!d.armed) {
+      if (dist > DRAG_THRESHOLD) dragRef.current = null
+      return
+    }
+    if (!d.moved && dist > DRAG_THRESHOLD) {
       d.moved = true
       setDraggingId(d.nodeId)
     }
