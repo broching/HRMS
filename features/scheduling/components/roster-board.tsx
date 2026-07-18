@@ -305,8 +305,13 @@ export function RosterBoard({ scope }: { scope: "team" | "org" }) {
       ) : (
         <>
           <p className="text-muted-foreground text-xs">
-            Drag a column to add a shift or overtime. Solid bars are actual
-            clocked attendance overlaid on the schedule.
+            <span className="pointer-coarse:hidden">
+              Drag a column to add a shift or overtime.
+            </span>
+            <span className="pointer-fine:hidden">
+              Tap a column at a time to add a shift or overtime.
+            </span>{" "}
+            Solid bars are actual clocked attendance overlaid on the schedule.
           </p>
           <Card className="gap-0 overflow-hidden p-0">
             <RosterDayGrid

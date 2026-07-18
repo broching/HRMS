@@ -14,6 +14,7 @@ import {
   todayIso,
 } from "@/features/timesheets/lib/time"
 import { packLanes } from "@/features/timesheets/lib/layout"
+import { useLogGesture } from "@/features/timesheets/lib/use-log-gesture"
 
 type Day = FunctionReturnType<typeof api.timeEntries.teamDay>
 type Person = Day["people"][number]
@@ -63,15 +64,6 @@ export function TeamDayGrid({
 }) {
   const isToday = date === todayIso()
 
-  // Drag-to-size selection, keyed by the column (employee) it started in.
-  const [drag, setDrag] = React.useState<{
-    employeeId: string
-    fromMin: number
-    toMin: number
-  } | null>(null)
-  const dragRef = React.useRef(drag)
-  dragRef.current = drag
-
   // Shared visible window across every column.
   const timed = React.useMemo(() => {
     const all: { startMinute: number; minutes: number }[] = []
@@ -106,41 +98,26 @@ export function TeamDayGrid({
   const nowVisible = isToday && nowMin >= startHour * 60 && nowMin <= endHour * 60
   const nowTop = (nowMin - startHour * 60) * PX_PER_MIN
 
-  // Minute-of-day under the pointer within a column body, snapped to the grid.
-  function minuteAt(clientY: number, rect: DOMRect): number {
-    const y = clientY - rect.top
-    const raw = startHour * 60 + y / PX_PER_MIN
-    const snapped = Math.round(raw / SNAP) * SNAP
-    return Math.max(0, Math.min(24 * 60, snapped))
-  }
-
-  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>, person: Person) {
-    if (!onLog || !canLogFor?.(person.employeeId)) return
-    // Don't start a drag when pressing an existing block.
-    if ((e.target as HTMLElement).closest("[data-block]")) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const min = minuteAt(e.clientY, rect)
-    e.currentTarget.setPointerCapture(e.pointerId)
-    setDrag({ employeeId: person.employeeId, fromMin: min, toMin: min })
-  }
-
-  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!dragRef.current) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    setDrag((d) => (d ? { ...d, toMin: minuteAt(e.clientY, rect) } : d))
-  }
-
-  function handlePointerUp(person: Person) {
-    const d = dragRef.current
-    setDrag(null)
-    if (!d || !onLog) return
-    const lo = Math.min(d.fromMin, d.toMin)
-    const hi = Math.max(d.fromMin, d.toMin)
-    const span = hi - lo
-    const start = Math.min(lo, 24 * 60 - SNAP)
-    if (span < SNAP) onLog(person, date, start)
-    else onLog(person, date, start, Math.min(span, 24 * 60 - start))
-  }
+  // Drag to size on mouse; tap to log on touch (scrolling stays native).
+  const gesture = useLogGesture(
+    (clientY, rect) => {
+      const raw = startHour * 60 + (clientY - rect.top) / PX_PER_MIN
+      const snapped = Math.round(raw / SNAP) * SNAP
+      return Math.max(0, Math.min(24 * 60, snapped))
+    },
+    (employeeId, fromMin, toMin) => {
+      if (!onLog) return
+      const person = people.find((p) => p.employeeId === employeeId)
+      if (!person) return
+      const lo = Math.min(fromMin, toMin)
+      const hi = Math.max(fromMin, toMin)
+      const span = hi - lo
+      const start = Math.min(lo, 24 * 60 - SNAP)
+      if (span < SNAP) onLog(person, date, start)
+      else onLog(person, date, start, Math.min(span, 24 * 60 - start))
+    },
+  )
+  const drag = gesture.drag
 
   return (
     <div className="overflow-x-auto">
@@ -220,15 +197,22 @@ export function TeamDayGrid({
                 <div
                   className={cn(
                     "relative",
-                    logging && "cursor-copy touch-none",
+                    logging && "cursor-copy",
                     isToday && "bg-primary/[0.03]",
                   )}
                   style={{ height: bodyHeight }}
                   onPointerDown={
-                    logging ? (e) => handlePointerDown(e, person) : undefined
+                    logging
+                      ? (e) => {
+                          // Don't start a drag when pressing an existing block.
+                          if ((e.target as HTMLElement).closest("[data-block]")) return
+                          gesture.onDown(e, person.employeeId)
+                        }
+                      : undefined
                   }
-                  onPointerMove={logging ? handlePointerMove : undefined}
-                  onPointerUp={logging ? () => handlePointerUp(person) : undefined}
+                  onPointerMove={logging ? gesture.onMove : undefined}
+                  onPointerUp={logging ? gesture.onUp : undefined}
+                  onPointerCancel={logging ? gesture.onCancel : undefined}
                 >
                   {/* Hour lines */}
                   {hours.map((h, i) => (
@@ -257,7 +241,7 @@ export function TeamDayGrid({
                   )}
 
                   {/* Drag-to-size preview */}
-                  {drag && drag.employeeId === person.employeeId && (() => {
+                  {drag && drag.key === person.employeeId && (() => {
                     const lo = Math.min(drag.fromMin, drag.toMin)
                     const hi = Math.max(drag.fromMin, drag.toMin)
                     const span = Math.max(hi - lo, SNAP)

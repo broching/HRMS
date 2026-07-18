@@ -13,6 +13,7 @@ import {
   formatMinutes,
   todayIso,
 } from "@/features/timesheets/lib/time"
+import { useLogGesture } from "@/features/timesheets/lib/use-log-gesture"
 
 type Board = FunctionReturnType<typeof api.attendance.attendanceDayBoard>
 type Person = Board["people"][number]
@@ -48,22 +49,6 @@ export function AttendanceDayGrid({
   onSelectBlock?: (person: Person, block: Block) => void
 }) {
   const isToday = date === todayIso()
-
-  // Drag-to-select, keyed by the column (employee) it started in.
-  const [drag, setDrag] = React.useState<{
-    employeeId: string
-    fromMin: number
-    toMin: number
-  } | null>(null)
-  const dragRef = React.useRef(drag)
-  dragRef.current = drag
-
-  function minuteAt(clientY: number, rect: DOMRect, startHour: number): number {
-    const y = clientY - rect.top
-    const raw = startHour * 60 + y / PX_PER_MIN
-    const snapped = Math.round(raw / SNAP) * SNAP
-    return Math.max(0, Math.min(24 * 60, snapped))
-  }
 
   const [nowMin, setNowMin] = React.useState(() => {
     const n = new Date()
@@ -109,6 +94,25 @@ export function AttendanceDayGrid({
   const nowVisible = isToday && nowMin >= startHour * 60 && nowMin <= endHour * 60
   const nowTop = (nowMin - startHour * 60) * PX_PER_MIN
 
+  // Drag to select on mouse; tap to log on touch (scrolling stays native).
+  const gesture = useLogGesture(
+    (clientY, rect) => {
+      const raw = startHour * 60 + (clientY - rect.top) / PX_PER_MIN
+      const snapped = Math.round(raw / SNAP) * SNAP
+      return Math.max(0, Math.min(24 * 60, snapped))
+    },
+    (employeeId, fromMin, toMin) => {
+      if (!onAdd) return
+      const person = people.find((p) => p.employeeId === employeeId)
+      if (!person) return
+      const lo = Math.min(fromMin, toMin)
+      const hi = Math.max(fromMin, toMin)
+      const end = hi > lo ? hi : lo + SNAP
+      onAdd(person, lo, Math.min(end, 24 * 60))
+    },
+  )
+  const drag = gesture.drag
+
   // Assign overlapping sessions to side-by-side columns (calendar-style) so they
   // stay distinguishable instead of stacking. Returns each block's column index
   // and the number of columns in its overlap cluster.
@@ -149,29 +153,6 @@ export function AttendanceDayGrid({
     }
     flush()
     return pos
-  }
-
-  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>, person: Person) {
-    if (!onAdd) return
-    if ((e.target as HTMLElement).closest("[data-block]")) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const min = minuteAt(e.clientY, rect, startHour)
-    e.currentTarget.setPointerCapture(e.pointerId)
-    setDrag({ employeeId: person.employeeId, fromMin: min, toMin: min })
-  }
-  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!dragRef.current) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    setDrag((d) => (d ? { ...d, toMin: minuteAt(e.clientY, rect, startHour) } : d))
-  }
-  function handlePointerUp(person: Person) {
-    const d = dragRef.current
-    setDrag(null)
-    if (!d || !onAdd) return
-    const lo = Math.min(d.fromMin, d.toMin)
-    const hi = Math.max(d.fromMin, d.toMin)
-    const end = hi > lo ? hi : lo + SNAP
-    onAdd(person, lo, Math.min(end, 24 * 60))
   }
 
   return (
@@ -236,14 +217,20 @@ export function AttendanceDayGrid({
                 className={cn(
                   "relative",
                   isToday && "bg-primary/[0.02]",
-                  onAdd && "cursor-copy touch-none",
+                  onAdd && "cursor-copy",
                 )}
                 style={{ height: bodyHeight }}
                 onPointerDown={
-                  onAdd ? (e) => handlePointerDown(e, person) : undefined
+                  onAdd
+                    ? (e) => {
+                        if ((e.target as HTMLElement).closest("[data-block]")) return
+                        gesture.onDown(e, person.employeeId)
+                      }
+                    : undefined
                 }
-                onPointerMove={onAdd ? handlePointerMove : undefined}
-                onPointerUp={onAdd ? () => handlePointerUp(person) : undefined}
+                onPointerMove={onAdd ? gesture.onMove : undefined}
+                onPointerUp={onAdd ? gesture.onUp : undefined}
+                onPointerCancel={onAdd ? gesture.onCancel : undefined}
               >
                 {/* Hour lines + 15-min minor ticks */}
                 {hours.map((h, i) => (
@@ -280,7 +267,7 @@ export function AttendanceDayGrid({
                 )}
 
                 {/* Drag-to-select preview */}
-                {drag && drag.employeeId === person.employeeId && (() => {
+                {drag && drag.key === person.employeeId && (() => {
                   const lo = Math.min(drag.fromMin, drag.toMin)
                   const hi = Math.max(drag.fromMin, drag.toMin)
                   const span = Math.max(hi - lo, SNAP)

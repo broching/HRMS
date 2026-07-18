@@ -7,7 +7,8 @@ import type { FunctionReturnType } from "convex/server"
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
@@ -95,8 +96,11 @@ export function ProjectBoard({
     setItems(next)
   }, [data])
 
+  // Mouse drags after a small movement; touch needs a short hold so swipes
+  // scroll the board instead of picking up a card.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
     useSensor(KeyboardSensor),
   )
 

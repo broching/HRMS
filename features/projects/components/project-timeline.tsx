@@ -135,6 +135,9 @@ export function ProjectTimeline({
     span: { start: string; end: string },
   ) {
     if (!canManage) return
+    // Touch scrolls/pans the chart; rescheduling by drag stays a mouse
+    // interaction (tap opens the task, where dates are editable).
+    if (e.pointerType === "touch") return
     e.preventDefault()
     setDrag({
       taskId: t._id,

@@ -15,6 +15,7 @@ import {
   todayIso,
 } from "@/features/timesheets/lib/time"
 import { packLanes } from "@/features/timesheets/lib/layout"
+import { useLogGesture } from "@/features/timesheets/lib/use-log-gesture"
 
 type Entry = FunctionReturnType<typeof api.timeEntries.mine>[number]
 
@@ -42,16 +43,6 @@ export function TimeGrid({
   readOnly?: boolean
 }) {
   const today = todayIso()
-
-  // Drag-to-size selection: press on an empty slot and drag down to set the
-  // block length. A press with no drag falls back to a default-length entry.
-  const [drag, setDrag] = React.useState<{
-    date: string
-    fromMin: number
-    toMin: number
-  } | null>(null)
-  const dragRef = React.useRef(drag)
-  dragRef.current = drag
 
   // Compute a shared visible window across all columns.
   const timed = React.useMemo(() => {
@@ -86,42 +77,25 @@ export function TimeGrid({
   const nowVisible = nowMin >= startHour * 60 && nowMin <= endHour * 60
   const nowTop = (nowMin - startHour * 60) * PX_PER_MIN
 
-  // Minute-of-day under the pointer within a column body, snapped to the grid.
-  function minuteAt(clientY: number, rect: DOMRect): number {
-    const y = clientY - rect.top
-    const raw = startHour * 60 + y / PX_PER_MIN
-    const snapped = Math.round(raw / SNAP) * SNAP
-    return Math.max(0, Math.min(24 * 60, snapped))
-  }
-
-  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>, date: string) {
-    if (readOnly || !onCreate) return
-    // Don't start a drag when pressing an existing block.
-    if ((e.target as HTMLElement).closest("[data-block]")) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const min = minuteAt(e.clientY, rect)
-    e.currentTarget.setPointerCapture(e.pointerId)
-    setDrag({ date, fromMin: min, toMin: min })
-  }
-
-  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!dragRef.current) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    setDrag((d) => (d ? { ...d, toMin: minuteAt(e.clientY, rect) } : d))
-  }
-
-  function handlePointerUp() {
-    const d = dragRef.current
-    setDrag(null)
-    if (!d || !onCreate) return
-    const lo = Math.min(d.fromMin, d.toMin)
-    const hi = Math.max(d.fromMin, d.toMin)
-    const span = hi - lo
-    const start = Math.min(lo, 24 * 60 - SNAP)
-    // A press with (almost) no drag → default-length entry; a real drag sizes it.
-    if (span < SNAP) onCreate(d.date, start)
-    else onCreate(d.date, start, Math.min(span, 24 * 60 - start))
-  }
+  // Drag to size on mouse; tap to create on touch (scrolling stays native).
+  // A press with (almost) no drag → default-length entry; a real drag sizes it.
+  const gesture = useLogGesture(
+    (clientY, rect) => {
+      const raw = startHour * 60 + (clientY - rect.top) / PX_PER_MIN
+      const snapped = Math.round(raw / SNAP) * SNAP
+      return Math.max(0, Math.min(24 * 60, snapped))
+    },
+    (date, fromMin, toMin) => {
+      if (!onCreate) return
+      const lo = Math.min(fromMin, toMin)
+      const hi = Math.max(fromMin, toMin)
+      const span = hi - lo
+      const start = Math.min(lo, 24 * 60 - SNAP)
+      if (span < SNAP) onCreate(date, start)
+      else onCreate(date, start, Math.min(span, 24 * 60 - start))
+    },
+  )
+  const drag = gesture.drag
 
   return (
     <div className="overflow-x-auto">
@@ -193,14 +167,20 @@ export function TimeGrid({
                 {/* Column body */}
                 <div
                   className={cn(
-                    "relative touch-none",
+                    "relative",
                     !readOnly && "cursor-copy",
                     isToday && "bg-primary/[0.03]",
                   )}
                   style={{ height: bodyHeight }}
-                  onPointerDown={(e) => handlePointerDown(e, date)}
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
+                  onPointerDown={(e) => {
+                    if (readOnly || !onCreate) return
+                    // Don't start a drag when pressing an existing block.
+                    if ((e.target as HTMLElement).closest("[data-block]")) return
+                    gesture.onDown(e, date)
+                  }}
+                  onPointerMove={gesture.onMove}
+                  onPointerUp={gesture.onUp}
+                  onPointerCancel={gesture.onCancel}
                 >
                   {/* Hour lines */}
                   {hours.map((h, i) => (
@@ -229,7 +209,7 @@ export function TimeGrid({
                   )}
 
                   {/* Drag-to-size preview */}
-                  {drag && drag.date === date && (() => {
+                  {drag && drag.key === date && (() => {
                     const lo = Math.min(drag.fromMin, drag.toMin)
                     const hi = Math.max(drag.fromMin, drag.toMin)
                     const span = Math.max(hi - lo, SNAP)

@@ -7,7 +7,8 @@ import { useMutation } from "convex/react"
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
@@ -44,8 +45,11 @@ export function ProjectPortfolioBoard({
   // Optimistic phase overrides so a dropped card stays put instantly.
   const [override, setOverride] = React.useState<Record<string, ProjectPhase>>({})
 
+  // Mouse drags after a small movement; touch needs a short hold so swipes
+  // scroll the board instead of picking up a card.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
     useSensor(KeyboardSensor),
   )
 

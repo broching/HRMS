@@ -187,7 +187,13 @@ export function AttendanceCalendar({ scope }: { scope: "team" | "org" }) {
             ))}
           </div>
           <p className="text-muted-foreground text-xs">
-            Drag on a column to record attendance for that person.
+            <span className="pointer-coarse:hidden">
+              Drag on a column to record attendance for that person.
+            </span>
+            <span className="pointer-fine:hidden">
+              Tap a column at a time to record attendance — adjust the exact
+              times in the dialog.
+            </span>
           </p>
           <Card className="gap-0 overflow-hidden p-0">
             <AttendanceDayGrid

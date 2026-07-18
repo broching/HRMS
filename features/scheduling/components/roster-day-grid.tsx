@@ -14,6 +14,7 @@ import {
   todayIso,
 } from "@/features/timesheets/lib/time"
 import { packLanes } from "@/features/timesheets/lib/layout"
+import { useLogGesture } from "@/features/timesheets/lib/use-log-gesture"
 
 type Board = FunctionReturnType<typeof api.schedules.rosterDay>
 export type RosterPerson = Board["people"][number]
@@ -53,14 +54,6 @@ export function RosterDayGrid({
 }) {
   const isToday = date === todayIso()
 
-  const [drag, setDrag] = React.useState<{
-    employeeId: string
-    fromMin: number
-    toMin: number
-  } | null>(null)
-  const dragRef = React.useRef(drag)
-  dragRef.current = drag
-
   const [nowMin, setNowMin] = React.useState(() => {
     const n = new Date()
     return n.getHours() * 60 + n.getMinutes()
@@ -72,13 +65,6 @@ export function RosterDayGrid({
     }, 60_000)
     return () => clearInterval(t)
   }, [])
-
-  function minuteAt(clientY: number, rect: DOMRect, startHour: number): number {
-    const y = clientY - rect.top
-    const raw = startHour * 60 + y / PX_PER_MIN
-    const snapped = Math.round(raw / SNAP) * SNAP
-    return Math.max(0, Math.min(24 * 60, snapped))
-  }
 
   const endOf = React.useCallback(
     (b: Block) =>
@@ -109,27 +95,23 @@ export function RosterDayGrid({
   const nowVisible = isToday && nowMin >= startHour * 60 && nowMin <= endHour * 60
   const nowTop = (nowMin - startHour * 60) * PX_PER_MIN
 
-  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>, person: RosterPerson) {
-    if ((e.target as HTMLElement).closest("[data-block]")) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const min = minuteAt(e.clientY, rect, startHour)
-    e.currentTarget.setPointerCapture(e.pointerId)
-    setDrag({ employeeId: person.employeeId, fromMin: min, toMin: min })
-  }
-  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!dragRef.current) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    setDrag((d) => (d ? { ...d, toMin: minuteAt(e.clientY, rect, startHour) } : d))
-  }
-  function handlePointerUp(person: RosterPerson) {
-    const d = dragRef.current
-    setDrag(null)
-    if (!d) return
-    const lo = Math.min(d.fromMin, d.toMin)
-    const hi = Math.max(d.fromMin, d.toMin)
-    const end = hi > lo ? hi : lo + 60
-    onAdd(person, lo, Math.min(end, 24 * 60))
-  }
+  // Drag to select on mouse; tap to add on touch (scrolling stays native).
+  const gesture = useLogGesture(
+    (clientY, rect) => {
+      const raw = startHour * 60 + (clientY - rect.top) / PX_PER_MIN
+      const snapped = Math.round(raw / SNAP) * SNAP
+      return Math.max(0, Math.min(24 * 60, snapped))
+    },
+    (employeeId, fromMin, toMin) => {
+      const person = people.find((p) => p.employeeId === employeeId)
+      if (!person) return
+      const lo = Math.min(fromMin, toMin)
+      const hi = Math.max(fromMin, toMin)
+      const end = hi > lo ? hi : lo + 60
+      onAdd(person, lo, Math.min(end, 24 * 60))
+    },
+  )
+  const drag = gesture.drag
 
   function blockStyle(b: Block) {
     const top = (b.startMinute - startHour * 60) * PX_PER_MIN
@@ -199,11 +181,15 @@ export function RosterDayGrid({
 
               {/* Body */}
               <div
-                className={cn("relative cursor-copy touch-none", isToday && "bg-primary/[0.02]")}
+                className={cn("relative cursor-copy", isToday && "bg-primary/[0.02]")}
                 style={{ height: bodyHeight }}
-                onPointerDown={(e) => handlePointerDown(e, person)}
-                onPointerMove={handlePointerMove}
-                onPointerUp={() => handlePointerUp(person)}
+                onPointerDown={(e) => {
+                  if ((e.target as HTMLElement).closest("[data-block]")) return
+                  gesture.onDown(e, person.employeeId)
+                }}
+                onPointerMove={gesture.onMove}
+                onPointerUp={gesture.onUp}
+                onPointerCancel={gesture.onCancel}
               >
                 {/* Gridlines */}
                 {hours.map((h, i) => (
@@ -239,7 +225,7 @@ export function RosterDayGrid({
                 )}
 
                 {/* Drag preview */}
-                {drag && drag.employeeId === person.employeeId && (() => {
+                {drag && drag.key === person.employeeId && (() => {
                   const lo = Math.min(drag.fromMin, drag.toMin)
                   const hi = Math.max(drag.fromMin, drag.toMin)
                   const span = Math.max(hi - lo, SNAP)

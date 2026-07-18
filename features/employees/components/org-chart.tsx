@@ -108,7 +108,13 @@ export function OrgChart() {
   const setManager = useMutation(api.employees.setManager)
 
   const [highlight, setHighlight] = React.useState<Highlight>(null)
-  const [sidebarOpen, setSidebarOpen] = React.useState(true)
+  // The filter rail starts closed and opens on desktop after mount (matching
+  // the media query on the client avoids an SSR hydration mismatch). On phones
+  // it renders as an overlay drawer so the canvas keeps the full width.
+  const [sidebarOpen, setSidebarOpen] = React.useState(false)
+  React.useEffect(() => {
+    if (window.matchMedia("(min-width: 768px)").matches) setSidebarOpen(true)
+  }, [])
   const [addOpen, setAddOpen] = React.useState(false)
   const [collapsed, setCollapsed] = React.useState<Set<EmpId>>(new Set())
 
@@ -292,21 +298,70 @@ export function OrgChart() {
     }
   }
 
-  // ─── Canvas pan (empty space only) ──────────────────────────────────────
+  // ─── Canvas pan (empty space only) + two-finger pinch zoom ─────────────
+  const pointers = React.useRef(new Map<number, { x: number; y: number }>())
+  const pinch = React.useRef<{
+    dist: number
+    scale: number
+    // Canvas-space point under the pinch midpoint at pinch start.
+    canvasX: number
+    canvasY: number
+  } | null>(null)
+
   function onPointerDown(e: React.PointerEvent) {
     if ((e.target as HTMLElement).closest("[data-card]")) return
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pointers.current.size === 2) {
+      // Second finger: switch from panning to pinching.
+      pan.current = null
+      const [a, b] = [...pointers.current.values()]
+      const rect = viewportRef.current!.getBoundingClientRect()
+      const midX = (a.x + b.x) / 2 - rect.left
+      const midY = (a.y + b.y) / 2 - rect.top
+      pinch.current = {
+        dist: Math.hypot(a.x - b.x, a.y - b.y),
+        scale: view.scale,
+        canvasX: (midX - view.x) / view.scale,
+        canvasY: (midY - view.y) / view.scale,
+      }
+      return
+    }
     pan.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }
   }
   function onPointerMove(e: React.PointerEvent) {
+    if (pointers.current.has(e.pointerId)) {
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    }
+    const pz = pinch.current
+    if (pz && pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()]
+      const rect = viewportRef.current!.getBoundingClientRect()
+      const midX = (a.x + b.x) / 2 - rect.left
+      const midY = (a.y + b.y) / 2 - rect.top
+      const dist = Math.hypot(a.x - b.x, a.y - b.y)
+      const scale = Math.min(
+        MAX_SCALE,
+        Math.max(MIN_SCALE, pz.scale * (dist / pz.dist)),
+      )
+      // Keep the canvas point that started under the fingers pinned to them.
+      setView({
+        scale,
+        x: midX - pz.canvasX * scale,
+        y: midY - pz.canvasY * scale,
+      })
+      return
+    }
     const d = pan.current
     if (!d) return
     const nx = d.vx + (e.clientX - d.x)
     const ny = d.vy + (e.clientY - d.y)
     setView((v) => ({ ...v, x: nx, y: ny }))
   }
-  function endPan() {
-    pan.current = null
+  function endPan(e: React.PointerEvent) {
+    pointers.current.delete(e.pointerId)
+    if (pointers.current.size < 2) pinch.current = null
+    if (pointers.current.size === 0) pan.current = null
   }
   function zoom(delta: number) {
     setView((v) => ({
@@ -565,13 +620,31 @@ export function OrgChart() {
     <div
       ref={containerRef}
       className={cn(
-        "mx-4 flex overflow-hidden rounded-xl border lg:mx-6",
+        "relative mx-4 flex overflow-hidden rounded-xl border lg:mx-6",
         isFullscreen ? "bg-background h-screen w-screen rounded-none" : "h-[34rem]",
       )}
     >
-      {/* Sidebar */}
+      {/* Sidebar — inline rail on desktop, overlay drawer on phones */}
       {sidebarOpen && (
-        <aside className="bg-muted/30 w-60 shrink-0 overflow-y-auto border-r p-4 text-sm">
+        <>
+          <div
+            className="absolute inset-0 z-20 bg-black/25 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+            aria-hidden
+          />
+          <aside className="bg-background absolute inset-y-0 left-0 z-30 w-64 shrink-0 overflow-y-auto border-r p-4 text-sm shadow-xl md:static md:z-auto md:w-60 md:bg-muted/30 md:shadow-none">
+            <div className="mb-2 flex items-center justify-between md:hidden">
+              <span className="text-sm font-semibold">Filters</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                onClick={() => setSidebarOpen(false)}
+                aria-label="Close filters"
+              >
+                <IconLayoutSidebarLeftCollapse className="size-4" />
+              </Button>
+            </div>
           <p className="text-muted-foreground mb-2 text-xs font-semibold uppercase">
             Department
           </p>
@@ -640,7 +713,8 @@ export function OrgChart() {
             {canEditChart &&
               " Drop a person onto another to change who they report to."}
           </p>
-        </aside>
+          </aside>
+        </>
       )}
 
       {/* Canvas */}
@@ -653,20 +727,22 @@ export function OrgChart() {
             ) : (
               <IconLayoutSidebarLeftExpand className="size-4" />
             )}
-            {sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+            <span className="hidden sm:inline">
+              {sidebarOpen ? "Hide sidebar" : "Filters"}
+            </span>
           </Button>
         </div>
 
         {/* Toolbar (right) */}
-        <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={autoArrange}>
+        <div className="absolute right-3 top-3 z-10 flex max-w-[calc(100%-4.5rem)] flex-wrap items-center justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={autoArrange} title="Auto arrange">
             <IconLayoutGrid className="size-4" />
-            Auto arrange
+            <span className="hidden sm:inline">Auto arrange</span>
           </Button>
           {canManageEmployees && (
             <Button size="sm" onClick={() => setAddOpen(true)}>
               <IconPlus className="size-4" />
-              Add
+              <span className="hidden sm:inline">Add</span>
             </Button>
           )}
           <div className="bg-background flex items-center rounded-md border">
@@ -709,6 +785,7 @@ export function OrgChart() {
           onPointerMove={onPointerMove}
           onPointerUp={endPan}
           onPointerLeave={endPan}
+          onPointerCancel={endPan}
         >
           <div
             className="relative origin-top-left"
