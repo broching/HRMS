@@ -31,6 +31,7 @@ import {
   minutesToClock,
 } from "@/features/timesheets/lib/time"
 import { AttendanceDayGrid } from "@/features/attendance/components/attendance-day-grid"
+import { AttendanceRecordDialog } from "@/features/attendance/components/attendance-record-dialog"
 import {
   ManagerAdjustDialog,
   type AdjustPrefill,
@@ -38,12 +39,18 @@ import {
 
 const ALL = "__all__"
 
+type BoardPerson = NonNullable<
+  ReturnType<typeof useQuery<typeof api.attendance.attendanceDayBoard>>
+>["people"][number]
+type SelectedBlock = { person: BoardPerson; block: BoardPerson["blocks"][number] }
+
 export function AttendanceCalendar({ scope }: { scope: "team" | "org" }) {
   const [anchor, setAnchor] = React.useState(() => todayIso())
   const [search, setSearch] = React.useState("")
   const [departmentId, setDepartmentId] = React.useState(ALL)
   const [teamId, setTeamId] = React.useState(ALL)
   const [addDraft, setAddDraft] = React.useState<AdjustPrefill | null>(null)
+  const [selected, setSelected] = React.useState<SelectedBlock | null>(null)
 
   const departments = useQuery(api.departments.list) ?? []
   const teams = useQuery(api.teams.list) ?? []
@@ -194,6 +201,7 @@ export function AttendanceCalendar({ scope }: { scope: "team" | "org" }) {
                   outTime: minutesToClock(end),
                 })
               }
+              onSelectBlock={(person, block) => setSelected({ person, block })}
             />
           </Card>
         </>
@@ -204,6 +212,17 @@ export function AttendanceCalendar({ scope }: { scope: "team" | "org" }) {
         onOpenChange={(o) => !o && setAddDraft(null)}
         prefill={addDraft ?? undefined}
       />
+
+      {selected && (
+        <AttendanceRecordDialog
+          open={selected !== null}
+          onOpenChange={(o) => !o && setSelected(null)}
+          block={selected.block}
+          employeeId={selected.person.employeeId}
+          employeeName={selected.person.name}
+          date={anchor}
+        />
+      )}
     </div>
   )
 }

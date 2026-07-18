@@ -40,10 +40,12 @@ export function AttendanceDayGrid({
   date,
   people,
   onAdd,
+  onSelectBlock,
 }: {
   date: string
   people: Person[]
   onAdd?: (person: Person, startMinute: number, endMinute: number) => void
+  onSelectBlock?: (person: Person, block: Block) => void
 }) {
   const isToday = date === todayIso()
 
@@ -107,6 +109,48 @@ export function AttendanceDayGrid({
   const nowVisible = isToday && nowMin >= startHour * 60 && nowMin <= endHour * 60
   const nowTop = (nowMin - startHour * 60) * PX_PER_MIN
 
+  // Assign overlapping sessions to side-by-side columns (calendar-style) so they
+  // stay distinguishable instead of stacking. Returns each block's column index
+  // and the number of columns in its overlap cluster.
+  function layoutBlocks(blocks: Block[]) {
+    const items = blocks
+      .map((b) => ({
+        id: b._id as string,
+        start: b.clockInMinute,
+        end: Math.max(b.clockInMinute + 1, endMinuteOf(b, endHour * 60)),
+      }))
+      .sort((a, b) => a.start - b.start || a.end - b.end)
+
+    const pos = new Map<string, { col: number; cols: number }>()
+    let cluster: typeof items = []
+    let clusterEnd = -Infinity
+
+    const flush = () => {
+      const colEnds: number[] = [] // running end-minute per column
+      for (const it of cluster) {
+        let col = colEnds.findIndex((end) => end <= it.start)
+        if (col === -1) {
+          col = colEnds.length
+          colEnds.push(it.end)
+        } else {
+          colEnds[col] = it.end
+        }
+        pos.set(it.id, { col, cols: 0 })
+      }
+      for (const it of cluster) pos.get(it.id)!.cols = colEnds.length
+      cluster = []
+      clusterEnd = -Infinity
+    }
+
+    for (const it of items) {
+      if (cluster.length && it.start >= clusterEnd) flush()
+      cluster.push(it)
+      clusterEnd = Math.max(clusterEnd, it.end)
+    }
+    flush()
+    return pos
+  }
+
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>, person: Person) {
     if (!onAdd) return
     if ((e.target as HTMLElement).closest("[data-block]")) return
@@ -151,7 +195,9 @@ export function AttendanceDayGrid({
 
         {/* One column per person */}
         <div className="flex flex-1">
-          {people.map((person) => (
+          {people.map((person) => {
+            const layout = layoutBlocks(person.blocks)
+            return (
             <div
               key={person.employeeId}
               className="flex min-w-[150px] flex-1 flex-col border-l first:border-l-0"
@@ -259,30 +305,75 @@ export function AttendanceDayGrid({
                   const top = (b.clockInMinute - startHour * 60) * PX_PER_MIN
                   const height = Math.max(18, (end - b.clockInMinute) * PX_PER_MIN - 2)
                   const ongoing = b.clockOutMinute == null
+                  // Side-by-side placement within an overlap cluster.
+                  const { col, cols } = layout.get(b._id as string) ?? {
+                    col: 0,
+                    cols: 1,
+                  }
+                  const left = `calc(${(col / cols) * 100}% + 2px)`
+                  const width = `calc(${100 / cols}% - ${cols > 1 ? 3 : 4}px)`
+                  const compact = cols > 1
                   return (
                     <div
                       key={b._id}
                       data-block
+                      role={onSelectBlock ? "button" : undefined}
+                      tabIndex={onSelectBlock ? 0 : undefined}
+                      onClick={
+                        onSelectBlock
+                          ? (e) => {
+                              e.stopPropagation()
+                              onSelectBlock(person, b)
+                            }
+                          : undefined
+                      }
+                      onKeyDown={
+                        onSelectBlock
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault()
+                                onSelectBlock(person, b)
+                              }
+                            }
+                          : undefined
+                      }
                       className={cn(
-                        "absolute inset-x-0.5 z-10 overflow-hidden rounded-md border-l-2 px-1.5 py-1 text-left shadow-sm",
+                        "absolute z-10 overflow-hidden rounded-md border-l-2 py-1 text-left shadow-sm",
+                        compact ? "px-1" : "px-1.5",
+                        onSelectBlock &&
+                          "cursor-pointer transition-shadow hover:z-20 hover:shadow-md focus:z-20 focus:ring-primary/50 focus:ring-2 focus:outline-none",
                         ongoing
-                          ? "border-emerald-500 bg-emerald-100/80 text-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-100"
-                          : "border-sky-500 bg-sky-100/80 text-sky-900 dark:bg-sky-950/50 dark:text-sky-100",
+                          ? "border-emerald-500 bg-emerald-100/90 text-emerald-900 dark:bg-emerald-950/70 dark:text-emerald-100"
+                          : "border-sky-500 bg-sky-100/90 text-sky-900 dark:bg-sky-950/70 dark:text-sky-100",
                       )}
-                      style={{ top, height }}
+                      style={{ top, height, left, width }}
                       title={`${formatClock(b.clockInMinute)} – ${
                         b.clockOutMinute != null
                           ? formatClock(b.clockOutMinute)
                           : "now"
                       }${b.method === "manual" ? " · added manually" : ""}`}
                     >
-                      <div className="text-[10px] font-semibold tabular-nums">
-                        {formatClock(b.clockInMinute)} –{" "}
-                        {b.clockOutMinute != null
-                          ? formatClock(b.clockOutMinute)
-                          : "now"}
+                      <div
+                        className={cn(
+                          "font-semibold tabular-nums",
+                          compact ? "text-[9px] leading-tight" : "text-[10px]",
+                        )}
+                      >
+                        {formatClock(b.clockInMinute)}
+                        {compact ? "" : " – "}
+                        {compact ? (
+                          <span className="block">
+                            {b.clockOutMinute != null
+                              ? formatClock(b.clockOutMinute)
+                              : "now"}
+                          </span>
+                        ) : b.clockOutMinute != null ? (
+                          formatClock(b.clockOutMinute)
+                        ) : (
+                          "now"
+                        )}
                       </div>
-                      {b.method === "manual" && (
+                      {b.method === "manual" && !compact && (
                         <div className="text-[9px] opacity-70">manual</div>
                       )}
                     </div>
@@ -290,7 +381,8 @@ export function AttendanceDayGrid({
                 })}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </div>

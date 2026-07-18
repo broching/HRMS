@@ -607,6 +607,41 @@ export const adjustRecord = mutation({
   },
 });
 
+// Delete an attendance record (manager/HR). Used from the day board to remove a
+// mistaken or duplicate clock session.
+export const deleteRecord = mutation({
+  args: { recordId: v.id("attendanceRecords") },
+  returns: v.null(),
+  handler: async (ctx, { recordId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const rec = await ctx.db.get(recordId);
+    if (!rec || rec.orgId !== orgCtx.orgId) {
+      throw new Error("Attendance record not found.");
+    }
+    await assertCanManageAttendance(ctx, orgCtx, rec.employeeId);
+    await ctx.db.delete(recordId);
+    const emp = await ctx.db.get(rec.employeeId);
+    await notify(
+      ctx,
+      orgCtx.orgId,
+      emp?.userId,
+      "attendance.adjusted",
+      "Attendance removed",
+      `An attendance record for ${rec.date} was removed by your manager.`,
+      recordId,
+    );
+    await writeAuditLog(ctx, {
+      orgId: orgCtx.orgId,
+      actorUserId: orgCtx.userId,
+      action: "attendance.delete",
+      entity: "attendanceRecords",
+      entityId: recordId,
+      before: rec,
+    });
+    return null;
+  },
+});
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 // Whether the caller must clock attendance + whether they're currently open.
@@ -874,6 +909,9 @@ export const attendanceDayBoard = query({
           clockInAt: r.clockInAt,
           clockOutAt: r.clockOutAt ?? null,
           workedMinutes: r.workedMinutes ?? null,
+          officeName: off.name,
+          note: r.note ?? null,
+          clockInDistance: r.clockInDistance ?? null,
         });
       }
       totalMinutes += personMinutes;

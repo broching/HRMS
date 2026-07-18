@@ -807,6 +807,9 @@ export const attendanceBlock = v.object({
   clockInAt: v.number(),
   clockOutAt: v.union(v.number(), v.null()),
   workedMinutes: v.union(v.number(), v.null()),
+  officeName: v.union(v.string(), v.null()),
+  note: v.union(v.string(), v.null()),
+  clockInDistance: v.union(v.number(), v.null()),
 })
 
 // One person's column on the day board.
