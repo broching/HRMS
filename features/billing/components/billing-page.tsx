@@ -12,16 +12,12 @@ import {
   IconCalendarEvent,
   IconExternalLink,
   IconAlertTriangle,
-  IconSparkles,
+  IconPuzzle,
 } from "@tabler/icons-react"
-import {
-  PLANS,
-  formatSgd,
-  computeMonthlyCents,
-  recommendedPlan,
-  type PlanKey,
-} from "@/convex/lib/plans"
+import { formatSgd, CORE_TIERS, type OptionalModuleKey } from "@/convex/lib/plans"
+import { MODULE_META } from "@/convex/lib/modules"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { PricingPlans } from "./pricing-plans"
@@ -71,7 +67,6 @@ export function BillingPage() {
   }
 
   const active = summary.hasSubscription
-  const planKey = summary.plan && summary.plan in PLANS ? (summary.plan as PlanKey) : null
 
   return (
     <div className="flex flex-col gap-8">
@@ -89,10 +84,9 @@ export function BillingPage() {
         </div>
       )}
 
-      {active && planKey ? (
+      {active ? (
         <CurrentSubscription
           summary={summary}
-          planKey={planKey}
           onManage={manageBilling}
           portalPending={portalPending}
           onChangePlan={() => setShowPlans((s) => !s)}
@@ -108,7 +102,8 @@ export function BillingPage() {
       {(!active || showPlans) && (
         <PricingPlans
           canManage
-          currentPlan={summary.plan}
+          currentModules={summary.modules}
+          hasSubscription={active}
           initialSeats={summary.seats ?? summary.activeEmployees}
         />
       )}
@@ -123,11 +118,6 @@ function NoSubscription({
   orgName: string
   activeEmployees: number
 }) {
-  const seats = Math.max(1, activeEmployees)
-  const recKey = recommendedPlan(seats)
-  const recPlan = PLANS[recKey]
-  const recCents = computeMonthlyCents(recKey, seats)
-
   return (
     <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
       <div className="flex items-start gap-4">
@@ -142,8 +132,7 @@ function NoSubscription({
             </span>
           </div>
           <p className="text-muted-foreground mt-0.5 text-sm">
-            Choose a plan below to activate your workspace. Pricing is based on
-            your headcount.
+            Build your plan below — the Core platform plus the modules you need.
           </p>
         </div>
       </div>
@@ -156,17 +145,13 @@ function NoSubscription({
         />
         <Stat
           icon={<IconCreditCard className="size-4" />}
-          label="Current plan"
-          value="None"
+          label="Core platform"
+          value={`From ${formatSgd(CORE_TIERS[0].cents)}/mo`}
         />
         <Stat
-          icon={<IconSparkles className="size-4" />}
-          label={`Recommended for ${activeEmployees}`}
-          value={
-            recCents != null
-              ? `${recPlan.name} · ${formatSgd(recCents)}/mo`
-              : `${recPlan.name} · Custom`
-          }
+          icon={<IconPuzzle className="size-4" />}
+          label="Modules"
+          value="Pick à la carte"
         />
       </div>
     </div>
@@ -175,22 +160,21 @@ function NoSubscription({
 
 function CurrentSubscription({
   summary,
-  planKey,
   onManage,
   portalPending,
   onChangePlan,
   showPlans,
 }: {
   summary: NonNullable<ReturnType<typeof useBillingSummary>>
-  planKey: PlanKey
   onManage: () => void
   portalPending: boolean
   onChangePlan: () => void
   showPlans: boolean
 }) {
-  const plan = PLANS[planKey]
   const seats = summary.seats ?? 0
   const overSeats = summary.activeEmployees > seats
+  const modules = (summary.modules ?? []).filter(isOptional)
+  const title = summary.planName ?? "Your plan"
   const renews = summary.currentPeriodEnd
     ? new Date(summary.currentPeriodEnd).toLocaleDateString("en-SG", {
         day: "numeric",
@@ -208,7 +192,7 @@ function CurrentSubscription({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-semibold">{plan.name}</h2>
+              <h2 className="text-xl font-semibold">{title}</h2>
               <StatusBadge status={summary.status} />
             </div>
             <p className="text-muted-foreground mt-0.5 text-sm">
@@ -240,6 +224,22 @@ function CurrentSubscription({
         </div>
       </div>
 
+      {modules.length > 0 && (
+        <div className="mt-5">
+          <div className="text-muted-foreground mb-2 text-xs font-medium">
+            Enabled modules
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <Badge variant="secondary">Core platform</Badge>
+            {modules.map((m) => (
+              <Badge key={m} variant="secondary">
+                {MODULE_META[m].name}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="mt-6 grid gap-4 sm:grid-cols-3">
         <Stat
           icon={<IconUsers className="size-4" />}
@@ -264,8 +264,7 @@ function CurrentSubscription({
           <IconAlertTriangle className="mt-0.5 size-4 shrink-0" />
           <p>
             You have {summary.activeEmployees} active employees but only {seats}{" "}
-            seats. Use <strong>Manage billing</strong> to add seats and stay
-            covered.
+            seats. Use <strong>Change plan</strong> to add seats and stay covered.
           </p>
         </div>
       )}
@@ -335,6 +334,10 @@ function StatusBadge({ status }: { status: string | null }) {
       {s.label}
     </span>
   )
+}
+
+function isOptional(k: string): k is OptionalModuleKey {
+  return k in MODULE_META && k !== "core"
 }
 
 // Helper alias so CurrentSubscription can type its `summary` prop against the

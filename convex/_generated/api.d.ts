@@ -46,6 +46,7 @@ import type * as leaveTypes from "../leaveTypes.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_emailTemplate from "../lib/emailTemplate.js";
 import type * as lib_enums from "../lib/enums.js";
+import type * as lib_modules from "../lib/modules.js";
 import type * as lib_notificationRoutes from "../lib/notificationRoutes.js";
 import type * as lib_performanceDefaults from "../lib/performanceDefaults.js";
 import type * as lib_performanceForm from "../lib/performanceForm.js";
@@ -151,6 +152,7 @@ declare const fullApi: ApiFromModules<{
   "lib/audit": typeof lib_audit;
   "lib/emailTemplate": typeof lib_emailTemplate;
   "lib/enums": typeof lib_enums;
+  "lib/modules": typeof lib_modules;
   "lib/notificationRoutes": typeof lib_notificationRoutes;
   "lib/performanceDefaults": typeof lib_performanceDefaults;
   "lib/performanceForm": typeof lib_performanceForm;

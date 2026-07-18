@@ -25,8 +25,8 @@ export function GlobalSearch() {
   const [active, setActive] = React.useState(0)
 
   const entries = React.useMemo(
-    () => visibleEntries(member?.role, member?.permissions),
-    [member?.role, member?.permissions],
+    () => visibleEntries(member?.role, member?.permissions, member?.enabledModules),
+    [member?.role, member?.permissions, member?.enabledModules],
   )
   const results = React.useMemo(
     () => searchEntries(entries, query),

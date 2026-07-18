@@ -6,7 +6,14 @@ import { action, internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { PLANS, isPaidPlanKey, type PaidPlanKey } from "./lib/plans";
+import {
+  PLANS,
+  type PaidPlanKey,
+  type OptionalModuleKey,
+  isOptionalModuleKey,
+  modulePriceEnvKey,
+} from "./lib/plans";
+import { OPTIONAL_MODULES } from "./lib/modules";
 
 /**
  * All Stripe network calls. Runs in the Node runtime so it can use the Stripe
@@ -31,8 +38,8 @@ function appBaseUrl(): string {
   return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 }
 
-// The Stripe price id for a plan — env override (e.g. test-mode) first, then the
-// live id baked into the plan catalogue.
+// The Stripe price id for a legacy plan — env override first, then the live id
+// baked into the plan catalogue. (Legacy: only for pre-existing subscriptions.)
 function resolvePriceId(plan: PaidPlanKey): string {
   const envKey = `STRIPE_PRICE_${plan.toUpperCase()}`;
   const override = process.env[envKey];
@@ -47,22 +54,52 @@ function resolvePriceId(plan: PaidPlanKey): string {
   return id;
 }
 
+// À la carte model price resolution (env-configured; see plans.ts).
+function resolveBasePriceId(): string {
+  const id = process.env.STRIPE_PRICE_BASE;
+  if (!id) {
+    throw new ConvexError({
+      code: "CONFIG",
+      message: "No Stripe price configured for the Core platform (STRIPE_PRICE_BASE).",
+    });
+  }
+  return id;
+}
+
+function resolveModulePriceId(key: OptionalModuleKey): string {
+  const id = process.env[modulePriceEnvKey(key)];
+  if (!id) {
+    throw new ConvexError({
+      code: "CONFIG",
+      message: `No Stripe price configured for the ${key} module (${modulePriceEnvKey(key)}).`,
+    });
+  }
+  return id;
+}
+
+// Reverse map (Stripe price id → module key) for webhook resolution. Skips any
+// module whose price env var isn't set.
+function modulePriceMap(): Record<string, OptionalModuleKey> {
+  const map: Record<string, OptionalModuleKey> = {};
+  for (const m of OPTIONAL_MODULES as OptionalModuleKey[]) {
+    const id = process.env[modulePriceEnvKey(m)];
+    if (id) map[id] = m;
+  }
+  return map;
+}
+
 // ─── Checkout + portal (admin-initiated) ─────────────────────────────────────
 
-// Start a Stripe Checkout session for a plan at `seats` employees. Returns the
-// hosted checkout URL for the client to redirect to. Admin-only via the
-// internal authorize query.
+// Start a Stripe Checkout session for the Core platform at `seats` employees
+// plus the chosen module add-ons. Returns the hosted checkout URL for the client
+// to redirect to. Admin-only via the internal authorize query.
 export const createCheckoutSession = action({
-  args: { plan: v.string(), seats: v.number() },
+  args: { seats: v.number(), modules: v.array(v.string()) },
   returns: v.object({ url: v.string() }),
   handler: async (ctx, args) => {
-    if (!isPaidPlanKey(args.plan)) {
-      throw new ConvexError({
-        code: "INPUT",
-        message: "Choose a Starter, Growth or Business plan to subscribe.",
-      });
-    }
     const seats = Math.max(1, Math.floor(args.seats));
+    // De-dupe + keep only real optional modules.
+    const modules = [...new Set(args.modules.filter(isOptionalModuleKey))];
 
     const auth = await ctx.runQuery(internal.billing.authorizeBilling, {});
     const stripe = getStripe();
@@ -86,11 +123,19 @@ export const createCheckoutSession = action({
     }
 
     const base = appBaseUrl();
+    const lineItems = [
+      { price: resolveBasePriceId(), quantity: seats },
+      ...modules.map((m) => ({ price: resolveModulePriceId(m), quantity: 1 })),
+    ];
     const sessionParams = {
       mode: "subscription" as const,
-      line_items: [{ price: resolvePriceId(args.plan), quantity: seats }],
+      line_items: lineItems,
       client_reference_id: auth.orgId,
-      subscription_data: { metadata: { orgId: auth.orgId } },
+      // `modules` metadata is a backup; the webhook derives the paid set from the
+      // subscription's actual line-item prices (modulePriceMap).
+      subscription_data: {
+        metadata: { orgId: auth.orgId, modules: modules.join(",") },
+      },
       allow_promotion_codes: true,
       billing_address_collection: "auto" as const,
       // Return via the public /billing-return bridge so the client Clerk session
@@ -230,32 +275,72 @@ async function syncSubscription(
   sub: Stripe.Subscription,
   orgIdHint: string | null,
 ) {
-  const item = sub.items.data[0];
-  const price = item?.price;
-  const plan =
-    (price?.metadata?.plan as string | undefined) ??
-    resolvePlanFromPriceId(price?.id);
   const orgId =
     (sub.metadata?.orgId as string | undefined) ?? orgIdHint ?? undefined;
-  const periodEnd =
-    (sub as unknown as { current_period_end?: number }).current_period_end ??
-    (item as unknown as { current_period_end?: number } | undefined)
-      ?.current_period_end;
-
   const customerId =
     typeof sub.customer === "string" ? sub.customer : sub.customer.id;
+  const item0 = sub.items.data[0];
+  const periodEnd =
+    (sub as unknown as { current_period_end?: number }).current_period_end ??
+    (item0 as unknown as { current_period_end?: number } | undefined)
+      ?.current_period_end;
 
-  await ctx.runMutation(internal.billing.upsertFromStripe, {
+  // Resolve the à la carte model from the subscription's line items: the base
+  // (Core) line gives seats; each module line gives an entitlement.
+  let basePriceId: string | undefined;
+  try {
+    basePriceId = resolveBasePriceId();
+  } catch {
+    basePriceId = undefined;
+  }
+  const modMap = modulePriceMap();
+
+  let seats: number | undefined;
+  let baseItem: Stripe.SubscriptionItem | undefined;
+  const modules: OptionalModuleKey[] = [];
+  for (const it of sub.items.data) {
+    const pid = it.price?.id;
+    if (!pid) continue;
+    if (basePriceId && pid === basePriceId) {
+      baseItem = it;
+      seats = it.quantity;
+    } else if (modMap[pid]) {
+      modules.push(modMap[pid]);
+    }
+  }
+
+  const patch = {
     stripeCustomerId: customerId,
     orgId: orgId as Id<"organizations"> | undefined,
     stripeSubscriptionId: sub.id,
-    plan,
-    priceId: price?.id,
     status: sub.status,
-    seats: item?.quantity,
     currentPeriodEnd: periodEnd ? periodEnd * 1000 : undefined,
     cancelAtPeriodEnd: sub.cancel_at_period_end,
-  });
+  };
+
+  if (baseItem) {
+    // À la carte model — modules drive the org's entitlements downstream.
+    await ctx.runMutation(internal.billing.upsertFromStripe, {
+      ...patch,
+      plan: undefined,
+      modules,
+      priceId: basePriceId,
+      seats,
+    });
+  } else {
+    // Legacy tiered subscription — preserve the old single-price behaviour.
+    const price = item0?.price;
+    const plan =
+      (price?.metadata?.plan as string | undefined) ??
+      resolvePlanFromPriceId(price?.id);
+    await ctx.runMutation(internal.billing.upsertFromStripe, {
+      ...patch,
+      plan,
+      modules: undefined,
+      priceId: price?.id,
+      seats: item0?.quantity,
+    });
+  }
 }
 
 // Fallback plan resolution when a price has no `plan` metadata: match the

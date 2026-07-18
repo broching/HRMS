@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import {
   requireOrg,
+  requireModule,
   getOrgContext,
   requirePermission,
   OrgContext,
@@ -249,7 +250,7 @@ export const clockIn = mutation({
     officeName: v.string(),
   }),
   handler: async (ctx, { token, geo, accuracy }) => {
-    const { orgId, userId } = await requireOrg(ctx);
+    const { orgId, userId } = await requireModule(ctx, "attendance");
     const own = await employeeByUserId(ctx, orgId, userId);
     if (!own) throw new Error("You don't have an employee profile yet.");
 

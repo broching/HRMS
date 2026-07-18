@@ -221,6 +221,8 @@ export const current = query({
       roleId: v.union(v.id("roles"), v.null()),
       // Resolved effective permissions — the authoritative gate for client UI.
       permissions: v.array(v.string()),
+      // Modules the org has enabled — gates self-service (non-permission) nav.
+      enabledModules: v.array(v.string()),
     }),
   ),
   handler: async (ctx) => {
@@ -236,6 +238,7 @@ export const current = query({
       role: orgCtx.role,
       roleId: orgCtx.member.roleId ?? null,
       permissions: [...orgCtx.permissions],
+      enabledModules: [...orgCtx.enabledModules],
     };
   },
 });

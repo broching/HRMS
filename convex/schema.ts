@@ -1695,9 +1695,14 @@ export default defineSchema({
     orgId: v.id("organizations"),
     stripeCustomerId: v.string(),
     stripeSubscriptionId: v.optional(v.string()),
+    // Legacy tiered plan key (starter/growth/business) for pre-existing subs.
     plan: v.optional(v.string()),
+    // À la carte model: the optional modules this org pays for (drives the
+    // orgModules entitlement set). Present on subscriptions bought post-migration.
+    modules: v.optional(v.array(v.string())),
     priceId: v.optional(v.string()),
     status: v.optional(v.string()),
+    // Employee seats = quantity on the Core (base) line item.
     seats: v.optional(v.number()),
     currentPeriodEnd: v.optional(v.number()), // epoch ms
     cancelAtPeriodEnd: v.optional(v.boolean()),
@@ -1705,6 +1710,16 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_customer", ["stripeCustomerId"])
     .index("by_subscription", ["stripeSubscriptionId"]),
+
+  // Per-org module entitlements. The product is decoupled into sellable modules
+  // (see convex/lib/modules.ts); a super admin toggles them per org from the
+  // platform console. We store the *disabled* set so an org with no row — and
+  // any module added in future — defaults to fully enabled. `core` is never
+  // disabled. Resolved into OrgContext.enabledModules in getOrgContext.
+  orgModules: defineTable({
+    orgId: v.id("organizations"),
+    disabled: v.array(v.string()),
+  }).index("by_org", ["orgId"]),
 
   // ─── Saved signatures ────────────────────────────────────────────────────
 

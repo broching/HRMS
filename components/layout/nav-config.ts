@@ -16,6 +16,7 @@ import {
   type Icon,
 } from "@tabler/icons-react"
 import type { Permission } from "@/convex/lib/permissions"
+import type { ModuleKey } from "@/convex/lib/modules"
 import type { HrmsRole } from "@/convex/lib/enums"
 
 export type NavLink = {
@@ -24,6 +25,11 @@ export type NavLink = {
   icon?: Icon
   permission?: Permission
   roles?: HrmsRole[]
+  // Product module this item belongs to. When set and the org has the module
+  // disabled, the item is hidden. Permission-gated items usually don't need
+  // this (their permission is already stripped) — it's for self-service links
+  // that aren't behind a permission (e.g. Home → My Leave / Claims).
+  module?: ModuleKey
   // Collapsible category (sidebar layout only); undefined = ungrouped lead item.
   group?: string
 }
@@ -59,15 +65,15 @@ export const SECTIONS: NavSection[] = [
     icon: IconHome,
     items: [
       { title: "Home", url: "/dashboard" },
-      { title: "My Leave", url: "/leave" },
-      { title: "Claims", url: "/claims" },
-      { title: "Payment Requests", url: "/payment-requests" },
-      { title: "Attendance", url: "/attendance" },
-      { title: "Timesheets", url: "/timesheets" },
-      { title: "My Tasks", url: "/tasks" },
-      { title: "My Schedule", url: "/scheduling" },
-      { title: "Payslips", url: "/payslips" },
-      { title: "Performance", url: "/performance" },
+      { title: "My Leave", url: "/leave", module: "leave" },
+      { title: "Claims", url: "/claims", module: "claims" },
+      { title: "Payment Requests", url: "/payment-requests", module: "payment_requests" },
+      { title: "Attendance", url: "/attendance", module: "attendance" },
+      { title: "Timesheets", url: "/timesheets", module: "timesheets" },
+      { title: "My Tasks", url: "/tasks", module: "timesheets" },
+      { title: "My Schedule", url: "/scheduling", module: "attendance" },
+      { title: "Payslips", url: "/payslips", module: "payroll" },
+      { title: "Performance", url: "/performance", module: "performance" },
     ],
   },
   {

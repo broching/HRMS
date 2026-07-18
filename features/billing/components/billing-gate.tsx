@@ -41,7 +41,7 @@ export function BillingGate({ children }: { children: React.ReactNode }) {
         </h1>
         <p className="text-muted-foreground mt-2 text-base">
           {access.manageable
-            ? `Choose a plan to unlock ${access.orgName ?? "your workspace"}. Every plan includes the full HR suite — pick the headcount that matches your team.`
+            ? `Build a plan to unlock ${access.orgName ?? "your workspace"} — the Core platform plus the modules your team needs.`
             : `Your organization's subscription isn't active. Ask an admin to choose a plan to restore access.`}
         </p>
       </div>
@@ -57,7 +57,7 @@ export function BillingGate({ children }: { children: React.ReactNode }) {
       )}
 
       {access.manageable ? (
-        <PricingPlans canManage currentPlan={access.plan} />
+        <PricingPlans canManage />
       ) : (
         <div className="text-muted-foreground mx-auto max-w-md rounded-2xl border border-border bg-card p-6 text-center text-sm">
           Only an admin can manage billing for this organization.

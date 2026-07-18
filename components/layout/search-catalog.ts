@@ -26,6 +26,7 @@ import {
   type Icon,
 } from "@tabler/icons-react"
 import { permitted, type Permission } from "@/convex/lib/permissions"
+import type { ModuleKey } from "@/convex/lib/modules"
 import type { HrmsRole } from "@/convex/lib/enums"
 
 // A single searchable destination. `context` is the workspace it lives in and is
@@ -42,6 +43,8 @@ export type SearchEntry = {
   icon: Icon
   permission?: Permission
   roles?: HrmsRole[]
+  // Product module; entry is hidden when the org has the module disabled.
+  module?: ModuleKey
   // Extra terms that should match this entry beyond its label.
   keywords?: string[]
 }
@@ -53,15 +56,15 @@ const CATALOG: SearchEntry[] = [
   // ── Personal ──────────────────────────────────────────────────────────────
   { label: "Home", context: "Personal", href: "/dashboard", icon: IconHome, keywords: ["dashboard"] },
   { label: "Feed", context: "Personal", href: "/feed", icon: IconRss, keywords: ["announcements", "news"] },
-  { label: "My Leave", context: "Personal", href: "/leave", icon: IconCalendarStats, keywords: ["time off", "vacation", "annual", "apply leave"] },
-  { label: "My Claims", context: "Personal", href: "/claims", icon: IconReceipt2, keywords: ["expense", "reimburse", "mileage"] },
-  { label: "My Payment Requests", context: "Personal", href: "/payment-requests", icon: IconFileInvoice, keywords: ["payment", "request for payment", "vendor", "invoice", "payee"] },
-  { label: "Attendance", context: "Personal", href: "/attendance", icon: IconClockHour4, keywords: ["clock in", "clock out", "timesheet"] },
-  { label: "Timesheets", context: "Personal", href: "/timesheets", icon: IconClockHour4, keywords: ["log time", "time entry", "hours", "log hours", "timesheet"] },
-  { label: "My Tasks", context: "Personal", href: "/tasks", icon: IconChecklist, keywords: ["task", "assigned", "to do", "todo", "project task"] },
-  { label: "My Schedule", context: "Personal", href: "/scheduling", icon: IconCalendarTime, keywords: ["roster", "shift"] },
-  { label: "Payslips", context: "Personal", href: "/payslips", icon: IconCash, keywords: ["salary", "pay", "payroll"] },
-  { label: "My Performance", context: "Personal", href: "/performance", icon: IconChartBar, keywords: ["review", "appraisal", "goals"] },
+  { label: "My Leave", context: "Personal", href: "/leave", icon: IconCalendarStats, module: "leave", keywords: ["time off", "vacation", "annual", "apply leave"] },
+  { label: "My Claims", context: "Personal", href: "/claims", icon: IconReceipt2, module: "claims", keywords: ["expense", "reimburse", "mileage"] },
+  { label: "My Payment Requests", context: "Personal", href: "/payment-requests", icon: IconFileInvoice, module: "payment_requests", keywords: ["payment", "request for payment", "vendor", "invoice", "payee"] },
+  { label: "Attendance", context: "Personal", href: "/attendance", icon: IconClockHour4, module: "attendance", keywords: ["clock in", "clock out", "timesheet"] },
+  { label: "Timesheets", context: "Personal", href: "/timesheets", icon: IconClockHour4, module: "timesheets", keywords: ["log time", "time entry", "hours", "log hours", "timesheet"] },
+  { label: "My Tasks", context: "Personal", href: "/tasks", icon: IconChecklist, module: "timesheets", keywords: ["task", "assigned", "to do", "todo", "project task"] },
+  { label: "My Schedule", context: "Personal", href: "/scheduling", icon: IconCalendarTime, module: "attendance", keywords: ["roster", "shift"] },
+  { label: "Payslips", context: "Personal", href: "/payslips", icon: IconCash, module: "payroll", keywords: ["salary", "pay", "payroll"] },
+  { label: "My Performance", context: "Personal", href: "/performance", icon: IconChartBar, module: "performance", keywords: ["review", "appraisal", "goals"] },
 
   // ── People (open to all members) ─────────────────────────────────────────
   { label: "Employee List", context: "People", href: "/employees", icon: IconAddressBook, keywords: ["directory", "staff", "people", "colleagues"] },
@@ -105,9 +108,11 @@ function canSee(
   entry: SearchEntry,
   role: HrmsRole | undefined,
   permissions: readonly string[] | undefined,
+  modules: readonly string[] | undefined,
 ): boolean {
   if (entry.roles && (!role || !entry.roles.includes(role))) return false
   if (entry.permission && !permitted(permissions, entry.permission)) return false
+  if (entry.module && !(modules ?? []).includes(entry.module)) return false
   return true
 }
 
@@ -115,8 +120,9 @@ function canSee(
 export function visibleEntries(
   role: HrmsRole | undefined,
   permissions: readonly string[] | undefined,
+  modules: readonly string[] | undefined,
 ): SearchEntry[] {
-  return CATALOG.filter((e) => canSee(e, role, permissions))
+  return CATALOG.filter((e) => canSee(e, role, permissions, modules))
 }
 
 /**

@@ -2,7 +2,7 @@ import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { halfDay } from "./lib/enums";
-import { requireOrg, getOrgContext, OrgContext } from "./auth";
+import { requireOrg, requireModule, getOrgContext, OrgContext } from "./auth";
 import { ctxHasPermission } from "./auth";
 import { employeeByUserId } from "./employees";
 import { isDirectManager, managerUsers } from "./model/org";
@@ -465,7 +465,7 @@ export const apply = mutation({
   },
   returns: v.id("leaveRequests"),
   handler: async (ctx, args) => {
-    const { orgId, userId } = await requireOrg(ctx);
+    const { orgId, userId } = await requireModule(ctx, "leave");
     const own = await employeeByUserId(ctx, orgId, userId);
     if (!own) throw new Error("You don't have an employee profile yet.");
 

@@ -17,10 +17,12 @@ function canSee(
   item: NavLink,
   role: HrmsRole | undefined,
   permissions: readonly string[] | undefined,
+  modules: readonly string[] | undefined,
 ): boolean {
   if (!role) return false
   if (item.roles && !item.roles.includes(role)) return false
   if (item.permission && !permitted(permissions, item.permission)) return false
+  if (item.module && !(modules ?? []).includes(item.module)) return false
   return true
 }
 
@@ -32,7 +34,9 @@ export function SubNav() {
   const section = resolveSection(pathname)
   if (!section) return null
 
-  const items = section.items.filter((i) => canSee(i, role, member?.permissions))
+  const items = section.items.filter((i) =>
+    canSee(i, role, member?.permissions, member?.enabledModules),
+  )
   if (items.length < 2) return null
 
   const activeUrl = activeItemUrl(section, pathname)

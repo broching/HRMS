@@ -8,6 +8,11 @@ import {
   ROLE_PRESETS,
   sanitizePermissions,
 } from "./lib/permissions";
+import {
+  ModuleKey,
+  MODULE_FOR_PERMISSION,
+  enabledModulesFromDisabled,
+} from "./lib/modules";
 
 /**
  * Tenancy + RBAC core. Every domain query/mutation resolves the caller's
@@ -27,8 +32,13 @@ export interface OrgContext {
   member: Doc<"members">;
   role: HrmsRole;
   // Resolved effective permissions for the caller — from their assigned role
-  // document when set, else the static matrix for their legacy role enum.
+  // document when set, else the static matrix for their legacy role enum. Any
+  // permission owned by a module the org has disabled is stripped here, so every
+  // permission-gated surface enforces module entitlements automatically.
   permissions: Set<Permission>;
+  // Modules the org currently has enabled (see convex/lib/modules.ts). `core` is
+  // always present. Drives self-service (non-permission-gated) UI + backend.
+  enabledModules: Set<ModuleKey>;
 }
 
 /**
@@ -62,6 +72,26 @@ export function ctxHasPermission(
   permission: Permission,
 ): boolean {
   return orgCtx.permissions.has(permission);
+}
+
+/** Non-throwing module-entitlement check against a resolved OrgContext. */
+export function ctxHasModule(orgCtx: OrgContext, module: ModuleKey): boolean {
+  return orgCtx.enabledModules.has(module);
+}
+
+/**
+ * Resolve the org's enabled module set from its `orgModules` row. Absent row =
+ * every module enabled (default all-on, so existing orgs are never disrupted).
+ */
+export async function resolveEnabledModules(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+): Promise<Set<ModuleKey>> {
+  const row = await ctx.db
+    .query("orgModules")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+  return enabledModulesFromDisabled(row?.disabled);
 }
 
 // Custom Clerk claims that ride along on the identity object.
@@ -104,6 +134,15 @@ export async function getOrgContext(ctx: QueryCtx): Promise<OrgContext | null> {
     .unique();
   if (!member || member.status === "removed") return null;
 
+  const enabledModules = await resolveEnabledModules(ctx, org._id);
+  // Strip any permission owned by a disabled module so entitlements are enforced
+  // transitively wherever `permissions` is checked (client + server).
+  const permissions = new Set(
+    [...(await resolveMemberPermissions(ctx, member))].filter((p) =>
+      enabledModules.has(MODULE_FOR_PERMISSION[p]),
+    ),
+  );
+
   return {
     userId: user._id,
     user,
@@ -111,7 +150,8 @@ export async function getOrgContext(ctx: QueryCtx): Promise<OrgContext | null> {
     org,
     member,
     role: member.role,
-    permissions: await resolveMemberPermissions(ctx, member),
+    permissions,
+    enabledModules,
   };
 }
 
@@ -171,6 +211,27 @@ export async function requireAnyPermission(
     throw new ConvexError({
       code: "FORBIDDEN",
       message: `Missing permission: one of ${permissions.join(", ")}.`,
+    });
+  }
+  return orgCtx;
+}
+
+/**
+ * Require that the org has `module` enabled. Used on self-service create/submit
+ * paths that aren't permission-gated (an employee filing their own claim/leave),
+ * so a disabled module is a hard boundary rather than just a hidden nav item.
+ * Permission-gated surfaces don't need this — their permissions are already
+ * stripped when the module is off. Returns the org context.
+ */
+export async function requireModule(
+  ctx: QueryCtx,
+  module: ModuleKey,
+): Promise<OrgContext> {
+  const orgCtx = await requireOrg(ctx);
+  if (!orgCtx.enabledModules.has(module)) {
+    throw new ConvexError({
+      code: "FORBIDDEN",
+      message: `This organization does not have the ${module} module enabled.`,
     });
   }
   return orgCtx;

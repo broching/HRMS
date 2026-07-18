@@ -1,9 +1,15 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "./_generated/server";
-import type { QueryCtx } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getOrgContext, requirePermission } from "./auth";
-import { PLANS, isPaidPlanKey, type PlanKey } from "./lib/plans";
+import {
+  PLANS,
+  isPaidPlanKey,
+  computeBillingCents,
+  type PlanKey,
+} from "./lib/plans";
+import { OPTIONAL_MODULES, sanitizeModuleKeys } from "./lib/modules";
 
 /**
  * Billing state for the org. The org is the Stripe customer; one `subscriptions`
@@ -126,6 +132,10 @@ export const getBillingSummary = query({
     orgName: v.string(),
     plan: v.union(v.string(), v.null()),
     planName: v.union(v.string(), v.null()),
+    // À la carte model: the paid optional modules + cost breakdown.
+    modules: v.array(v.string()),
+    baseCents: v.union(v.number(), v.null()),
+    moduleCents: v.union(v.number(), v.null()),
     status: v.union(v.string(), v.null()),
     seats: v.union(v.number(), v.null()),
     priceCents: v.union(v.number(), v.null()),
@@ -149,11 +159,21 @@ export const getBillingSummary = query({
       if (e.status !== "terminated" && !e.isVacant) activeEmployees++;
     }
 
+    // À la carte model when the sub carries a module set; else legacy tiered plan.
+    const modules = sub?.modules ?? null;
     const planKey = sub?.plan && sub.plan in PLANS ? (sub.plan as PlanKey) : null;
-    const priceCents =
-      planKey && sub?.seats != null && isPaidPlanKey(planKey)
-        ? computeFromPlan(planKey, sub.seats)
-        : null;
+
+    let priceCents: number | null = null;
+    let baseCents: number | null = null;
+    let moduleCents: number | null = null;
+    if (modules && sub?.seats != null) {
+      const b = computeBillingCents(sub.seats, modules);
+      priceCents = b.totalCents;
+      baseCents = b.baseCents;
+      moduleCents = b.moduleCents;
+    } else if (planKey && sub?.seats != null && isPaidPlanKey(planKey)) {
+      priceCents = computeFromPlan(planKey, sub.seats);
+    }
 
     return {
       hasSubscription: !!sub?.stripeSubscriptionId && !!sub?.status,
@@ -161,6 +181,9 @@ export const getBillingSummary = query({
       orgName: org.name,
       plan: sub?.plan ?? null,
       planName: planKey ? PLANS[planKey].name : null,
+      modules: modules ?? [],
+      baseCents,
+      moduleCents,
       status: sub?.status ?? null,
       seats: sub?.seats ?? null,
       priceCents,
@@ -236,6 +259,8 @@ export const upsertFromStripe = internalMutation({
     orgId: v.optional(v.id("organizations")),
     stripeSubscriptionId: v.optional(v.string()),
     plan: v.optional(v.string()),
+    // The paid optional-module set (à la carte model). Undefined for legacy subs.
+    modules: v.optional(v.array(v.string())),
     priceId: v.optional(v.string()),
     status: v.string(),
     seats: v.optional(v.number()),
@@ -248,6 +273,7 @@ export const upsertFromStripe = internalMutation({
       stripeCustomerId: args.stripeCustomerId,
       stripeSubscriptionId: args.stripeSubscriptionId,
       plan: args.plan,
+      modules: args.modules,
       priceId: args.priceId,
       status: args.status,
       seats: args.seats,
@@ -267,13 +293,43 @@ export const upsertFromStripe = internalMutation({
       row = await subForOrg(ctx, args.orgId);
     }
 
+    const orgId = row?.orgId ?? args.orgId;
     if (row) {
       await ctx.db.patch(row._id, patch);
-      return null;
-    }
-    if (args.orgId) {
+    } else if (args.orgId) {
       await ctx.db.insert("subscriptions", { orgId: args.orgId, ...patch });
+    }
+
+    // Link billing → entitlements: when the à la carte model is in play, the
+    // org's enabled modules become exactly what it pays for (core always on).
+    // A subscription with an ACTIVE-ish status grants its modules; a dead one
+    // (canceled/unpaid/…) grants none. Legacy subs (modules undefined) don't
+    // touch entitlements, so existing orgs keep everything.
+    if (args.modules !== undefined && orgId) {
+      const paid = ALLOWED_STATUSES.has(args.status)
+        ? new Set(sanitizeModuleKeys(args.modules))
+        : new Set<string>();
+      const disabled = OPTIONAL_MODULES.filter((m) => !paid.has(m));
+      await syncOrgModules(ctx, orgId, disabled);
     }
     return null;
   },
 });
+
+// Upsert the org's disabled-module set (see convex/lib/modules.ts). Kept in this
+// file because billing is the writer that links purchases to entitlements.
+async function syncOrgModules(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  disabled: string[],
+) {
+  const existing = await ctx.db
+    .query("orgModules")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+  if (existing) {
+    await ctx.db.patch(existing._id, { disabled });
+  } else {
+    await ctx.db.insert("orgModules", { orgId, disabled });
+  }
+}

@@ -6,63 +6,81 @@ import { useAction } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { ConvexError } from "convex/values"
 import { toast } from "sonner"
+import { IconMinus, IconPlus, IconArrowRight, IconCheck } from "@tabler/icons-react"
 import {
-  IconCheck,
-  IconMinus,
-  IconPlus,
-  IconSparkles,
-  IconArrowRight,
-} from "@tabler/icons-react"
-import {
-  PLANS,
-  PLAN_ORDER,
-  PLAN_FEATURES,
-  computeMonthlyCents,
-  extraSeats,
-  recommendedPlan,
+  CORE_MAX_SEATS,
+  MODULE_PRICING,
+  computeBillingCents,
+  computeCoreCents,
   formatSgd,
-  isPaidPlanKey,
-  type PlanKey,
+  type OptionalModuleKey,
 } from "@/convex/lib/plans"
+import { OPTIONAL_MODULES, MODULE_META } from "@/convex/lib/modules"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 
 const MIN_SEATS = 1
-const MAX_SEATS = 300
-const PRESETS = [5, 25, 75, 150]
+const MAX_SEATS = CORE_MAX_SEATS
+const PRESETS = [5, 25, 50, 100]
 
 type Props = {
   /** Seed the headcount slider (e.g. the org's current active employees). */
   initialSeats?: number
-  /** The org's active plan key, if any — marks its card as current. */
-  currentPlan?: string | null
-  /** Only admins may start checkout; others see disabled CTAs. */
+  /** The org's currently-paid modules — pre-selects them. */
+  currentModules?: string[]
+  /** Whether the org already has a subscription (changes the CTA copy). */
+  hasSubscription?: boolean
+  /** Only admins may start checkout; others see a disabled CTA. */
   canManage: boolean
   className?: string
 }
 
 export function PricingPlans({
   initialSeats,
-  currentPlan,
+  currentModules,
+  hasSubscription,
   canManage,
   className,
 }: Props) {
   const [seats, setSeats] = React.useState<number>(() =>
     clamp(initialSeats && initialSeats > 0 ? initialSeats : 10),
   )
-  const [pending, setPending] = React.useState<PlanKey | null>(null)
+  const [selected, setSelected] = React.useState<Set<OptionalModuleKey>>(() => {
+    // Pre-select the org's current modules; for a fresh org, show the full
+    // suite selected so the price is transparent and easy to trim.
+    const seed =
+      currentModules && currentModules.length > 0
+        ? currentModules.filter(isOptional)
+        : (OPTIONAL_MODULES as OptionalModuleKey[])
+    return new Set(seed)
+  })
+  const [pending, setPending] = React.useState(false)
   const createCheckout = useAction(api.stripe.createCheckoutSession)
 
-  const recommended = recommendedPlan(seats)
+  const modules = React.useMemo(
+    () => (OPTIONAL_MODULES as OptionalModuleKey[]).filter((m) => selected.has(m)),
+    [selected],
+  )
+  const cost = computeBillingCents(seats, modules)
 
-  async function subscribe(plan: PlanKey) {
-    if (!isPaidPlanKey(plan) || pending) return
-    setPending(plan)
+  function toggle(key: OptionalModuleKey) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  async function subscribe() {
+    if (pending || !canManage) return
+    setPending(true)
     try {
-      const { url } = await createCheckout({ plan, seats })
+      const { url } = await createCheckout({ seats, modules })
       window.location.href = url
     } catch (err) {
-      setPending(null)
+      setPending(false)
       const message =
         err instanceof ConvexError
           ? (err.data as { message?: string })?.message
@@ -72,35 +90,181 @@ export function PricingPlans({
   }
 
   return (
-    <div className={cn("flex flex-col gap-8", className)}>
+    <div className={cn("flex flex-col gap-6", className)}>
       <HeadcountControl seats={seats} onChange={(n) => setSeats(clamp(n))} />
 
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        {PLAN_ORDER.map((key) => (
-          <PlanCard
-            key={key}
-            planKey={key}
-            seats={seats}
-            recommended={recommended === key}
-            isCurrent={currentPlan === key}
-            canManage={canManage}
-            pending={pending === key}
-            anyPending={pending !== null}
-            onSubscribe={() => subscribe(key)}
-          />
-        ))}
+      <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+        {/* Module picker */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-baseline justify-between">
+            <h3 className="font-semibold">Choose your modules</h3>
+            <span className="text-muted-foreground text-sm">
+              {modules.length} of {OPTIONAL_MODULES.length} selected
+            </span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {(OPTIONAL_MODULES as OptionalModuleKey[]).map((key) => (
+              <ModuleRow
+                key={key}
+                mkey={key}
+                on={selected.has(key)}
+                onToggle={() => toggle(key)}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Order summary */}
+        <OrderSummary
+          seats={seats}
+          modules={modules}
+          cost={cost}
+          canManage={canManage}
+          pending={pending}
+          hasSubscription={hasSubscription}
+          onSubscribe={subscribe}
+        />
       </div>
 
       <p className="text-muted-foreground text-center text-xs">
-        Billed monthly in SGD · Cancel anytime · Additional employees are billed
-        at your plan&apos;s per-employee rate. Prices shown update live with your
-        headcount.
+        Billed monthly in SGD · Cancel anytime · The Core platform is priced by
+        team size; each module is a flat monthly add-on. Prices update live. More
+        than {CORE_MAX_SEATS} employees?{" "}
+        <Link href="/leadmightyhr#contact" className="text-primary underline">
+          Talk to us
+        </Link>
+        .
       </p>
     </div>
   )
 }
 
-// ─── Headcount control (the signature interaction) ───────────────────────────
+function ModuleRow({
+  mkey,
+  on,
+  onToggle,
+}: {
+  mkey: OptionalModuleKey
+  on: boolean
+  onToggle: () => void
+}) {
+  const meta = MODULE_META[mkey]
+  const price = MODULE_PRICING[mkey].monthlyCents
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={cn(
+        "flex items-start justify-between gap-3 rounded-xl border p-4 text-left transition-colors",
+        on
+          ? "border-primary/40 bg-primary/5"
+          : "border-border bg-card hover:bg-accent/40",
+      )}
+    >
+      <div className="min-w-0">
+        <div className="font-medium">{meta.name}</div>
+        <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
+          {meta.description}
+        </p>
+        <div className="text-foreground mt-2 text-sm font-semibold tabular-nums">
+          {formatSgd(price)}
+          <span className="text-muted-foreground font-normal">/mo</span>
+        </div>
+      </div>
+      <Switch checked={on} className="pointer-events-none mt-0.5 shrink-0" />
+    </button>
+  )
+}
+
+function OrderSummary({
+  seats,
+  modules,
+  cost,
+  canManage,
+  pending,
+  hasSubscription,
+  onSubscribe,
+}: {
+  seats: number
+  modules: OptionalModuleKey[]
+  cost: { baseCents: number; moduleCents: number; totalCents: number }
+  canManage: boolean
+  pending: boolean
+  hasSubscription?: boolean
+  onSubscribe: () => void
+}) {
+  return (
+    <div className="h-fit rounded-2xl border border-border bg-card p-5 shadow-sm lg:sticky lg:top-20">
+      <h3 className="font-semibold">Your plan</h3>
+
+      <div className="mt-4 flex flex-col gap-2 text-sm">
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">
+            Core platform · {seats} {seats === 1 ? "employee" : "employees"}
+          </span>
+          <span className="font-medium tabular-nums">
+            {formatSgd(cost.baseCents)}
+          </span>
+        </div>
+        {modules.map((m) => (
+          <div key={m} className="flex items-center justify-between">
+            <span className="text-muted-foreground">{MODULE_META[m].name}</span>
+            <span className="font-medium tabular-nums">
+              {formatSgd(MODULE_PRICING[m].monthlyCents)}
+            </span>
+          </div>
+        ))}
+        {modules.length === 0 && (
+          <p className="text-muted-foreground text-xs">
+            No add-ons selected — just the Core platform.
+          </p>
+        )}
+      </div>
+
+      <div className="mt-4 flex items-baseline justify-between border-t border-border pt-4">
+        <span className="text-sm font-medium">Total</span>
+        <span className="text-primary text-2xl font-extrabold tracking-tight tabular-nums">
+          {formatSgd(cost.totalCents)}
+          <span className="text-muted-foreground ml-1 text-sm font-medium">
+            /mo
+          </span>
+        </span>
+      </div>
+
+      <Button
+        className="mt-4 w-full"
+        disabled={!canManage || pending}
+        onClick={onSubscribe}
+      >
+        {pending
+          ? "Redirecting…"
+          : hasSubscription
+            ? "Update subscription"
+            : "Subscribe"}
+        {!pending && <IconArrowRight className="size-4" />}
+      </Button>
+      {!canManage ? (
+        <p className="text-muted-foreground mt-2 text-center text-[11px]">
+          Only an admin can change the subscription.
+        </p>
+      ) : (
+        <p className="text-muted-foreground mt-3 flex items-start gap-1.5 text-[11px]">
+          <IconCheck className="text-primary mt-0.5 size-3.5 shrink-0" />
+          Change modules or headcount anytime — you&apos;re only billed for
+          what&apos;s enabled.
+        </p>
+      )}
+      <p className="text-muted-foreground mt-3 text-center text-[11px]">
+        Need something bespoke?{" "}
+        <Link href="/leadmightyhr#contact" className="text-primary underline">
+          Talk to us
+        </Link>
+      </p>
+    </div>
+  )
+}
+
+// ─── Headcount control (drives the per-seat Core fee) ────────────────────────
 
 function HeadcountControl({
   seats,
@@ -121,7 +285,11 @@ function HeadcountControl({
             How many employees will you manage?
           </h3>
           <p className="text-muted-foreground mt-0.5 text-sm">
-            Drag to see exactly what each plan costs for your headcount.
+            The Core platform scales with your team —{" "}
+            <span className="text-foreground font-semibold">
+              {formatSgd(computeCoreCents(seats))}
+            </span>
+            /month for {seats} {seats === 1 ? "employee" : "employees"}.
           </p>
         </div>
 
@@ -208,149 +376,8 @@ function Stepper({
   )
 }
 
-// ─── Plan card ───────────────────────────────────────────────────────────────
-
-function PlanCard({
-  planKey,
-  seats,
-  recommended,
-  isCurrent,
-  canManage,
-  pending,
-  anyPending,
-  onSubscribe,
-}: {
-  planKey: PlanKey
-  seats: number
-  recommended: boolean
-  isCurrent: boolean
-  canManage: boolean
-  pending: boolean
-  anyPending: boolean
-  onSubscribe: () => void
-}) {
-  const plan = PLANS[planKey]
-  const isEnterprise = planKey === "enterprise"
-  const total = computeMonthlyCents(planKey, seats)
-  const over = extraSeats(planKey, seats)
-  const popular = !!plan.popular
-
-  const card = (
-    <div
-      className={cn(
-        "relative flex h-full flex-col rounded-2xl border bg-card p-6",
-        popular
-          ? "border-transparent shadow-lg"
-          : "border-border shadow-sm",
-      )}
-    >
-      {/* Corner status ribbons */}
-      {popular && (
-        <span className="absolute -top-3 left-6 inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-sky-500 to-indigo-600 px-3 py-1 text-[11px] font-semibold text-white shadow-md">
-          <IconSparkles className="size-3.5" /> Most popular
-        </span>
-      )}
-      {recommended && (
-        <span className="border-primary/30 bg-primary/10 text-primary absolute -top-3 right-6 rounded-full border px-3 py-1 text-[11px] font-semibold">
-          Best for {seats}
-        </span>
-      )}
-
-      <div className="flex flex-col gap-1">
-        <h3 className="text-xl font-semibold">{plan.name}</h3>
-        <p className="text-muted-foreground min-h-[2.5rem] text-sm">
-          {plan.tagline}
-        </p>
-      </div>
-
-      {/* Price */}
-      <div className="mt-5">
-        {isEnterprise || total === null ? (
-          <div className="text-3xl font-extrabold tracking-tight">
-            Custom
-          </div>
-        ) : (
-          <div className="flex items-baseline gap-1">
-            <span
-              key={total}
-              className="text-primary text-4xl font-extrabold tracking-tight tabular-nums"
-            >
-              {formatSgd(total)}
-            </span>
-            <span className="text-muted-foreground text-sm font-medium">
-              /month
-            </span>
-          </div>
-        )}
-        <p className="text-muted-foreground mt-1.5 min-h-[2rem] text-xs">
-          {isEnterprise ? (
-            <>For 150+ employees. Tailored per-employee pricing.</>
-          ) : over > 0 ? (
-            <>
-              {formatSgd(plan.baseCents!)} base + {over} extra{" "}
-              {over === 1 ? "employee" : "employees"} ×{" "}
-              {formatSgd(plan.extraSeatCents!, true)}
-            </>
-          ) : (
-            <>Up to {plan.includedSeats} employees included</>
-          )}
-        </p>
-      </div>
-
-      {/* CTA */}
-      <div className="mt-5">
-        {isEnterprise ? (
-          <Button asChild variant="outline" className="w-full">
-            <Link href="/leadmightyhr#contact">
-              Contact sales <IconArrowRight className="size-4" />
-            </Link>
-          </Button>
-        ) : isCurrent ? (
-          <Button variant="secondary" className="w-full" disabled>
-            Current plan
-          </Button>
-        ) : (
-          <Button
-            className={cn(
-              "w-full",
-              popular &&
-                "bg-gradient-to-r from-sky-500 to-indigo-600 text-white hover:opacity-90",
-            )}
-            variant={popular ? "default" : "outline"}
-            disabled={!canManage || anyPending}
-            onClick={onSubscribe}
-          >
-            {pending ? "Redirecting…" : `Choose ${plan.name}`}
-          </Button>
-        )}
-        {!canManage && !isEnterprise && (
-          <p className="text-muted-foreground mt-2 text-center text-[11px]">
-            Only an admin can change the subscription.
-          </p>
-        )}
-      </div>
-
-      {/* Features */}
-      <ul className="mt-6 space-y-2.5 border-t border-border pt-5">
-        {PLAN_FEATURES.map((f) => (
-          <li key={f} className="flex items-start gap-2.5 text-sm">
-            <IconCheck className="text-primary mt-0.5 size-4 shrink-0" />
-            <span>{f}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-
-  // Popular plan gets a gradient border frame around the card.
-  if (popular) {
-    return (
-      <div className="rounded-2xl bg-gradient-to-b from-sky-500 to-indigo-600 p-[1.5px]">
-        {card}
-      </div>
-    )
-  }
-  return card
+function isOptional(k: string): k is OptionalModuleKey {
+  return (OPTIONAL_MODULES as string[]).includes(k)
 }
 
 function clamp(n: number): number {

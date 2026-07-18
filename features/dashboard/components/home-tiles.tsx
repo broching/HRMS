@@ -19,6 +19,8 @@ import {
 import { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
 import { Card } from "@/components/ui/card"
+import { useEnabledModules } from "@/hooks/use-modules"
+import type { ModuleKey } from "@/convex/lib/modules"
 
 type Tile = {
   title: string
@@ -26,6 +28,8 @@ type Tile = {
   icon: Icon
   href?: string
   soon?: boolean
+  // Product module this tile belongs to; hidden when the org lacks it.
+  module?: ModuleKey
   // Draws attention (e.g. an open clock-in session that needs closing).
   highlight?: boolean
   // Priority order on mobile (single-column). Lower = higher. Tiles without one
@@ -50,6 +54,7 @@ export function HomeTiles() {
   // Attendance leads the grid when the caller must clock in/out (or is mid
   // session); otherwise it stays in its normal slot lower down.
   const attendance = useQuery(api.attendance.myAttendanceConfig)
+  const modules = useEnabledModules()
   const attendanceLeads = Boolean(
     attendance && (attendance.required || attendance.hasOpenSession),
   )
@@ -62,9 +67,10 @@ export function HomeTiles() {
     href: "/attendance",
     highlight: attendance?.hasOpenSession,
     mobileOrder: 1,
+    module: "attendance",
   }
 
-  const tiles: Tile[] = [
+  const allTiles: Tile[] = [
     ...(attendanceLeads ? [attendanceTile] : []),
     {
       title: "My Profile",
@@ -84,12 +90,14 @@ export function HomeTiles() {
       icon: IconCalendarStats,
       href: "/leave",
       mobileOrder: 4,
+      module: "leave",
     },
     {
       title: "My Goals",
       description: "Check your performance management and KPIs",
       icon: IconTargetArrow,
       href: "/performance",
+      module: "performance",
     },
     {
       title: "Payroll Documents",
@@ -97,6 +105,7 @@ export function HomeTiles() {
       icon: IconFileDollar,
       href: "/payslips",
       mobileOrder: 5,
+      module: "payroll",
     },
     {
       title: "My Claims",
@@ -104,6 +113,7 @@ export function HomeTiles() {
       icon: IconReceipt,
       href: "/claims",
       mobileOrder: 3,
+      module: "claims",
     },
     {
       title: "Payment Requests",
@@ -111,6 +121,7 @@ export function HomeTiles() {
       icon: IconFileInvoice,
       href: "/payment-requests",
       mobileOrder: 6,
+      module: "payment_requests",
     },
     ...(attendanceLeads ? [] : [attendanceTile]),
     {
@@ -118,6 +129,7 @@ export function HomeTiles() {
       description: "Your upcoming shifts, working hours and overtime",
       icon: IconCalendarTime,
       href: "/scheduling",
+      module: "attendance",
     },
     {
       title: "My Timesheet",
@@ -125,14 +137,19 @@ export function HomeTiles() {
       icon: IconClockPlay,
       href: "/timesheets",
       mobileOrder: 2,
+      module: "timesheets",
     },
     {
       title: "Team Calendar",
       description: "See who's away across your team",
       icon: IconCalendarStats,
       href: "/leave/calendar",
+      module: "leave",
     },
   ]
+  const tiles = allTiles.filter(
+    (t) => !t.module || modules === undefined || modules.has(t.module),
+  )
 
   return (
     // On xl the column stretches to the profile card's height; capping the grid

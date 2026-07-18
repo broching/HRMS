@@ -4,6 +4,7 @@ import { v, ConvexError } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   requireOrg,
+  requireModule,
   ctxHasPermission,
   requirePermission,
   type OrgContext,
@@ -210,7 +211,7 @@ export const create = mutation({
   },
   returns: v.id("timeEntries"),
   handler: async (ctx, args) => {
-    const orgCtx = await requireOrg(ctx);
+    const orgCtx = await requireModule(ctx, "timesheets");
     const { orgId, userId } = orgCtx;
     const me = await employeeByUserId(ctx, orgId, userId);
     // Resolve whose timesheet this lands on — the caller by default.

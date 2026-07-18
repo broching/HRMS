@@ -1,7 +1,20 @@
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
-import type { QueryCtx } from "./_generated/server";
-import { PLANS, isPaidPlanKey, type PlanKey } from "./lib/plans";
+import { query, mutation } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
+import {
+  PLANS,
+  isPaidPlanKey,
+  computeBillingCents,
+  type PlanKey,
+} from "./lib/plans";
+import type { Doc } from "./_generated/dataModel";
+import {
+  MODULES,
+  MODULE_META,
+  OPTIONAL_MODULES,
+  enabledModulesFromDisabled,
+  sanitizeModuleKeys,
+} from "./lib/modules";
 
 /**
  * Platform super-admin console. This is the ONE place that deliberately crosses
@@ -28,7 +41,7 @@ function superAdminIds(): Set<string> {
 }
 
 /** Throw unless the verified caller is on the super-admin allow-list. */
-export async function requireSuperAdmin(ctx: QueryCtx) {
+export async function requireSuperAdmin(ctx: QueryCtx | MutationCtx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     throw new ConvexError({
@@ -78,6 +91,16 @@ function priceFor(plan: string | undefined, seats: number | undefined) {
   const p = PLANS[key];
   if (p.baseCents === null || p.extraSeatCents === null) return null;
   return p.baseCents + Math.max(0, seats - p.includedSeats) * p.extraSeatCents;
+}
+
+// Monthly price for a subscription under whichever model it uses: à la carte
+// (base + module add-ons) when it carries a module set, else legacy tiered plan.
+function priceForSub(sub: Doc<"subscriptions"> | null): number | null {
+  if (!sub) return null;
+  if (sub.modules && sub.seats != null) {
+    return computeBillingCents(sub.seats, sub.modules).totalCents;
+  }
+  return priceFor(sub.plan, sub.seats ?? undefined);
 }
 
 const ACTIVE_SUB = new Set(["active", "trialing", "past_due"]);
@@ -150,7 +173,7 @@ export const overview = query({
 
       const planKey =
         sub?.plan && sub.plan in PLANS ? (sub.plan as PlanKey) : null;
-      const priceCents = priceFor(sub?.plan, sub?.seats ?? undefined);
+      const priceCents = priceForSub(sub);
       const isActive = !!sub?.status && ACTIVE_SUB.has(sub.status);
       if (isActive) {
         activeSubscriptions++;
@@ -239,5 +262,367 @@ export const orgUsers = query({
     }
     out.sort((a, b) => a.joinedAt - b.joinedAt);
     return out;
+  },
+});
+
+// ─── Org drill-down: billing + module entitlements ───────────────────────────
+
+const moduleStateRow = v.object({
+  key: v.string(),
+  name: v.string(),
+  description: v.string(),
+  always: v.boolean(),
+  enabled: v.boolean(),
+});
+
+// Full detail for one org: meta, billing, and module entitlement state.
+export const orgDetail = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.object({
+    org: v.object({
+      orgId: v.id("organizations"),
+      name: v.string(),
+      slug: v.union(v.string(), v.null()),
+      country: v.string(),
+      createdAt: v.number(),
+      memberCount: v.number(),
+      activeEmployees: v.number(),
+    }),
+    billing: v.object({
+      plan: v.union(v.string(), v.null()),
+      planName: v.union(v.string(), v.null()),
+      modules: v.array(v.string()),
+      status: v.union(v.string(), v.null()),
+      seats: v.union(v.number(), v.null()),
+      priceCents: v.union(v.number(), v.null()),
+      currentPeriodEnd: v.union(v.number(), v.null()),
+      cancelAtPeriodEnd: v.boolean(),
+      hasStripeCustomer: v.boolean(),
+      hasSubscription: v.boolean(),
+    }),
+    modules: v.array(moduleStateRow),
+  }),
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+
+    const org = await ctx.db.get(args.orgId);
+    if (!org) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Org not found." });
+    }
+
+    const members = await ctx.db
+      .query("members")
+      .withIndex("by_org", (q) => q.eq("orgId", org._id))
+      .take(10000);
+
+    const employees = await ctx.db
+      .query("employees")
+      .withIndex("by_org", (q) => q.eq("orgId", org._id))
+      .take(10000);
+    let activeEmployees = 0;
+    for (const e of employees) {
+      if (e.status !== "terminated" && !e.isVacant) activeEmployees++;
+    }
+
+    const sub = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_org", (q) => q.eq("orgId", org._id))
+      .unique();
+    const planKey =
+      sub?.plan && sub.plan in PLANS ? (sub.plan as PlanKey) : null;
+    const priceCents = priceForSub(sub);
+
+    const modRow = await ctx.db
+      .query("orgModules")
+      .withIndex("by_org", (q) => q.eq("orgId", org._id))
+      .unique();
+    const enabled = enabledModulesFromDisabled(modRow?.disabled);
+    const modules = MODULES.map((key) => ({
+      key,
+      name: MODULE_META[key].name,
+      description: MODULE_META[key].description,
+      always: MODULE_META[key].always ?? false,
+      enabled: enabled.has(key),
+    }));
+
+    return {
+      org: {
+        orgId: org._id,
+        name: org.name,
+        slug: org.slug ?? null,
+        country: org.country,
+        createdAt: org._creationTime,
+        memberCount: members.length,
+        activeEmployees,
+      },
+      billing: {
+        plan: sub?.plan ?? null,
+        planName: planKey ? PLANS[planKey].name : null,
+        modules: sub?.modules ?? [],
+        status: sub?.status ?? null,
+        seats: sub?.seats ?? null,
+        priceCents,
+        currentPeriodEnd: sub?.currentPeriodEnd ?? null,
+        cancelAtPeriodEnd: sub?.cancelAtPeriodEnd ?? false,
+        hasStripeCustomer: !!sub?.stripeCustomerId,
+        hasSubscription: !!sub?.stripeSubscriptionId && !!sub?.status,
+      },
+      modules,
+    };
+  },
+});
+
+// ─── Org drill-down: derived resource-consumption analytics ──────────────────
+
+// Last `n` months as "YYYY-MM" keys, oldest first (includes the current month).
+function lastMonths(n: number): string[] {
+  const out: string[] = [];
+  const now = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    out.push(monthKey(d.getTime()));
+  }
+  return out;
+}
+
+function monthKey(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// "YYYY-MM-DD" (or any ISO date) → "YYYY-MM"; null-safe.
+function isoMonth(iso: string | undefined): string | null {
+  if (!iso || iso.length < 7) return null;
+  return iso.slice(0, 7);
+}
+
+const TAKE = 20000;
+
+// Meaningful, live metrics computed from the org's OWN tenant data. (Convex's
+// raw infra usage — function calls, bandwidth, storage GB — is not queryable
+// from app code; the platform dashboard exposes that separately.)
+export const orgAnalytics = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.object({
+    headcount: v.array(
+      v.object({
+        month: v.string(),
+        active: v.number(),
+        hires: v.number(),
+        exits: v.number(),
+      }),
+    ),
+    recordsByModule: v.array(
+      v.object({ key: v.string(), label: v.string(), count: v.number() }),
+    ),
+    activity: v.array(v.object({ month: v.string(), count: v.number() })),
+    storage: v.object({
+      documents: v.number(),
+      signatures: v.number(),
+      feedAttachments: v.number(),
+    }),
+    totals: v.object({
+      members: v.number(),
+      activeEmployees: v.number(),
+      terminatedEmployees: v.number(),
+    }),
+  }),
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+    const orgId = args.orgId;
+    const months = lastMonths(12);
+    const monthSet = new Set(months);
+
+    // Employees → headcount timeline (join/exit dated) + status totals.
+    const employees = await ctx.db
+      .query("employees")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const realEmployees = employees.filter((e) => !e.isVacant);
+
+    const hiresByMonth: Record<string, number> = {};
+    const exitsByMonth: Record<string, number> = {};
+    for (const m of months) {
+      hiresByMonth[m] = 0;
+      exitsByMonth[m] = 0;
+    }
+    for (const e of realEmployees) {
+      const jm = isoMonth(e.joinDate);
+      if (jm && monthSet.has(jm)) hiresByMonth[jm]++;
+      const xm = isoMonth(e.exitDate);
+      if (xm && monthSet.has(xm)) exitsByMonth[xm]++;
+    }
+    const headcount = months.map((m) => {
+      // Active at end of month m: joined on/before, not exited on/before.
+      const end = m; // compare "YYYY-MM" lexically (same length) is monotonic
+      let active = 0;
+      for (const e of realEmployees) {
+        const jm = isoMonth(e.joinDate);
+        if (!jm || jm > end) continue;
+        const xm = isoMonth(e.exitDate);
+        if (e.status === "terminated" && xm && xm <= end) continue;
+        active++;
+      }
+      return { month: m, active, hires: hiresByMonth[m], exits: exitsByMonth[m] };
+    });
+
+    let terminatedEmployees = 0;
+    let activeEmployees = 0;
+    for (const e of realEmployees) {
+      if (e.status === "terminated") terminatedEmployees++;
+      else activeEmployees++;
+    }
+
+    // Per-module record counts (one representative table each) + an activity
+    // timeline bucketed by creation month from the higher-volume tables.
+    const activityByMonth: Record<string, number> = {};
+    for (const m of months) activityByMonth[m] = 0;
+    const bumpActivity = (rows: { _creationTime: number }[]) => {
+      for (const r of rows) {
+        const mk = monthKey(r._creationTime);
+        if (mk in activityByMonth) activityByMonth[mk]++;
+      }
+    };
+
+    const leaveRequests = await ctx.db
+      .query("leaveRequests")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const claims = await ctx.db
+      .query("claims")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const paymentRequests = await ctx.db
+      .query("paymentRequests")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const attendanceRecords = await ctx.db
+      .query("attendanceRecords")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const payrollRuns = await ctx.db
+      .query("payrollRuns")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const jobs = await ctx.db
+      .query("jobs")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const candidates = await ctx.db
+      .query("candidates")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const feedPosts = await ctx.db
+      .query("feedPosts")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const timeEntries = await ctx.db
+      .query("timeEntries")
+      .withIndex("by_org_date", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const documents = await ctx.db
+      .query("employeeDocuments")
+      .withIndex("by_org_type", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+    const signatures = await ctx.db
+      .query("savedSignatures")
+      .withIndex("by_org_and_user", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+
+    bumpActivity(leaveRequests);
+    bumpActivity(claims);
+    bumpActivity(paymentRequests);
+    bumpActivity(attendanceRecords);
+    bumpActivity(timeEntries);
+
+    const recordsByModule = [
+      { key: "leave", label: "Leave requests", count: leaveRequests.length },
+      { key: "claims", label: "Claims", count: claims.length },
+      {
+        key: "payment_requests",
+        label: "Payment requests",
+        count: paymentRequests.length,
+      },
+      { key: "payroll", label: "Payroll runs", count: payrollRuns.length },
+      {
+        key: "attendance",
+        label: "Attendance records",
+        count: attendanceRecords.length,
+      },
+      { key: "timesheets", label: "Time entries", count: timeEntries.length },
+      { key: "performance", label: "Reviews", count: reviews.length },
+      {
+        key: "recruitment",
+        label: "Jobs & candidates",
+        count: jobs.length + candidates.length,
+      },
+    ];
+
+    const feedAttachments = feedPosts.reduce(
+      (n, p) => n + (p.mediaStorageIds?.length ?? 0),
+      0,
+    );
+
+    const members = await ctx.db
+      .query("members")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(TAKE);
+
+    return {
+      headcount,
+      recordsByModule,
+      activity: months.map((m) => ({ month: m, count: activityByMonth[m] })),
+      storage: {
+        documents: documents.length,
+        signatures: signatures.length,
+        feedAttachments,
+      },
+      totals: {
+        members: members.length,
+        activeEmployees,
+        terminatedEmployees,
+      },
+    };
+  },
+});
+
+// ─── System configuration: toggle modules per org ────────────────────────────
+
+// Set the org's disabled-module list. Super-admin only; `core` can't be
+// disabled and unknown keys are dropped. Absence of a row means all-enabled.
+export const setOrgModules = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    disabled: v.array(v.string()),
+  },
+  returns: v.array(v.string()),
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+
+    const org = await ctx.db.get(args.orgId);
+    if (!org) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Org not found." });
+    }
+
+    // Keep only real optional modules (never `core`, never unknown keys).
+    const optional = new Set<string>(OPTIONAL_MODULES);
+    const disabled = [
+      ...new Set(sanitizeModuleKeys(args.disabled).filter((m) => optional.has(m))),
+    ];
+
+    const existing = await ctx.db
+      .query("orgModules")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, { disabled });
+    } else {
+      await ctx.db.insert("orgModules", { orgId: args.orgId, disabled });
+    }
+    return disabled;
   },
 });

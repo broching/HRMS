@@ -8,35 +8,41 @@ import { SignUpButton } from "@clerk/nextjs";
 import { SectionHeading } from "./section-heading";
 import { Reveal } from "./reveal";
 import {
-  PLANS,
-  PLAN_ORDER,
-  PLAN_FEATURES,
-  computeMonthlyCents,
-  extraSeats,
-  recommendedPlan,
+  CORE_MAX_SEATS,
+  MODULE_PRICING,
+  computeBillingCents,
   formatSgd,
-  type PlanKey,
+  type OptionalModuleKey,
 } from "@/convex/lib/plans";
+import { OPTIONAL_MODULES, MODULE_META } from "@/convex/lib/modules";
 
 const MIN = 1;
-const MAX = 300;
-const PRESETS = [5, 25, 75, 150];
-// The tier boundaries, annotated on the ruler so the control itself explains
-// the pricing model — where each plan's included headcount ends.
-const TICKS: { seat: number; label: string }[] = [
-  { seat: 10, label: "Starter" },
-  { seat: 50, label: "Growth" },
-  { seat: 150, label: "Business" },
-];
+const MAX = CORE_MAX_SEATS;
+const PRESETS = [5, 25, 50, 100];
 
 const pctOf = (s: number) => ((s - MIN) / (MAX - MIN)) * 100;
 const clamp = (n: number) =>
   Number.isNaN(n) ? MIN : Math.min(MAX, Math.max(MIN, Math.round(n)));
 
+const MODS = OPTIONAL_MODULES as OptionalModuleKey[];
+
 export function PricingSection() {
   const [seats, setSeats] = React.useState(12);
-  const recommended = recommendedPlan(seats);
+  const [selected, setSelected] = React.useState<Set<OptionalModuleKey>>(
+    () => new Set(MODS),
+  );
   const fillPct = pctOf(seats);
+
+  const modules = MODS.filter((m) => selected.has(m));
+  const cost = computeBillingCents(seats, modules);
+
+  const toggle = (k: OptionalModuleKey) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
 
   return (
     <section id="pricing" className="scroll-mt-24 px-5 py-24">
@@ -45,20 +51,20 @@ export function PricingSection() {
           eyebrow="Pricing"
           title={
             <>
-              Priced by the size <br className="hidden sm:block" />
-              of your team.
+              Pay only for the <br className="hidden sm:block" />
+              modules you use.
             </>
           }
           lede={
             <>
-              Every plan ships the entire suite — all nine modules, no feature
-              gates. You only choose how many people you&apos;re running.
-              Transparent SGD pricing, billed monthly, cancel anytime.
+              A per-employee Core platform plus flat monthly add-ons — switch
+              modules on and off as you grow. Transparent SGD pricing, billed
+              monthly, cancel anytime.
             </>
           }
         />
 
-        {/* ── The instrument: a drafting ruler that sizes the whole page ── */}
+        {/* ── The instrument: the headcount ruler drives the Core fee ── */}
         <Reveal delay={120} className="mt-12">
           <div
             className="lm-card relative overflow-hidden p-6 md:p-8"
@@ -81,6 +87,13 @@ export function PricingSection() {
                     {seats === 1 ? "employee" : "employees"}
                   </span>
                 </div>
+                <p
+                  className="lm-mono mt-1 text-[0.72rem]"
+                  style={{ color: "var(--lm-muted-2)" }}
+                >
+                  Core platform · scales with team size ={" "}
+                  {formatSgd(cost.baseCents)}/mo
+                </p>
               </div>
 
               <div className="flex items-center gap-3">
@@ -122,29 +135,6 @@ export function PricingSection() {
                 }}
               />
 
-              {/* Tier ticks — the ruler's engraved marks */}
-              <div className="relative mt-3 h-9">
-                {TICKS.map((t) => (
-                  <div
-                    key={t.seat}
-                    className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
-                    style={{ left: `${pctOf(t.seat)}%` }}
-                  >
-                    <span
-                      className="h-2 w-px"
-                      style={{ background: "var(--lm-line-2)" }}
-                    />
-                    <span
-                      className="lm-mono mt-1 text-[0.68rem] whitespace-nowrap"
-                      style={{ color: "var(--lm-muted)" }}
-                    >
-                      <span style={{ color: "var(--lm-ink-2)" }}>{t.seat}</span>{" "}
-                      {t.label}
-                    </span>
-                  </div>
-                ))}
-              </div>
-
               {/* Presets */}
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <span
@@ -178,61 +168,148 @@ export function PricingSection() {
           </div>
         </Reveal>
 
-        {/* ── Plan plates ── */}
-        <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-          {PLAN_ORDER.map((key, i) => (
-            <Reveal key={key} delay={80 * i}>
-              <PlanPlate
-                planKey={key}
-                seats={seats}
-                recommended={recommended === key}
-              />
-            </Reveal>
-          ))}
-        </div>
-
-        {/* ── Shared manifest: everything's included ── */}
-        <Reveal delay={120} className="mt-6">
-          <div
-            className="lm-card p-6 md:p-8"
-            style={{ background: "var(--lm-panel-2)" }}
-          >
-            <div className="flex items-center gap-2.5">
-              <span
-                className="h-px w-8"
-                style={{ background: "var(--lm-accent)" }}
-                aria-hidden
-              />
-              <span className="lm-eyebrow">Included in every plan</span>
+        {/* ── Module picker + running total ── */}
+        <div className="mt-6 grid gap-5 lg:grid-cols-[1fr_20rem]">
+          <Reveal>
+            <div
+              className="lm-card p-6 md:p-8"
+              style={{ background: "var(--lm-panel-2)" }}
+            >
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="h-px w-8"
+                  style={{ background: "var(--lm-accent)" }}
+                  aria-hidden
+                />
+                <span className="lm-eyebrow">Choose your modules</span>
+              </div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                {MODS.map((key) => {
+                  const on = selected.has(key);
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => toggle(key)}
+                      className="lm-card flex items-start justify-between gap-3 p-4 text-left transition-all"
+                      style={{
+                        borderColor: on ? "var(--lm-accent)" : "var(--lm-line)",
+                        background: on
+                          ? "color-mix(in oklab, var(--lm-accent) 6%, transparent)"
+                          : "transparent",
+                      }}
+                    >
+                      <div className="min-w-0">
+                        <div
+                          className="font-medium"
+                          style={{ color: "var(--lm-ink)" }}
+                        >
+                          {MODULE_META[key].name}
+                        </div>
+                        <p
+                          className="mt-0.5 text-[0.78rem] leading-relaxed"
+                          style={{ color: "var(--lm-muted)" }}
+                        >
+                          {MODULE_META[key].description}
+                        </p>
+                        <div
+                          className="lm-mono mt-2 text-sm"
+                          style={{ color: "var(--lm-ink-2)" }}
+                        >
+                          {formatSgd(MODULE_PRICING[key].monthlyCents)}/mo
+                        </div>
+                      </div>
+                      <span
+                        className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border transition-colors"
+                        style={{
+                          borderColor: on
+                            ? "var(--lm-accent)"
+                            : "var(--lm-line-2)",
+                          background: on ? "var(--lm-accent)" : "transparent",
+                        }}
+                        aria-hidden
+                      >
+                        {on && <Check className="h-3 w-3 text-white" />}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <ul className="mt-5 grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-              {PLAN_FEATURES.map((f) => (
-                <li key={f} className="flex items-start gap-2.5">
+          </Reveal>
+
+          {/* Summary plate */}
+          <Reveal delay={80}>
+            <div
+              className="lm-card h-fit p-6 lg:sticky lg:top-24"
+              style={{ background: "var(--lm-panel)" }}
+            >
+              <span className="lm-eyebrow">Your monthly plan</span>
+              <div className="mt-4 flex flex-col gap-2 text-sm">
+                <Line
+                  label={`Core · ${seats} ${seats === 1 ? "employee" : "employees"}`}
+                  value={formatSgd(cost.baseCents)}
+                />
+                {modules.map((m) => (
+                  <Line
+                    key={m}
+                    label={MODULE_META[m].name}
+                    value={formatSgd(MODULE_PRICING[m].monthlyCents)}
+                  />
+                ))}
+              </div>
+              <div
+                className="mt-4 flex items-baseline justify-between border-t pt-4"
+                style={{ borderColor: "var(--lm-line)" }}
+              >
+                <span
+                  className="text-sm font-medium"
+                  style={{ color: "var(--lm-muted)" }}
+                >
+                  Total
+                </span>
+                <span
+                  className="lm-display text-[2.2rem] leading-none tabular-nums"
+                  style={{ color: "var(--lm-ink)" }}
+                >
+                  {formatSgd(cost.totalCents)}
                   <span
-                    className="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full"
-                    style={{
-                      background:
-                        "color-mix(in oklab, var(--lm-accent) 14%, transparent)",
-                    }}
+                    className="lm-mono ml-1 text-sm"
+                    style={{ color: "var(--lm-muted)" }}
                   >
-                    <Check
-                      className="h-3 w-3"
-                      style={{ color: "var(--lm-accent)" }}
-                    />
+                    /mo
                   </span>
-                  <span
-                    className="text-[0.92rem]"
-                    style={{ color: "var(--lm-ink-2)" }}
-                  >
-                    {f}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </Reveal>
+                </span>
+              </div>
+              <div className="mt-5">
+                <PlanCTA />
+              </div>
+              <p
+                className="lm-mono mt-4 text-[0.72rem]"
+                style={{ color: "var(--lm-muted-2)" }}
+              >
+                {modules.length} of {MODS.length} modules · billed monthly ·
+                cancel anytime
+              </p>
+            </div>
+          </Reveal>
+        </div>
       </div>
     </section>
+  );
+}
+
+function Line({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span style={{ color: "var(--lm-muted)" }}>{label}</span>
+      <span
+        className="font-medium tabular-nums"
+        style={{ color: "var(--lm-ink-2)" }}
+      >
+        {value}
+      </span>
+    </div>
   );
 }
 
@@ -266,165 +343,19 @@ function RulerStepper({
   );
 }
 
-function PlanPlate({
-  planKey,
-  seats,
-  recommended,
-}: {
-  planKey: PlanKey;
-  seats: number;
-  recommended: boolean;
-}) {
-  const plan = PLANS[planKey];
-  const isEnterprise = planKey === "enterprise";
-  const popular = !!plan.popular;
-  const total = computeMonthlyCents(planKey, seats);
-  const over = extraSeats(planKey, seats);
-
-  return (
-    <div
-      className="lm-card relative flex h-full flex-col p-6 transition-all duration-500"
-      style={{
-        borderColor: recommended ? "var(--lm-accent)" : "var(--lm-line)",
-        boxShadow: recommended
-          ? "0 2px 6px rgba(12,26,58,0.05), 0 26px 50px -26px color-mix(in oklab, var(--lm-accent) 60%, transparent)"
-          : "var(--lm-shadow)",
-      }}
-    >
-      {/* Top tabs */}
-      <div className="flex h-5 items-center justify-between">
-        {popular ? (
-          <span
-            className="lm-mono rounded-full px-2.5 py-0.5 text-[0.62rem] tracking-[0.16em] text-white uppercase"
-            style={{
-              background:
-                "linear-gradient(180deg, var(--lm-accent-2), var(--lm-accent))",
-            }}
-          >
-            Most popular
-          </span>
-        ) : (
-          <span />
-        )}
-        {recommended && (
-          <span
-            className="lm-mono text-[0.62rem] tracking-[0.14em] uppercase"
-            style={{ color: "var(--lm-accent)" }}
-          >
-            Best for {seats}
-          </span>
-        )}
-      </div>
-
-      <h3
-        className="lm-display mt-4 text-2xl"
-        style={{ color: "var(--lm-ink)" }}
-      >
-        {plan.name}
-      </h3>
-      <p
-        className="mt-1.5 min-h-[3.25rem] text-[0.9rem] leading-snug"
-        style={{ color: "var(--lm-muted)" }}
-      >
-        {plan.tagline}
-      </p>
-
-      {/* Price — the spec value */}
-      <div
-        className="mt-4 border-t pt-4"
-        style={{ borderColor: "var(--lm-line)" }}
-      >
-        {isEnterprise || total === null ? (
-          <div
-            className="lm-display text-3xl"
-            style={{ color: "var(--lm-ink)" }}
-          >
-            Custom
-          </div>
-        ) : (
-          <div className="flex items-baseline gap-1.5">
-            <span
-              className="lm-display text-[2.4rem] leading-none tabular-nums"
-              style={{ color: "var(--lm-ink)" }}
-            >
-              {formatSgd(total)}
-            </span>
-            <span
-              className="lm-mono text-sm"
-              style={{ color: "var(--lm-muted)" }}
-            >
-              /mo
-            </span>
-          </div>
-        )}
-
-        {/* Mono annotation — how the number is built */}
-        <p
-          className="lm-mono mt-2 min-h-[2.4rem] text-[0.72rem] leading-relaxed"
-          style={{ color: "var(--lm-muted)" }}
-        >
-          {isEnterprise ? (
-            <>150+ employees · tailored per-seat quote</>
-          ) : over > 0 ? (
-            <>
-              {formatSgd(plan.baseCents!)} base
-              <br />
-              <span style={{ color: "var(--lm-accent)" }}>
-                + {over} × {formatSgd(plan.extraSeatCents!, true)}/seat
-              </span>
-            </>
-          ) : (
-            <>up to {plan.includedSeats} employees included</>
-          )}
-        </p>
-      </div>
-
-      <div className="mt-5">
-        <PlanCTA planKey={planKey} popular={popular} name={plan.name} />
-      </div>
-
-      <p
-        className="lm-mono mt-4 text-[0.72rem]"
-        style={{ color: "var(--lm-muted-2)" }}
-      >
-        Full HR suite ·{" "}
-        {isEnterprise
-          ? "unlimited scale"
-          : `${plan.includedSeats} seats included`}
-      </p>
-    </div>
-  );
-}
-
-function PlanCTA({
-  planKey,
-  popular,
-  name,
-}: {
-  planKey: PlanKey;
-  popular: boolean;
-  name: string;
-}) {
-  if (planKey === "enterprise") {
-    return (
-      <Link href="/#contact" className="lm-btn lm-btn-ghost w-full">
-        Talk to us <ArrowRight className="h-4 w-4" />
-      </Link>
-    );
-  }
-  const cls = `lm-btn w-full ${popular ? "lm-btn-primary" : "lm-btn-ghost"}`;
+function PlanCTA() {
   return (
     <>
       <Unauthenticated>
         <SignUpButton mode="modal">
-          <button className={cls}>
+          <button className="lm-btn lm-btn-primary w-full">
             Get started <ArrowRight className="h-4 w-4" />
           </button>
         </SignUpButton>
       </Unauthenticated>
       <Authenticated>
-        <Link href="/hr-lounge/billing" className={cls}>
-          Choose {name}
+        <Link href="/hr-lounge/billing" className="lm-btn lm-btn-primary w-full">
+          Build your plan <ArrowRight className="h-4 w-4" />
         </Link>
       </Authenticated>
     </>

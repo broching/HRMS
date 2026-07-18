@@ -4,7 +4,6 @@ import * as React from "react"
 import Link from "next/link"
 import { useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
-import type { Id } from "@/convex/_generated/dataModel"
 import {
   IconShieldLock,
   IconBuilding,
@@ -30,13 +29,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet"
 
 export function SuperAdminConsole() {
   const me = useQuery(api.superAdmin.whoami)
@@ -68,7 +60,7 @@ export function SuperAdminConsole() {
 
 // ─── Chrome ──────────────────────────────────────────────────────────────────
 
-function Shell({
+export function Shell({
   children,
   name,
 }: {
@@ -108,7 +100,7 @@ function Shell({
   )
 }
 
-function AccessDenied({
+export function AccessDenied({
   subject,
   email,
 }: {
@@ -156,10 +148,6 @@ function AccessDenied({
 function Dashboard() {
   const data = useQuery(api.superAdmin.overview)
   const [q, setQ] = React.useState("")
-  const [selected, setSelected] = React.useState<{
-    orgId: Id<"organizations">
-    name: string
-  } | null>(null)
 
   if (data === undefined) {
     return (
@@ -297,15 +285,11 @@ function Dashboard() {
                     {formatDate(o.createdAt)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        setSelected({ orgId: o.orgId, name: o.name })
-                      }
-                    >
-                      View
-                      <IconExternalLink className="size-4" />
+                    <Button variant="ghost" size="sm" asChild>
+                      <Link href={`/super-admin/orgs/${o.orgId}`}>
+                        View
+                        <IconExternalLink className="size-4" />
+                      </Link>
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -324,76 +308,7 @@ function Dashboard() {
           </Table>
         </div>
       </div>
-
-      <OrgUsersSheet
-        org={selected}
-        onOpenChange={(open) => !open && setSelected(null)}
-      />
     </div>
-  )
-}
-
-function OrgUsersSheet({
-  org,
-  onOpenChange,
-}: {
-  org: { orgId: Id<"organizations">; name: string } | null
-  onOpenChange: (open: boolean) => void
-}) {
-  const users = useQuery(
-    api.superAdmin.orgUsers,
-    org ? { orgId: org.orgId } : "skip",
-  )
-
-  return (
-    <Sheet open={!!org} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
-        <SheetHeader>
-          <SheetTitle>{org?.name}</SheetTitle>
-          <SheetDescription>
-            {users === undefined
-              ? "Loading members…"
-              : `${users.length} ${users.length === 1 ? "member" : "members"}`}
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="flex flex-col gap-2 px-4 pb-6">
-          {users === undefined ? (
-            Array.from({ length: 5 }).map((_, i) => (
-              <Skeleton key={i} className="h-16 rounded-xl" />
-            ))
-          ) : users.length === 0 ? (
-            <p className="text-muted-foreground py-8 text-center text-sm">
-              No members in this organization.
-            </p>
-          ) : (
-            users.map((u) => (
-              <div
-                key={u.memberId}
-                className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card p-3"
-              >
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">{u.name}</div>
-                  <div className="text-muted-foreground truncate text-xs">
-                    {u.email ?? (u.username ? `@${u.username}` : "—")}
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Badge variant="outline" className="capitalize">
-                    {u.roleName ?? u.role}
-                  </Badge>
-                  {u.status !== "active" && (
-                    <span className="text-muted-foreground text-[11px] capitalize">
-                      {u.status}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
   )
 }
 

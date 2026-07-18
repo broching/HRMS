@@ -1,18 +1,111 @@
 /**
- * Subscription plan catalogue. Framework-agnostic (no Convex/Next imports) so it
- * is shared by the Convex backend (checkout + webhook resolution) and the client
- * (pricing UI + live price math), imported on the client via `@/convex/lib/plans`.
+ * Subscription pricing catalogue. Framework-agnostic (no Convex/Next imports) so
+ * it is shared by the Convex backend (checkout + webhook resolution) and the
+ * client (pricing UI + live price math), imported on the client via
+ * `@/convex/lib/plans`.
  *
- * Billing model: the ORGANIZATION is the Stripe customer. Each paid plan is a
- * single graduated tiered price in Stripe, and the subscription quantity = the
- * number of employee seats. Stripe computes "base + additional employees" from
- * the tiers; `computeMonthlyCents` mirrors that math for the UI so what a buyer
- * sees always matches what Stripe will charge.
+ * Billing model (à la carte): the ORGANIZATION is the Stripe customer. A
+ * subscription is a **tiered Core platform fee** (priced by team size — quantity
+ * = employee seats, billed via a volume-tiered Stripe price) plus a **flat
+ * monthly add-on per enabled module** (see `MODULE_PRICING`). What an org pays
+ * for is what's enabled — the webhook syncs the paid module set into the
+ * `orgModules` entitlement table (convex/billing.ts).
  *
- * All amounts are in SGD cents. Prices below are the LIVE Stripe price IDs; the
- * server may override any of them with a `STRIPE_PRICE_<PLAN>` env var (e.g. to
- * point at test-mode prices during development) — see convex/stripe.ts.
+ * All amounts are in SGD cents. The Stripe price ids come from env overrides
+ * (`STRIPE_PRICE_BASE`, `STRIPE_PRICE_MODULE_<KEY>`) resolved in convex/stripe.ts.
+ *
+ * The LEGACY tiered `PLANS` (Starter/Growth/Business/Enterprise) below are kept
+ * only to render pre-existing subscriptions; new checkouts use the module model.
  */
+import type { ModuleKey } from "./modules";
+import { OPTIONAL_MODULES, MODULE_META } from "./modules";
+
+// ─── À la carte module pricing (current model) ───────────────────────────────
+
+export type OptionalModuleKey = Exclude<ModuleKey, "core">;
+
+/**
+ * Core platform price by team size (SGD cents). Volume-tiered: an org pays the
+ * flat price of whichever bracket its headcount falls into — Stripe bills the
+ * same via a volume-tiered price (quantity = seats). Above the top bracket,
+ * pricing is sales-led (Enterprise / contact us).
+ */
+export const CORE_TIERS: readonly { upTo: number; cents: number }[] = [
+  { upTo: 5, cents: 3900 },
+  { upTo: 10, cents: 5900 },
+  { upTo: 25, cents: 10900 },
+  { upTo: 50, cents: 16900 },
+  { upTo: 75, cents: 22900 },
+  { upTo: 100, cents: 27900 },
+  { upTo: 150, cents: 37900 },
+];
+
+/** Largest self-serve team size; beyond it, pricing is sales-led (Enterprise). */
+export const CORE_MAX_SEATS = CORE_TIERS[CORE_TIERS.length - 1].upTo;
+
+/** Whether a team of `seats` is past the self-serve ceiling (→ contact sales). */
+export function isEnterpriseSeats(seats: number): boolean {
+  return Math.max(1, Math.ceil(seats || 0)) > CORE_MAX_SEATS;
+}
+
+/**
+ * Core platform monthly price (SGD cents) for `seats` employees — the flat price
+ * of the bracket the team falls into. Past the top bracket we return the top
+ * price (the UI routes such teams to sales, but the number stays sane for any
+ * stray value, matching the Stripe price's top volume tier).
+ */
+export function computeCoreCents(seats: number): number {
+  const s = Math.max(1, Math.ceil(seats || 0));
+  for (const t of CORE_TIERS) if (s <= t.upTo) return t.cents;
+  return CORE_TIERS[CORE_TIERS.length - 1].cents;
+}
+
+/** Flat monthly add-on price per optional module (SGD cents). */
+export const MODULE_PRICING: Record<OptionalModuleKey, { monthlyCents: number }> = {
+  leave: { monthlyCents: 1000 },
+  claims: { monthlyCents: 1000 },
+  payment_requests: { monthlyCents: 1000 },
+  payroll: { monthlyCents: 2000 },
+  attendance: { monthlyCents: 1500 },
+  timesheets: { monthlyCents: 1500 },
+  performance: { monthlyCents: 1200 },
+  recruitment: { monthlyCents: 1500 },
+  reports: { monthlyCents: 1000 },
+};
+
+/** The env var holding a module's Stripe price id (resolved in stripe.ts). */
+export function modulePriceEnvKey(key: OptionalModuleKey): string {
+  return `STRIPE_PRICE_MODULE_${key.toUpperCase()}`;
+}
+
+/** Whether `key` is a real, priceable optional module. */
+export function isOptionalModuleKey(key: string): key is OptionalModuleKey {
+  return (OPTIONAL_MODULES as string[]).includes(key);
+}
+
+/** Human name for a module (reused from the module catalogue). */
+export function moduleName(key: OptionalModuleKey): string {
+  return MODULE_META[key].name;
+}
+
+/**
+ * Monthly cost breakdown (SGD cents) for `seats` employees with `modules`
+ * enabled: the tiered Core platform fee + the flat price of each enabled
+ * optional module.
+ */
+export function computeBillingCents(
+  seats: number,
+  modules: readonly string[],
+): { baseCents: number; moduleCents: number; totalCents: number } {
+  const baseCents = computeCoreCents(seats);
+  let moduleCents = 0;
+  for (const m of modules) {
+    if (isOptionalModuleKey(m)) moduleCents += MODULE_PRICING[m].monthlyCents;
+  }
+  return { baseCents, moduleCents, totalCents: baseCents + moduleCents };
+}
+
+// ─── Legacy tiered plans (pre-existing subscriptions only) ───────────────────
 
 export type PaidPlanKey = "starter" | "growth" | "business";
 export type PlanKey = PaidPlanKey | "enterprise";

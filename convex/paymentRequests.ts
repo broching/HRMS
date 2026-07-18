@@ -3,6 +3,7 @@ import { v, ConvexError } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import {
   requireOrg,
+  requireModule,
   getOrgContext,
   requirePermission,
   ctxHasPermission,
@@ -575,7 +576,7 @@ export const create = mutation({
   },
   returns: v.id("paymentRequests"),
   handler: async (ctx, args) => {
-    const { orgId, userId, org } = await requireOrg(ctx);
+    const { orgId, userId, org } = await requireModule(ctx, "payment_requests");
     const own = await employeeByUserId(ctx, orgId, userId);
     if (!own) throw new ConvexError("You don't have an employee profile yet.");
 
