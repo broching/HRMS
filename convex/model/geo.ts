@@ -31,10 +31,18 @@ export interface GeofenceCheck {
   distance: number; // metres from the office centre
 }
 
+// Upper bound on the GPS-accuracy slack. A fix reports how uncertain it is
+// (`coords.accuracy`, in metres); we treat the office as "reachable" when it
+// falls inside that uncertainty circle. Wi-Fi/IP fixes on laptops routinely
+// report ~1–2 km of uncertainty, so a low cap (the old 100 m) wrongly rejected
+// staff who are genuinely on-site. We honour the reported accuracy up to this
+// ceiling so an absurd/garbage value still can't disable the fence entirely.
+const MAX_ACCURACY_SLACK_M = 2000;
+
 /**
- * Is `point` within `radiusMeters` of `center`? The device's reported GPS
- * accuracy is added as slack (capped) so a legitimately-present employee with
- * a fuzzy fix is not rejected, without making the fence meaninglessly large.
+ * Is `point` within `radiusMeters` of `center`, allowing for the device's
+ * reported GPS accuracy? Passes when the office lies within the fix's
+ * uncertainty: `distance <= radius + min(accuracy, MAX_ACCURACY_SLACK_M)`.
  */
 export function checkGeofence(
   center: LatLng,
@@ -43,6 +51,6 @@ export function checkGeofence(
   accuracyMeters?: number,
 ): GeofenceCheck {
   const distance = haversineMeters(center, point);
-  const slack = Math.min(accuracyMeters ?? 0, 100);
+  const slack = Math.min(Math.max(accuracyMeters ?? 0, 0), MAX_ACCURACY_SLACK_M);
   return { ok: distance <= radiusMeters + slack, distance };
 }

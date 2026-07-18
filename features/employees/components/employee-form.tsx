@@ -14,6 +14,7 @@ import type { HrmsRole } from "@/convex/lib/enums"
 import type { Id, TableNames } from "@/convex/_generated/dataModel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
@@ -251,9 +252,15 @@ function MultiManagerField({
 export function EmployeeForm({
   employeeId,
   initial,
+  loginUsername,
+  loginEmail,
 }: {
   employeeId?: Id<"employees">
   initial?: Partial<EmployeeFormValues>
+  // The linked sign-in identifiers, shown read-only when editing (an account's
+  // username/invite email can't be changed from the employee record).
+  loginUsername?: string
+  loginEmail?: string
 }) {
   const router = useRouter()
   const { organization } = useOrganization()
@@ -502,6 +509,34 @@ export function EmployeeForm({
               type="email"
               placeholder="name@company.com"
             />
+            {employeeId && loginUsername && (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="account-username">Username</Label>
+                <Input
+                  id="account-username"
+                  value={loginUsername}
+                  readOnly
+                  disabled
+                />
+                <p className="text-muted-foreground text-xs">
+                  Linked sign-in account — can&apos;t be changed here.
+                </p>
+              </div>
+            )}
+            {employeeId && loginEmail && (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="account-login-email">Sign-in email</Label>
+                <Input
+                  id="account-login-email"
+                  value={loginEmail}
+                  readOnly
+                  disabled
+                />
+                <p className="text-muted-foreground text-xs">
+                  The email this person was invited with.
+                </p>
+              </div>
+            )}
             {!employeeId && (
               <TextField
                 control={form.control}

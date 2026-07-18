@@ -1,5 +1,6 @@
 "use client"
 
+import * as React from "react"
 import Link from "next/link"
 import { useClerk, useUser } from "@clerk/nextjs"
 import { useTheme } from "next-themes"
@@ -7,10 +8,10 @@ import {
   IconUserCircle,
   IconLogout,
   IconMoon,
-  IconSun,
 } from "@tabler/icons-react"
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Switch } from "@/components/ui/switch"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,8 +23,14 @@ import {
 
 export function NavUserMenu() {
   const { signOut } = useClerk()
-  const { theme, setTheme } = useTheme()
+  const { resolvedTheme, setTheme } = useTheme()
   const { user } = useUser()
+
+  // next-themes resolves the theme only after mount; avoid a hydration mismatch
+  // on the toggle by treating pre-mount as light.
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => setMounted(true), [])
+  const isDark = mounted && resolvedTheme === "dark"
 
   const initials =
     user?.fullName
@@ -55,16 +62,17 @@ export function NavUserMenu() {
             My profile
           </Link>
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-        >
-          {theme === "dark" ? (
-            <IconSun className="size-4" />
-          ) : (
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-sm">
+          <span className="flex items-center gap-2">
             <IconMoon className="size-4" />
-          )}
-          {theme === "dark" ? "Light mode" : "Dark mode"}
-        </DropdownMenuItem>
+            Dark mode
+          </span>
+          <Switch
+            checked={isDark}
+            onCheckedChange={(c) => setTheme(c ? "dark" : "light")}
+            aria-label="Toggle dark mode"
+          />
+        </div>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => signOut({ redirectUrl: "/" })}>
           <IconLogout className="size-4" />

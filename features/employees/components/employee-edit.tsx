@@ -67,7 +67,12 @@ export function EmployeeEdit({ employeeId }: { employeeId: Id<"employees"> }) {
         title="Edit employee"
         description={`${employee.firstName} ${employee.lastName}`}
       />
-      <EmployeeForm employeeId={employeeId} initial={initial} />
+      <EmployeeForm
+        employeeId={employeeId}
+        initial={initial}
+        loginUsername={employee.loginUsername}
+        loginEmail={employee.loginEmail}
+      />
     </div>
   )
 }
