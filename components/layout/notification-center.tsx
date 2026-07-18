@@ -25,6 +25,10 @@ function deepLinkFor(ref: EntityRef | undefined): string | null {
   if (!ref) return null
   if (ref.table === "reviews") return `/performance/reviews/${ref.id}`
   if (ref.table === "claims") return `/claims/${ref.id}`
+  if (ref.table === "projectTasks") {
+    const [projectId, taskId] = ref.id.split(":")
+    if (projectId && taskId) return `/projects/${projectId}?task=${taskId}`
+  }
   return null
 }
 
@@ -52,6 +56,7 @@ function hrefFor(type: string, entityRef?: EntityRef): string {
   if (type.startsWith("schedule.")) return "/scheduling"
   if (type.startsWith("attendance.")) return "/attendance"
   if (type.startsWith("feed.")) return "/feed"
+  if (type.startsWith("task.")) return "/projects"
   return "/dashboard"
 }
 

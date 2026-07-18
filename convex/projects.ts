@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, requirePermission, type OrgContext } from "./auth";
 import { taskPriority, projectPhase } from "./lib/enums";
 import { writeAuditLog } from "./lib/audit";
+import { pushNotification } from "./model/notify";
 import { employeeByUserId } from "./employees";
 import {
   accessForEmployee,
@@ -71,6 +72,36 @@ const assigneeView = v.object({
   name: v.string(),
 });
 
+const labelView = v.object({
+  _id: v.id("taskLabels"),
+  name: v.string(),
+  color: v.string(),
+});
+
+const checklistItem = v.object({
+  id: v.string(),
+  text: v.string(),
+  done: v.boolean(),
+  order: v.number(),
+});
+
+const subtaskView = v.object({
+  _id: v.id("projectTasks"),
+  name: v.string(),
+  status: v.union(v.literal("open"), v.literal("done")),
+  priority: v.union(taskPriority, v.null()),
+  dueDate: v.union(v.string(), v.null()),
+  loggedMinutes: v.number(),
+  assignees: v.array(assigneeView),
+});
+
+const taskLinkRef = v.object({
+  linkId: v.id("taskLinks"),
+  taskId: v.id("projectTasks"),
+  name: v.string(),
+  status: v.union(v.literal("open"), v.literal("done")),
+});
+
 // ── Access helpers ───────────────────────────────────────────────────────────
 
 // Require the caller can manage tasks (create/edit/assign/complete-any). Both
@@ -84,6 +115,41 @@ async function requireTaskManage(ctx: QueryCtx): Promise<OrgContext> {
     });
   }
   return orgCtx;
+}
+
+// Resolve a task the caller may EDIT (managers, or an assignee of the task /
+// its project). Returns the task, the caller's employee row, and whether they're
+// a privileged manager. Throws when the caller can't touch the task. Used by the
+// checklist + subtask + watcher actions that assignees are allowed to perform.
+async function requireTaskEditor(
+  ctx: QueryCtx,
+  taskId: Id<"projectTasks">,
+): Promise<{
+  orgCtx: OrgContext;
+  task: Doc<"projectTasks">;
+  me: Doc<"employees"> | null;
+  manage: boolean;
+}> {
+  const orgCtx = await requireOrg(ctx);
+  const task = await ctx.db.get(taskId);
+  if (!task || task.orgId !== orgCtx.orgId) {
+    throw new ConvexError({ code: "NOT_FOUND", message: "Task not found." });
+  }
+  const manage = isProjectPrivileged(orgCtx);
+  const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+  let isAssignee = false;
+  if (!manage && me) {
+    const access = await accessForEmployee(ctx, me._id);
+    isAssignee =
+      access.projectIds.has(task.projectId) || access.taskIds.has(taskId);
+  }
+  if (!manage && !isAssignee) {
+    throw new ConvexError({
+      code: "FORBIDDEN",
+      message: "You can't edit this task.",
+    });
+  }
+  return { orgCtx, task, me, manage };
 }
 
 // The caller's assignment access, or null when they're privileged (see all).
@@ -618,17 +684,32 @@ export const taskDetail = query({
       projectName: v.string(),
       projectColor: v.union(v.string(), v.null()),
       stageId: v.union(v.id("projectStages"), v.null()),
+      parentTaskId: v.union(v.id("projectTasks"), v.null()),
+      parentName: v.union(v.string(), v.null()),
       name: v.string(),
       description: v.union(v.string(), v.null()),
       status: taskStatus,
       priority: v.union(taskPriority, v.null()),
       dueDate: v.union(v.string(), v.null()),
+      startDate: v.union(v.string(), v.null()),
       estimateMinutes: v.union(v.number(), v.null()),
       loggedMinutes: v.number(),
       completedAt: v.union(v.number(), v.null()),
       completedByName: v.union(v.string(), v.null()),
       commentCount: v.number(),
       assignees: v.array(assigneeView),
+      labels: v.array(labelView),
+      labelIds: v.array(v.id("taskLabels")),
+      customFields: v.record(v.string(), v.any()),
+      checklist: v.array(checklistItem),
+      subtasks: v.array(subtaskView),
+      blocks: v.array(taskLinkRef),
+      blockedBy: v.array(taskLinkRef),
+      blocked: v.boolean(),
+      milestoneId: v.union(v.id("projectMilestones"), v.null()),
+      milestoneName: v.union(v.string(), v.null()),
+      watching: v.boolean(),
+      watcherCount: v.number(),
       attachments: v.array(
         v.object({
           index: v.number(),
@@ -651,6 +732,7 @@ export const taskDetail = query({
       !!access &&
       (access.projectIds.has(task.projectId) || access.taskIds.has(taskId));
     if (!manage && !isAssignee) return null;
+    const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
 
     const project = await ctx.db.get(task.projectId);
 
@@ -699,6 +781,87 @@ export const taskDetail = query({
       .withIndex("by_task", (q) => q.eq("taskId", task._id))
       .collect();
 
+    // Parent (when this task is a subtask).
+    let parentName: string | null = null;
+    if (task.parentTaskId) {
+      const parent = await ctx.db.get(task.parentTaskId);
+      parentName = parent?.name ?? null;
+    }
+
+    // Labels resolved to chips.
+    const labels: { _id: Id<"taskLabels">; name: string; color: string }[] = [];
+    for (const id of task.labelIds ?? []) {
+      const l = await ctx.db.get(id);
+      if (l) labels.push({ _id: l._id, name: l.name, color: l.color });
+    }
+
+    // Subtasks with their own assignees + logged time.
+    const subRows = (
+      await ctx.db
+        .query("projectTasks")
+        .withIndex("by_parent", (q) => q.eq("parentTaskId", task._id))
+        .collect()
+    ).filter((s) => !s.archivedAt);
+    subRows.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const subtasks = [];
+    for (const s of subRows) {
+      const sa = await ctx.db
+        .query("taskAssignments")
+        .withIndex("by_task", (q) => q.eq("taskId", s._id))
+        .collect();
+      const sAssignees = [];
+      for (const r of sa) {
+        const e = await ctx.db.get(r.employeeId);
+        sAssignees.push({ employeeId: r.employeeId, name: e ? displayName(e) : "—" });
+      }
+      subtasks.push({
+        _id: s._id,
+        name: s.name,
+        status: s.status,
+        priority: s.priority ?? null,
+        dueDate: s.dueDate ?? null,
+        loggedMinutes: logged.get(s._id) ?? 0,
+        assignees: sAssignees,
+      });
+    }
+
+    // Dependency edges (this task blocks …, and is blocked by …).
+    const [fromLinks, toLinks] = await Promise.all([
+      ctx.db
+        .query("taskLinks")
+        .withIndex("by_from", (q) => q.eq("fromTaskId", task._id))
+        .collect(),
+      ctx.db
+        .query("taskLinks")
+        .withIndex("by_to", (q) => q.eq("toTaskId", task._id))
+        .collect(),
+    ]);
+    const linkRef = async (
+      link: Doc<"taskLinks">,
+      otherId: Id<"projectTasks">,
+    ) => {
+      const other = await ctx.db.get(otherId);
+      return {
+        linkId: link._id,
+        taskId: otherId,
+        name: other?.name ?? "—",
+        status: (other?.status ?? "open") as "open" | "done",
+      };
+    };
+    const blocks = await Promise.all(fromLinks.map((l) => linkRef(l, l.toTaskId)));
+    const blockedBy = await Promise.all(toLinks.map((l) => linkRef(l, l.fromTaskId)));
+    const blocked = blockedBy.some((b) => b.status === "open");
+
+    // Milestone label.
+    let milestoneName: string | null = null;
+    if (task.milestoneId) {
+      const m = await ctx.db.get(task.milestoneId);
+      milestoneName = m?.name ?? null;
+    }
+
+    const watchers = task.watcherEmployeeIds ?? [];
+    const watching = !!me && watchers.includes(me._id);
+
     // Assignees may complete their own task; managers may complete any.
     const canComplete = manage || isAssignee;
 
@@ -708,21 +871,88 @@ export const taskDetail = query({
       projectName: project?.name ?? "—",
       projectColor: project?.color ?? null,
       stageId: task.stageId ?? null,
+      parentTaskId: task.parentTaskId ?? null,
+      parentName,
       name: task.name,
       description: task.description ?? null,
       status: task.status,
       priority: task.priority ?? null,
       dueDate: task.dueDate ?? null,
+      startDate: task.startDate ?? null,
       estimateMinutes: task.estimateMinutes ?? null,
       loggedMinutes,
       completedAt: task.completedAt ?? null,
       completedByName,
       commentCount: comments.length,
       assignees,
+      labels,
+      labelIds: task.labelIds ?? [],
+      customFields: task.customFields ?? {},
+      checklist: [...(task.checklist ?? [])].sort((a, b) => a.order - b.order),
+      subtasks,
+      blocks,
+      blockedBy,
+      blocked,
+      milestoneId: task.milestoneId ?? null,
+      milestoneName,
+      watching,
+      watcherCount: watchers.length,
       attachments,
       canManage: manage,
       canComplete,
     };
+  },
+});
+
+// The live subtasks of a task, for the List view's collapsible nesting. Visible
+// to anyone who can see the parent task.
+export const subtasks = query({
+  args: { taskId: v.id("projectTasks") },
+  returns: v.array(subtaskView),
+  handler: async (ctx, { taskId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const parent = await ctx.db.get(taskId);
+    if (!parent || parent.orgId !== orgCtx.orgId) return [];
+    const access = await callerAccess(ctx, orgCtx);
+    const manage = isProjectPrivileged(orgCtx);
+    if (
+      access &&
+      !manage &&
+      !access.projectIds.has(parent.projectId) &&
+      !access.taskIds.has(taskId)
+    ) {
+      return [];
+    }
+    const rows = (
+      await ctx.db
+        .query("projectTasks")
+        .withIndex("by_parent", (q) => q.eq("parentTaskId", taskId))
+        .collect()
+    ).filter((s) => !s.archivedAt);
+    rows.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const logged = await loggedByTask(ctx, parent.projectId);
+    const out = [];
+    for (const s of rows) {
+      const sa = await ctx.db
+        .query("taskAssignments")
+        .withIndex("by_task", (q) => q.eq("taskId", s._id))
+        .collect();
+      const assignees = [];
+      for (const r of sa) {
+        const e = await ctx.db.get(r.employeeId);
+        assignees.push({ employeeId: r.employeeId, name: e ? displayName(e) : "—" });
+      }
+      out.push({
+        _id: s._id,
+        name: s.name,
+        status: s.status,
+        priority: s.priority ?? null,
+        dueDate: s.dueDate ?? null,
+        loggedMinutes: logged.get(s._id) ?? 0,
+        assignees,
+      });
+    }
+    return out;
   },
 });
 
@@ -743,6 +973,7 @@ export const myTasks = query({
       dueDate: v.union(v.string(), v.null()),
       attachmentCount: v.number(),
       assigneeCount: v.number(),
+      labels: v.array(labelView),
       viaProject: v.boolean(),
     }),
   ),
@@ -751,6 +982,11 @@ export const myTasks = query({
     const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     if (!me) return [];
     const access = await accessForEmployee(ctx, me._id);
+    const orgLabels = await ctx.db
+      .query("taskLabels")
+      .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+      .collect();
+    const labelMap = new Map(orgLabels.map((l) => [l._id, l]));
 
     // Gather candidate tasks: every task in a fully-assigned project + each
     // individually-assigned task.
@@ -797,6 +1033,10 @@ export const myTasks = query({
         dueDate: task.dueDate ?? null,
         attachmentCount: task.attachmentStorageIds?.length ?? 0,
         assigneeCount: (counts.perTask.get(task._id) ?? 0) + counts.projectLevel,
+        labels: (task.labelIds ?? [])
+          .map((id) => labelMap.get(id))
+          .filter((l): l is Doc<"taskLabels"> => !!l)
+          .map((l) => ({ _id: l._id, name: l.name, color: l.color })),
         viaProject,
       };
     });
@@ -938,6 +1178,64 @@ async function validEmployeeIds(
   return out;
 }
 
+// Keep only label ids that exist in this org, de-duplicated.
+async function validLabelIds(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  ids: Id<"taskLabels">[],
+): Promise<Id<"taskLabels">[]> {
+  const out: Id<"taskLabels">[] = [];
+  const seen = new Set<Id<"taskLabels">>();
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const l = await ctx.db.get(id);
+    if (l && l.orgId === orgId) out.push(id);
+  }
+  return out;
+}
+
+// Sanitize a custom-fields record against the org's active field defs, coercing
+// each value to its def's type and dropping unknown/empty keys. Mirrors the
+// claim/payment-request field approach.
+async function sanitizeCustomFields(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  values: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const defs = await ctx.db
+    .query("taskFieldDefs")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const out: Record<string, unknown> = {};
+  for (const def of defs) {
+    if (!def.active) continue;
+    const raw = values[def.key];
+    if (raw === undefined || raw === null || raw === "") continue;
+    switch (def.type) {
+      case "number": {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) out[def.key] = n;
+        break;
+      }
+      case "checkbox":
+        out[def.key] = Boolean(raw);
+        break;
+      case "select": {
+        const s = String(raw);
+        if ((def.options ?? []).includes(s)) out[def.key] = s;
+        break;
+      }
+      case "date":
+      case "text":
+      default:
+        out[def.key] = String(raw).slice(0, 2000);
+        break;
+    }
+  }
+  return out;
+}
+
 export const createTask = mutation({
   args: {
     projectId: v.id("projects"),
@@ -945,9 +1243,13 @@ export const createTask = mutation({
     description: v.optional(v.string()),
     priority: v.optional(taskPriority),
     dueDate: v.optional(v.string()),
+    startDate: v.optional(v.string()),
     estimateMinutes: v.optional(v.number()),
     stageId: v.optional(v.id("projectStages")),
     assigneeIds: v.optional(v.array(v.id("employees"))),
+    // When set, the new task is a subtask of this parent (same project/stage).
+    parentTaskId: v.optional(v.id("projectTasks")),
+    labelIds: v.optional(v.array(v.id("taskLabels"))),
   },
   returns: v.id("projectTasks"),
   handler: async (ctx, args) => {
@@ -958,6 +1260,21 @@ export const createTask = mutation({
     }
     const trimmed = args.name.trim();
     if (!trimmed) throw new ConvexError({ code: "INPUT", message: "Name is required." });
+
+    // A subtask must reference a top-level parent in the same project (no nesting
+    // deeper than one level, to keep boards/rollups simple).
+    if (args.parentTaskId) {
+      const parent = await ctx.db.get(args.parentTaskId);
+      if (!parent || parent.orgId !== orgId || parent.projectId !== args.projectId) {
+        throw new ConvexError({ code: "INPUT", message: "Invalid parent task." });
+      }
+      if (parent.parentTaskId) {
+        throw new ConvexError({
+          code: "INPUT",
+          message: "Subtasks can't have their own subtasks.",
+        });
+      }
+    }
 
     // Resolve the target column: an explicit valid stage, else the first one
     // (seeding the default set for legacy projects that have none yet).
@@ -975,27 +1292,34 @@ export const createTask = mutation({
     const inStage = existing.filter(
       (t) => !t.archivedAt && t.stageId === stage._id,
     ).length;
+    const labelIds = args.labelIds?.length
+      ? await validLabelIds(ctx, orgId, args.labelIds)
+      : undefined;
     const id = await ctx.db.insert("projectTasks", {
       orgId,
       projectId: args.projectId,
+      parentTaskId: args.parentTaskId,
       stageId: stage._id,
       name: trimmed,
       description: args.description?.trim() || undefined,
       status: stage.isDone ? "done" : "open",
       priority: args.priority,
       dueDate: args.dueDate || undefined,
+      startDate: args.startDate || undefined,
       estimateMinutes:
         args.estimateMinutes && args.estimateMinutes > 0
           ? Math.round(args.estimateMinutes)
           : undefined,
+      labelIds: labelIds?.length ? labelIds : undefined,
       completedAt: stage.isDone ? Date.now() : undefined,
       order: inStage,
       createdBy: userId,
       updatedAt: Date.now(),
     });
+    let assigneeIds: Id<"employees">[] = [];
     if (args.assigneeIds?.length) {
-      const valid = await validEmployeeIds(ctx, orgId, args.assigneeIds);
-      for (const employeeId of valid) {
+      assigneeIds = await validEmployeeIds(ctx, orgId, args.assigneeIds);
+      for (const employeeId of assigneeIds) {
         await ctx.db.insert("taskAssignments", {
           orgId,
           taskId: id,
@@ -1005,6 +1329,12 @@ export const createTask = mutation({
           assignedAt: Date.now(),
         });
       }
+    }
+    // Auto-watch: the creator + any initial assignees.
+    const creator = await employeeByUserId(ctx, orgId, userId);
+    const watchers = [...new Set([creator?._id, ...assigneeIds].filter(Boolean))];
+    if (watchers.length) {
+      await ctx.db.patch(id, { watcherEmployeeIds: watchers as Id<"employees">[] });
     }
     await writeAuditLog(ctx, {
       orgId,
@@ -1024,9 +1354,13 @@ export const updateTask = mutation({
     description: v.optional(v.union(v.string(), v.null())),
     priority: v.optional(v.union(taskPriority, v.null())),
     dueDate: v.optional(v.union(v.string(), v.null())),
+    startDate: v.optional(v.union(v.string(), v.null())),
     estimateMinutes: v.optional(v.union(v.number(), v.null())),
     status: v.optional(taskStatus),
     archived: v.optional(v.boolean()),
+    labelIds: v.optional(v.array(v.id("taskLabels"))),
+    customFields: v.optional(v.record(v.string(), v.any())),
+    milestoneId: v.optional(v.union(v.id("projectMilestones"), v.null())),
   },
   returns: v.null(),
   handler: async (ctx, { taskId, ...args }) => {
@@ -1042,11 +1376,29 @@ export const updateTask = mutation({
       patch.description = args.description?.trim() || undefined;
     if (args.priority !== undefined) patch.priority = args.priority ?? undefined;
     if (args.dueDate !== undefined) patch.dueDate = args.dueDate || undefined;
+    if (args.startDate !== undefined) patch.startDate = args.startDate || undefined;
     if (args.estimateMinutes !== undefined)
       patch.estimateMinutes =
         args.estimateMinutes && args.estimateMinutes > 0
           ? Math.round(args.estimateMinutes)
           : undefined;
+    if (args.labelIds !== undefined) {
+      const valid = await validLabelIds(ctx, orgId, args.labelIds);
+      patch.labelIds = valid.length ? valid : undefined;
+    }
+    if (args.customFields !== undefined)
+      patch.customFields = await sanitizeCustomFields(ctx, orgId, args.customFields);
+    if (args.milestoneId !== undefined) {
+      if (args.milestoneId) {
+        const m = await ctx.db.get(args.milestoneId);
+        patch.milestoneId =
+          m && m.orgId === orgId && m.projectId === task.projectId
+            ? args.milestoneId
+            : undefined;
+      } else {
+        patch.milestoneId = undefined;
+      }
+    }
     if (args.status !== undefined) {
       patch.status = args.status;
       if (args.status === "done") {
@@ -1055,6 +1407,19 @@ export const updateTask = mutation({
       } else {
         patch.completedAt = undefined;
         patch.completedBy = undefined;
+      }
+    }
+    if (args.archived) {
+      // Block archiving a parent that still has live subtasks.
+      const subs = await ctx.db
+        .query("projectTasks")
+        .withIndex("by_parent", (q) => q.eq("parentTaskId", taskId))
+        .collect();
+      if (subs.some((s) => !s.archivedAt)) {
+        throw new ConvexError({
+          code: "INPUT",
+          message: "Archive or move its subtasks first.",
+        });
       }
     }
     if (args.archived !== undefined)
@@ -1094,6 +1459,16 @@ export const setTaskStatus = mutation({
       completedBy: status === "done" ? me?._id : undefined,
       updatedAt: Date.now(),
     });
+    if (status !== task.status) {
+      await notifyTaskWatchers(ctx, task, {
+        type: status === "done" ? "task.completed" : "task.reopened",
+        title:
+          status === "done"
+            ? `Task completed: ${task.name}`
+            : `Task reopened: ${task.name}`,
+        exceptEmployeeId: me?._id ?? null,
+      });
+    }
     return null;
   },
 });
@@ -1154,8 +1529,10 @@ export const assignTask = mutation({
     for (const r of existing) {
       if (!valid.has(r.employeeId)) await ctx.db.delete(r._id);
     }
+    const newlyAssigned: Id<"employees">[] = [];
     for (const employeeId of valid) {
       if (have.has(employeeId)) continue;
+      newlyAssigned.push(employeeId);
       await ctx.db.insert("taskAssignments", {
         orgId,
         taskId,
@@ -1164,6 +1541,21 @@ export const assignTask = mutation({
         assignedBy: userId,
         assignedAt: Date.now(),
       });
+    }
+    if (newlyAssigned.length) {
+      // Auto-watch the newly assigned, then notify them (except the actor).
+      const withWatchers = await addWatchers(ctx, task, newlyAssigned);
+      const actor = await employeeByUserId(ctx, orgId, userId);
+      await notifyTaskWatchers(
+        ctx,
+        { ...task, watcherEmployeeIds: newlyAssigned },
+        {
+          type: "task.assigned",
+          title: `You were assigned: ${task.name}`,
+          exceptEmployeeId: actor?._id ?? null,
+        },
+      );
+      void withWatchers;
     }
     return null;
   },
@@ -1406,11 +1798,19 @@ const taskCardView = v.object({
   status: taskStatus,
   priority: v.union(taskPriority, v.null()),
   dueDate: v.union(v.string(), v.null()),
+  startDate: v.union(v.string(), v.null()),
   estimateMinutes: v.union(v.number(), v.null()),
   loggedMinutes: v.number(),
   attachmentCount: v.number(),
   assigneeCount: v.number(),
   assignees: v.array(assigneeView),
+  labels: v.array(labelView),
+  customFields: v.record(v.string(), v.any()),
+  checklistDone: v.number(),
+  checklistTotal: v.number(),
+  subtaskDone: v.number(),
+  subtaskTotal: v.number(),
+  blocked: v.boolean(),
   order: v.union(v.number(), v.null()),
   completedAt: v.union(v.number(), v.null()),
 });
@@ -1436,15 +1836,47 @@ export const board = query({
 
     const stages = await orderedStages(ctx, projectId);
 
-    let tasks = (
+    const allLive = (
       await ctx.db
         .query("projectTasks")
         .withIndex("by_project", (q) => q.eq("projectId", projectId))
         .collect()
     ).filter((t) => !t.archivedAt);
+
+    // Subtask roll-up per parent (computed from every live task, before we drop
+    // subtasks from the board).
+    const subCounts = new Map<Id<"projectTasks">, { done: number; total: number }>();
+    for (const t of allLive) {
+      if (!t.parentTaskId) continue;
+      const c = subCounts.get(t.parentTaskId) ?? { done: 0, total: 0 };
+      c.total += 1;
+      if (t.status === "done") c.done += 1;
+      subCounts.set(t.parentTaskId, c);
+    }
+
+    // The board shows top-level tasks only; subtasks live inside the detail panel.
+    let tasks = allLive.filter((t) => !t.parentTaskId);
     if (access && !access.projectIds.has(projectId)) {
       tasks = tasks.filter((t) => access.taskIds.has(t._id));
     }
+
+    // Dependency edges: a task is "blocked" while any task that blocks it is open.
+    const links = await ctx.db
+      .query("taskLinks")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect();
+    const statusById = new Map(allLive.map((t) => [t._id, t.status]));
+    const blockedIds = new Set<Id<"projectTasks">>();
+    for (const l of links) {
+      if (statusById.get(l.fromTaskId) === "open") blockedIds.add(l.toTaskId);
+    }
+
+    // Org labels, for resolving each task's label chips.
+    const orgLabels = await ctx.db
+      .query("taskLabels")
+      .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+      .collect();
+    const labelMap = new Map(orgLabels.map((l) => [l._id, l]));
 
     const logged = await loggedByTask(ctx, projectId);
 
@@ -1488,6 +1920,12 @@ export const board = query({
         seen.add(a.employeeId);
         assignees.push(a);
       }
+      const checklist = t.checklist ?? [];
+      const sub = subCounts.get(t._id) ?? { done: 0, total: 0 };
+      const labels = (t.labelIds ?? [])
+        .map((id) => labelMap.get(id))
+        .filter((l): l is Doc<"taskLabels"> => !!l)
+        .map((l) => ({ _id: l._id, name: l.name, color: l.color }));
       return {
         _id: t._id,
         projectId: t.projectId,
@@ -1496,11 +1934,19 @@ export const board = query({
         status: t.status,
         priority: t.priority ?? null,
         dueDate: t.dueDate ?? null,
+        startDate: t.startDate ?? null,
         estimateMinutes: t.estimateMinutes ?? null,
         loggedMinutes: logged.get(t._id) ?? 0,
         attachmentCount: t.attachmentStorageIds?.length ?? 0,
         assigneeCount: assignees.length,
         assignees,
+        labels,
+        customFields: t.customFields ?? {},
+        checklistDone: checklist.filter((c) => c.done).length,
+        checklistTotal: checklist.length,
+        subtaskDone: sub.done,
+        subtaskTotal: sub.total,
+        blocked: blockedIds.has(t._id),
         order: t.order ?? null,
         completedAt: t.completedAt ?? null,
       };
@@ -1806,13 +2252,21 @@ export const addComment = mutation({
     if (!trimmed || trimmed === "<p></p>") {
       throw new ConvexError({ code: "INPUT", message: "Comment is empty." });
     }
-    return await ctx.db.insert("taskComments", {
+    const commentId = await ctx.db.insert("taskComments", {
       orgId: viewer.orgCtx.orgId,
       projectId: viewer.task.projectId,
       taskId,
       authorEmployeeId: viewer.me._id,
       body: trimmed,
     });
+    // Auto-watch the commenter, then notify the other watchers.
+    await addWatchers(ctx, viewer.task, [viewer.me._id]);
+    await notifyTaskWatchers(ctx, viewer.task, {
+      type: "task.commented",
+      title: `New comment on: ${viewer.task.name}`,
+      exceptEmployeeId: viewer.me._id,
+    });
+    return commentId;
   },
 });
 
@@ -1857,5 +2311,473 @@ export const deleteComment = mutation({
     }
     await ctx.db.delete(commentId);
     return null;
+  },
+});
+
+// ── Checklists (Phase 1) ─────────────────────────────────────────────────────
+// Lightweight steps on a task (no assignee/time). Anyone who can edit the task
+// (managers or assignees) may manage them.
+
+export const addChecklistItem = mutation({
+  args: { taskId: v.id("projectTasks"), text: v.string() },
+  returns: v.string(),
+  handler: async (ctx, { taskId, text }) => {
+    const { task } = await requireTaskEditor(ctx, taskId);
+    const trimmed = text.trim();
+    if (!trimmed) throw new ConvexError({ code: "INPUT", message: "Item is empty." });
+    const items = [...(task.checklist ?? [])];
+    const id = crypto.randomUUID();
+    const order = items.length ? Math.max(...items.map((i) => i.order)) + 1 : 0;
+    items.push({ id, text: trimmed.slice(0, 500), done: false, order });
+    await ctx.db.patch(taskId, { checklist: items, updatedAt: Date.now() });
+    return id;
+  },
+});
+
+export const toggleChecklistItem = mutation({
+  args: { taskId: v.id("projectTasks"), itemId: v.string(), done: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, { taskId, itemId, done }) => {
+    const { task } = await requireTaskEditor(ctx, taskId);
+    const items = (task.checklist ?? []).map((i) =>
+      i.id === itemId ? { ...i, done } : i,
+    );
+    await ctx.db.patch(taskId, { checklist: items, updatedAt: Date.now() });
+    return null;
+  },
+});
+
+export const renameChecklistItem = mutation({
+  args: { taskId: v.id("projectTasks"), itemId: v.string(), text: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { taskId, itemId, text }) => {
+    const { task } = await requireTaskEditor(ctx, taskId);
+    const trimmed = text.trim();
+    if (!trimmed) throw new ConvexError({ code: "INPUT", message: "Item is empty." });
+    const items = (task.checklist ?? []).map((i) =>
+      i.id === itemId ? { ...i, text: trimmed.slice(0, 500) } : i,
+    );
+    await ctx.db.patch(taskId, { checklist: items, updatedAt: Date.now() });
+    return null;
+  },
+});
+
+export const removeChecklistItem = mutation({
+  args: { taskId: v.id("projectTasks"), itemId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { taskId, itemId }) => {
+    const { task } = await requireTaskEditor(ctx, taskId);
+    const items = (task.checklist ?? []).filter((i) => i.id !== itemId);
+    await ctx.db.patch(taskId, { checklist: items, updatedAt: Date.now() });
+    return null;
+  },
+});
+
+export const reorderChecklist = mutation({
+  args: { taskId: v.id("projectTasks"), orderedItemIds: v.array(v.string()) },
+  returns: v.null(),
+  handler: async (ctx, { taskId, orderedItemIds }) => {
+    const { task } = await requireTaskEditor(ctx, taskId);
+    const byId = new Map((task.checklist ?? []).map((i) => [i.id, i]));
+    const items = orderedItemIds
+      .map((id, order) => {
+        const it = byId.get(id);
+        return it ? { ...it, order } : null;
+      })
+      .filter((i): i is NonNullable<typeof i> => !!i);
+    await ctx.db.patch(taskId, { checklist: items, updatedAt: Date.now() });
+    return null;
+  },
+});
+
+// ── Watchers & notifications (Phase 4) ───────────────────────────────────────
+
+// Add employees to a task's watcher set (idempotent). Returns the merged set.
+async function addWatchers(
+  ctx: MutationCtx,
+  task: Doc<"projectTasks">,
+  employeeIds: (Id<"employees"> | null | undefined)[],
+): Promise<Id<"employees">[]> {
+  const set = new Set(task.watcherEmployeeIds ?? []);
+  let changed = false;
+  for (const id of employeeIds) {
+    if (id && !set.has(id)) {
+      set.add(id);
+      changed = true;
+    }
+  }
+  const merged = [...set];
+  if (changed) await ctx.db.patch(task._id, { watcherEmployeeIds: merged });
+  return merged;
+}
+
+// Notify every watcher of a task (except the actor) via pushNotification. The
+// entityRef carries "projectId:taskId" so the client can deep-link and open the
+// task's detail panel.
+async function notifyTaskWatchers(
+  ctx: MutationCtx,
+  task: Doc<"projectTasks">,
+  args: { type: string; title: string; body?: string; exceptEmployeeId?: Id<"employees"> | null },
+): Promise<void> {
+  const watchers = task.watcherEmployeeIds ?? [];
+  for (const employeeId of watchers) {
+    if (args.exceptEmployeeId && employeeId === args.exceptEmployeeId) continue;
+    const emp = await ctx.db.get(employeeId);
+    if (!emp?.userId) continue;
+    await pushNotification(ctx, {
+      orgId: task.orgId,
+      recipientUserId: emp.userId,
+      type: args.type,
+      title: args.title,
+      body: args.body,
+      entityRef: { table: "projectTasks", id: `${task.projectId}:${task._id}` },
+    });
+  }
+}
+
+export const watch = mutation({
+  args: { taskId: v.id("projectTasks"), watching: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, { taskId, watching }) => {
+    const { task, me } = await requireTaskEditor(ctx, taskId);
+    if (!me) return null;
+    const set = new Set(task.watcherEmployeeIds ?? []);
+    if (watching) set.add(me._id);
+    else set.delete(me._id);
+    await ctx.db.patch(taskId, { watcherEmployeeIds: [...set] });
+    return null;
+  },
+});
+
+// ── Dependencies (Phase 3) ───────────────────────────────────────────────────
+
+// Would adding `from → to` create a cycle in the "blocks" graph? Walks the
+// existing edges from `to` to see if it can reach `from`.
+async function wouldCycle(
+  ctx: MutationCtx,
+  fromTaskId: Id<"projectTasks">,
+  toTaskId: Id<"projectTasks">,
+): Promise<boolean> {
+  if (fromTaskId === toTaskId) return true;
+  const seen = new Set<Id<"projectTasks">>();
+  const stack: Id<"projectTasks">[] = [toTaskId];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (cur === fromTaskId) return true;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    const out = await ctx.db
+      .query("taskLinks")
+      .withIndex("by_from", (q) => q.eq("fromTaskId", cur))
+      .collect();
+    for (const l of out) stack.push(l.toTaskId);
+  }
+  return false;
+}
+
+export const linkTasks = mutation({
+  args: {
+    fromTaskId: v.id("projectTasks"),
+    toTaskId: v.id("projectTasks"),
+  },
+  returns: v.id("taskLinks"),
+  handler: async (ctx, { fromTaskId, toTaskId }) => {
+    const { orgId } = await requireTaskManage(ctx);
+    if (fromTaskId === toTaskId) {
+      throw new ConvexError({ code: "INPUT", message: "A task can't block itself." });
+    }
+    const from = await ctx.db.get(fromTaskId);
+    const to = await ctx.db.get(toTaskId);
+    if (!from || !to || from.orgId !== orgId || to.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Task not found." });
+    }
+    if (from.projectId !== to.projectId) {
+      throw new ConvexError({
+        code: "INPUT",
+        message: "Dependencies must be within the same project.",
+      });
+    }
+    // Skip duplicates.
+    const existing = await ctx.db
+      .query("taskLinks")
+      .withIndex("by_from", (q) => q.eq("fromTaskId", fromTaskId))
+      .collect();
+    const dup = existing.find((l) => l.toTaskId === toTaskId);
+    if (dup) return dup._id;
+    if (await wouldCycle(ctx, fromTaskId, toTaskId)) {
+      throw new ConvexError({
+        code: "INPUT",
+        message: "That would create a circular dependency.",
+      });
+    }
+    return await ctx.db.insert("taskLinks", {
+      orgId,
+      projectId: from.projectId,
+      fromTaskId,
+      toTaskId,
+      type: "blocks",
+    });
+  },
+});
+
+export const unlinkTasks = mutation({
+  args: { linkId: v.id("taskLinks") },
+  returns: v.null(),
+  handler: async (ctx, { linkId }) => {
+    const { orgId } = await requireTaskManage(ctx);
+    const link = await ctx.db.get(linkId);
+    if (!link || link.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Link not found." });
+    }
+    await ctx.db.delete(linkId);
+    return null;
+  },
+});
+
+// ── Milestones (Phase 3) ─────────────────────────────────────────────────────
+
+const milestoneView = v.object({
+  _id: v.id("projectMilestones"),
+  projectId: v.id("projects"),
+  name: v.string(),
+  dueDate: v.string(),
+  description: v.union(v.string(), v.null()),
+  order: v.number(),
+});
+
+export const listMilestones = query({
+  args: { projectId: v.id("projects") },
+  returns: v.array(milestoneView),
+  handler: async (ctx, { projectId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const project = await ctx.db.get(projectId);
+    if (!project || project.orgId !== orgCtx.orgId) return [];
+    const access = await callerAccess(ctx, orgCtx);
+    if (access && !access.visibleProjectIds.has(projectId)) return [];
+    const rows = await ctx.db
+      .query("projectMilestones")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect();
+    rows.sort((a, b) => a.order - b.order || a.dueDate.localeCompare(b.dueDate));
+    return rows.map((m) => ({
+      _id: m._id,
+      projectId: m.projectId,
+      name: m.name,
+      dueDate: m.dueDate,
+      description: m.description ?? null,
+      order: m.order,
+    }));
+  },
+});
+
+export const createMilestone = mutation({
+  args: {
+    projectId: v.id("projects"),
+    name: v.string(),
+    dueDate: v.string(),
+    description: v.optional(v.string()),
+  },
+  returns: v.id("projectMilestones"),
+  handler: async (ctx, args) => {
+    const { orgId } = await requireTaskManage(ctx);
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Project not found." });
+    }
+    const name = args.name.trim();
+    if (!name) throw new ConvexError({ code: "INPUT", message: "Name is required." });
+    if (!args.dueDate) throw new ConvexError({ code: "INPUT", message: "Date is required." });
+    const existing = await ctx.db
+      .query("projectMilestones")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const order = existing.length ? Math.max(...existing.map((m) => m.order)) + 1 : 0;
+    return await ctx.db.insert("projectMilestones", {
+      orgId,
+      projectId: args.projectId,
+      name,
+      dueDate: args.dueDate,
+      description: args.description?.trim() || undefined,
+      order,
+    });
+  },
+});
+
+export const updateMilestone = mutation({
+  args: {
+    milestoneId: v.id("projectMilestones"),
+    name: v.optional(v.string()),
+    dueDate: v.optional(v.string()),
+    description: v.optional(v.union(v.string(), v.null())),
+  },
+  returns: v.null(),
+  handler: async (ctx, { milestoneId, ...args }) => {
+    const { orgId } = await requireTaskManage(ctx);
+    const m = await ctx.db.get(milestoneId);
+    if (!m || m.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Milestone not found." });
+    }
+    const patch: Record<string, unknown> = {};
+    if (args.name !== undefined) patch.name = args.name.trim() || m.name;
+    if (args.dueDate !== undefined) patch.dueDate = args.dueDate || m.dueDate;
+    if (args.description !== undefined)
+      patch.description = args.description?.trim() || undefined;
+    await ctx.db.patch(milestoneId, patch);
+    return null;
+  },
+});
+
+export const removeMilestone = mutation({
+  args: { milestoneId: v.id("projectMilestones") },
+  returns: v.null(),
+  handler: async (ctx, { milestoneId }) => {
+    const { orgId } = await requireTaskManage(ctx);
+    const m = await ctx.db.get(milestoneId);
+    if (!m || m.orgId !== orgId) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Milestone not found." });
+    }
+    // Detach any tasks pointing at it.
+    const tasks = await ctx.db
+      .query("projectTasks")
+      .withIndex("by_project", (q) => q.eq("projectId", m.projectId))
+      .collect();
+    for (const t of tasks) {
+      if (t.milestoneId === milestoneId) {
+        await ctx.db.patch(t._id, { milestoneId: undefined });
+      }
+    }
+    await ctx.db.delete(milestoneId);
+    return null;
+  },
+});
+
+// ── Timeline / roadmap (Phase 3) ─────────────────────────────────────────────
+
+export const timeline = query({
+  args: { projectId: v.id("projects") },
+  returns: v.object({
+    tasks: v.array(
+      v.object({
+        _id: v.id("projectTasks"),
+        parentTaskId: v.union(v.id("projectTasks"), v.null()),
+        name: v.string(),
+        status: taskStatus,
+        priority: v.union(taskPriority, v.null()),
+        startDate: v.union(v.string(), v.null()),
+        dueDate: v.union(v.string(), v.null()),
+        stageId: v.union(v.id("projectStages"), v.null()),
+        milestoneId: v.union(v.id("projectMilestones"), v.null()),
+        assignees: v.array(assigneeView),
+      }),
+    ),
+    links: v.array(
+      v.object({
+        _id: v.id("taskLinks"),
+        fromTaskId: v.id("projectTasks"),
+        toTaskId: v.id("projectTasks"),
+      }),
+    ),
+    milestones: v.array(milestoneView),
+  }),
+  handler: async (ctx, { projectId }) => {
+    const orgCtx = await requireOrg(ctx);
+    const project = await ctx.db.get(projectId);
+    const empty = { tasks: [], links: [], milestones: [] };
+    if (!project || project.orgId !== orgCtx.orgId) return empty;
+    const access = await callerAccess(ctx, orgCtx);
+    if (access && !access.visibleProjectIds.has(projectId)) return empty;
+
+    let live = (
+      await ctx.db
+        .query("projectTasks")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect()
+    ).filter((t) => !t.archivedAt);
+    if (access && !access.projectIds.has(projectId)) {
+      live = live.filter((t) => access.taskIds.has(t._id));
+    }
+
+    // Task-level + project-level assignees.
+    const [projRows, taskRows] = await Promise.all([
+      ctx.db
+        .query("projectAssignments")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect(),
+      ctx.db
+        .query("taskAssignments")
+        .withIndex("by_project", (q) => q.eq("projectId", projectId))
+        .collect(),
+    ]);
+    const empIds = new Set<Id<"employees">>();
+    for (const r of [...projRows, ...taskRows]) empIds.add(r.employeeId);
+    const nameMap = new Map<Id<"employees">, string>();
+    for (const id of empIds) {
+      const e = await ctx.db.get(id);
+      nameMap.set(id, e ? displayName(e) : "—");
+    }
+    const projLevel = projRows.map((r) => ({
+      employeeId: r.employeeId,
+      name: nameMap.get(r.employeeId) ?? "—",
+    }));
+    const perTask = new Map<Id<"projectTasks">, { employeeId: Id<"employees">; name: string }[]>();
+    for (const r of taskRows) {
+      const arr = perTask.get(r.taskId) ?? [];
+      arr.push({ employeeId: r.employeeId, name: nameMap.get(r.employeeId) ?? "—" });
+      perTask.set(r.taskId, arr);
+    }
+
+    live.sort((a, b) => {
+      const ad = a.startDate ?? a.dueDate ?? "9999";
+      const bd = b.startDate ?? b.dueDate ?? "9999";
+      return ad.localeCompare(bd);
+    });
+
+    const tasks = live.map((t) => {
+      const seen = new Set<Id<"employees">>();
+      const assignees: { employeeId: Id<"employees">; name: string }[] = [];
+      for (const a of [...projLevel, ...(perTask.get(t._id) ?? [])]) {
+        if (seen.has(a.employeeId)) continue;
+        seen.add(a.employeeId);
+        assignees.push(a);
+      }
+      return {
+        _id: t._id,
+        parentTaskId: t.parentTaskId ?? null,
+        name: t.name,
+        status: t.status,
+        priority: t.priority ?? null,
+        startDate: t.startDate ?? null,
+        dueDate: t.dueDate ?? null,
+        stageId: t.stageId ?? null,
+        milestoneId: t.milestoneId ?? null,
+        assignees,
+      };
+    });
+
+    const linkRows = await ctx.db
+      .query("taskLinks")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect();
+    const links = linkRows.map((l) => ({
+      _id: l._id,
+      fromTaskId: l.fromTaskId,
+      toTaskId: l.toTaskId,
+    }));
+
+    const msRows = await ctx.db
+      .query("projectMilestones")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect();
+    msRows.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    const milestones = msRows.map((m) => ({
+      _id: m._id,
+      projectId: m.projectId,
+      name: m.name,
+      dueDate: m.dueDate,
+      description: m.description ?? null,
+      order: m.order,
+    }));
+
+    return { tasks, links, milestones };
   },
 });

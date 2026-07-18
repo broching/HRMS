@@ -1,7 +1,13 @@
 "use client"
 
 import type { FunctionReturnType } from "convex/server"
-import { IconPaperclip, IconClock } from "@tabler/icons-react"
+import {
+  IconPaperclip,
+  IconClock,
+  IconChecklist,
+  IconSubtask,
+  IconBan,
+} from "@tabler/icons-react"
 import type { api } from "@/convex/_generated/api"
 import { cn } from "@/lib/utils"
 import { formatMinutes } from "@/features/timesheets/lib/time"
@@ -13,6 +19,7 @@ import {
   type TaskPriority,
 } from "@/features/projects/lib/task"
 import { AssigneeAvatars } from "@/features/projects/components/assignee-avatars"
+import { LabelChip } from "@/features/projects/components/task-labels"
 
 export type BoardTask = FunctionReturnType<typeof api.projects.board>["tasks"][number]
 
@@ -43,6 +50,14 @@ export function TaskCard({
         dragging && "ring-primary/40 rotate-1 opacity-80 shadow-lg ring-2",
       )}
     >
+      {task.labels.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {task.labels.map((l) => (
+            <LabelChip key={l._id} label={l} />
+          ))}
+        </div>
+      )}
+
       <p
         className={cn(
           "line-clamp-3 text-sm font-medium",
@@ -52,7 +67,7 @@ export function TaskCard({
         {task.name}
       </p>
 
-      {(task.priority || due) && (
+      {(task.priority || due || task.blocked) && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
           {task.priority && (
             <span
@@ -68,6 +83,12 @@ export function TaskCard({
             <span className={cn("flex items-center gap-0.5", dueToneClasses(due.tone))}>
               {due.label}
               {due.tone === "overdue" && !done && " · overdue"}
+            </span>
+          )}
+          {task.blocked && !done && (
+            <span className="flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
+              <IconBan className="size-3" />
+              Blocked
             </span>
           )}
         </div>
@@ -100,12 +121,26 @@ export function TaskCard({
 
       <div className="flex items-center justify-between gap-2 pt-0.5">
         <AssigneeAvatars people={task.assignees} />
-        {task.attachmentCount > 0 && (
-          <span className="text-muted-foreground flex items-center gap-0.5 text-[11px]">
-            <IconPaperclip className="size-3" />
-            {task.attachmentCount}
-          </span>
-        )}
+        <div className="text-muted-foreground flex items-center gap-2 text-[11px]">
+          {task.subtaskTotal > 0 && (
+            <span className="flex items-center gap-0.5" title="Subtasks">
+              <IconSubtask className="size-3" />
+              {task.subtaskDone}/{task.subtaskTotal}
+            </span>
+          )}
+          {task.checklistTotal > 0 && (
+            <span className="flex items-center gap-0.5" title="Checklist">
+              <IconChecklist className="size-3" />
+              {task.checklistDone}/{task.checklistTotal}
+            </span>
+          )}
+          {task.attachmentCount > 0 && (
+            <span className="flex items-center gap-0.5">
+              <IconPaperclip className="size-3" />
+              {task.attachmentCount}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )

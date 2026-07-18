@@ -3,6 +3,7 @@
 import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
 import {
@@ -15,6 +16,9 @@ import {
   IconList,
   IconChartBar,
   IconUsers,
+  IconTimeline,
+  IconTag,
+  IconForms,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
@@ -45,9 +49,13 @@ import { cn } from "@/lib/utils"
 import { hoursToMinutes, minutesToHours } from "@/features/projects/lib/task"
 import { ProjectBoard } from "@/features/projects/components/project-board"
 import { ProjectTaskList } from "@/features/projects/components/project-task-list"
+import { ProjectTimeline } from "@/features/projects/components/project-timeline"
 import { ProjectOverview } from "@/features/projects/components/project-overview"
 import { ProjectPeople } from "@/features/projects/components/project-people"
 import { TaskDetailPanel } from "@/features/projects/components/task-detail-panel"
+import { LabelManager } from "@/features/projects/components/task-labels"
+import { TaskFieldManager } from "@/features/projects/components/task-custom-fields"
+import { emptyFilter, type TaskFilter } from "@/features/projects/lib/task-filter"
 
 const COLORS = [
   "#22c55e",
@@ -72,6 +80,16 @@ export function ProjectWorkspace({ projectId }: { projectId: Id<"projects"> }) {
 
   const [openTaskId, setOpenTaskId] = React.useState<Id<"projectTasks"> | null>(null)
   const [editOpen, setEditOpen] = React.useState(false)
+  const [labelsOpen, setLabelsOpen] = React.useState(false)
+  const [fieldsOpen, setFieldsOpen] = React.useState(false)
+  const [filter, setFilter] = React.useState<TaskFilter>(emptyFilter())
+
+  // Open a task's detail panel from a `?task=` deep link (notification CTAs).
+  const searchParams = useSearchParams()
+  const taskParam = searchParams.get("task")
+  React.useEffect(() => {
+    if (taskParam) setOpenTaskId(taskParam as Id<"projectTasks">)
+  }, [taskParam])
 
   if (project === undefined) {
     return (
@@ -168,6 +186,14 @@ export function ProjectWorkspace({ projectId }: { projectId: Id<"projects"> }) {
                     <IconPencil className="size-4" />
                     Edit details
                   </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setLabelsOpen(true)}>
+                    <IconTag className="size-4" />
+                    Manage labels
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setFieldsOpen(true)}>
+                    <IconForms className="size-4" />
+                    Custom fields
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={toggleArchive}>
                     {project.status === "archived" ? (
                       <>
@@ -199,6 +225,10 @@ export function ProjectWorkspace({ projectId }: { projectId: Id<"projects"> }) {
               <IconList className="size-4" />
               List
             </TabsTrigger>
+            <TabsTrigger value="timeline">
+              <IconTimeline className="size-4" />
+              Timeline
+            </TabsTrigger>
             {canManageProjects && (
               <TabsTrigger value="overview">
                 <IconChartBar className="size-4" />
@@ -217,10 +247,21 @@ export function ProjectWorkspace({ projectId }: { projectId: Id<"projects"> }) {
             projectId={projectId}
             canManage={canManage}
             onOpenTask={setOpenTaskId}
+            filter={filter}
+            onFilterChange={setFilter}
           />
         </TabsContent>
         <TabsContent value="list">
           <ProjectTaskList
+            projectId={projectId}
+            canManage={canManage}
+            onOpenTask={setOpenTaskId}
+            filter={filter}
+            onFilterChange={setFilter}
+          />
+        </TabsContent>
+        <TabsContent value="timeline">
+          <ProjectTimeline
             projectId={projectId}
             canManage={canManage}
             onOpenTask={setOpenTaskId}
@@ -252,6 +293,12 @@ export function ProjectWorkspace({ projectId }: { projectId: Id<"projects"> }) {
           open={editOpen}
           onOpenChange={setEditOpen}
         />
+      )}
+      {canManageProjects && (
+        <>
+          <LabelManager open={labelsOpen} onOpenChange={setLabelsOpen} />
+          <TaskFieldManager open={fieldsOpen} onOpenChange={setFieldsOpen} />
+        </>
       )}
     </div>
   )

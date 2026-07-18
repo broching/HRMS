@@ -9,10 +9,13 @@ import {
   IconPencil,
   IconTrash,
   IconEye,
+  IconEyeOff,
   IconCalendarEvent,
   IconFlag,
   IconUsers,
   IconClock,
+  IconArrowLeft,
+  IconFlag3,
 } from "@tabler/icons-react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
@@ -51,12 +54,18 @@ import {
   isRichTextEmpty,
 } from "@/features/projects/components/task-rich-editor"
 import { TaskComments } from "@/features/projects/components/task-comments"
+import { TaskChecklist } from "@/features/projects/components/task-checklist"
+import { TaskSubtasks } from "@/features/projects/components/task-subtasks"
+import { TaskDependencies } from "@/features/projects/components/task-dependencies"
+import { LabelPicker, LabelChip } from "@/features/projects/components/task-labels"
+import { CustomFieldsView } from "@/features/projects/components/task-custom-fields"
 
 /**
- * Full task view. Anyone assigned can read it and mark it complete; task
- * managers (tasks:manage / projects:manage) additionally get edit, attachment
- * management, and archive. Reused by the project manage dialog and the personal
- * "My Tasks" page.
+ * Full task view + hub: description · checklist · subtasks · labels · custom
+ * fields · assignees · dates · dependencies · comments · logged time (read-only
+ * rollup) · watchers. Anyone assigned can read it, tick checklist/subtasks, and
+ * mark it complete; task managers get edit, attachments, labels, and archive.
+ * Navigating into a subtask (or up to a parent) swaps the panel's task in place.
  */
 export function TaskDetailPanel({
   taskId,
@@ -67,12 +76,21 @@ export function TaskDetailPanel({
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
+  // The task currently shown — starts at `taskId`, but subtask / parent links
+  // navigate within the same dialog.
+  const [viewId, setViewId] = React.useState<Id<"projectTasks"> | null>(taskId)
+  React.useEffect(() => {
+    if (open) setViewId(taskId)
+  }, [taskId, open])
+
   const detail = useQuery(
     api.projects.taskDetail,
-    taskId ? { taskId } : "skip",
+    viewId ? { taskId: viewId } : "skip",
   )
+  const fieldDefs = useQuery(api.taskFields.list, open ? {} : "skip")
   const setStatus = useMutation(api.projects.setTaskStatus)
   const updateTask = useMutation(api.projects.updateTask)
+  const watchTask = useMutation(api.projects.watch)
   const addAttachments = useMutation(api.projects.addTaskAttachments)
   const removeAttachment = useMutation(api.projects.removeTaskAttachment)
 
@@ -98,8 +116,6 @@ export function TaskDetailPanel({
     }
   }
 
-  // Uploaded files come through the picker already stored; persist them straight
-  // away, then reset the picker for the next batch.
   async function persistUploads(next: TaskAttachment[]) {
     if (!detail || next.length === 0) return
     try {
@@ -119,9 +135,12 @@ export function TaskDetailPanel({
         description: detail.description,
         priority: detail.priority as TaskPriority | null,
         dueDate: detail.dueDate,
+        startDate: detail.startDate,
         estimateMinutes: detail.estimateMinutes,
-        // Editor manages task-level assignees; project-level ones remain.
         assigneeIds: detail.assignees.map((a) => a.employeeId),
+        labelIds: detail.labelIds,
+        customFields: detail.customFields,
+        milestoneId: detail.milestoneId,
       }
     : null
 
@@ -146,13 +165,24 @@ export function TaskDetailPanel({
           ) : (
             <>
               <DialogHeader>
-                <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
-                  <span
-                    className="size-2.5 rounded-full"
-                    style={{ backgroundColor: detail.projectColor ?? "#94a3b8" }}
-                  />
-                  <span className="truncate">{detail.projectName}</span>
-                </div>
+                {detail.parentTaskId ? (
+                  <button
+                    type="button"
+                    onClick={() => setViewId(detail.parentTaskId)}
+                    className="text-muted-foreground hover:text-foreground -ml-1 flex w-fit items-center gap-1 text-xs"
+                  >
+                    <IconArrowLeft className="size-3.5" />
+                    {detail.parentName ?? "Parent task"}
+                  </button>
+                ) : (
+                  <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
+                    <span
+                      className="size-2.5 rounded-full"
+                      style={{ backgroundColor: detail.projectColor ?? "#94a3b8" }}
+                    />
+                    <span className="truncate">{detail.projectName}</span>
+                  </div>
+                )}
                 <DialogTitle
                   className={cn(
                     "pr-6 text-left",
@@ -177,6 +207,14 @@ export function TaskDetailPanel({
                   {done ? <IconCheck className="size-3" /> : null}
                   {done ? "Completed" : "Open"}
                 </Badge>
+                {detail.blocked && !done && (
+                  <Badge
+                    variant="outline"
+                    className="gap-1 border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                  >
+                    Blocked
+                  </Badge>
+                )}
                 {detail.priority && (
                   <Badge
                     variant="outline"
@@ -198,6 +236,34 @@ export function TaskDetailPanel({
                     {due.tone === "overdue" && !done && " · overdue"}
                   </span>
                 )}
+                {detail.milestoneName && (
+                  <span className="text-muted-foreground flex items-center gap-1 text-xs">
+                    <IconFlag3 className="size-3.5" />
+                    {detail.milestoneName}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    watchTask({ taskId: detail._id, watching: !detail.watching }).catch(
+                      () => toast.error("Couldn't update watching."),
+                    )
+                  }
+                  className={cn(
+                    "ml-auto flex items-center gap-1 text-xs",
+                    detail.watching
+                      ? "text-primary"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  title={detail.watching ? "Stop watching" : "Watch this task"}
+                >
+                  {detail.watching ? (
+                    <IconEye className="size-4" />
+                  ) : (
+                    <IconEyeOff className="size-4" />
+                  )}
+                  {detail.watcherCount > 0 ? detail.watcherCount : ""}
+                </button>
               </div>
 
               {done && detail.completedByName && (
@@ -258,6 +324,27 @@ export function TaskDetailPanel({
                 </div>
               )}
 
+              {/* Labels */}
+              <div className="flex flex-col gap-1.5">
+                {detail.canManage ? (
+                  <LabelPicker
+                    value={detail.labelIds}
+                    canManage={detail.canManage}
+                    onChange={(labelIds) =>
+                      updateTask({ taskId: detail._id, labelIds }).catch(() =>
+                        toast.error("Couldn't update labels."),
+                      )
+                    }
+                  />
+                ) : detail.labels.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {detail.labels.map((l) => (
+                      <LabelChip key={l._id} label={l} />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
               {/* Description */}
               {!isRichTextEmpty(detail.description) && (
                 <div className="flex flex-col gap-1">
@@ -267,6 +354,39 @@ export function TaskDetailPanel({
                   <RichTextView html={detail.description} />
                 </div>
               )}
+
+              {/* Custom fields */}
+              {fieldDefs && (
+                <CustomFieldsView defs={fieldDefs} values={detail.customFields} />
+              )}
+
+              {/* Checklist */}
+              <TaskChecklist
+                taskId={detail._id}
+                items={detail.checklist}
+                canEdit={detail.canComplete}
+              />
+
+              {/* Subtasks (top-level tasks only) */}
+              {!detail.parentTaskId && (
+                <TaskSubtasks
+                  parentTaskId={detail._id}
+                  projectId={detail.projectId}
+                  subtasks={detail.subtasks}
+                  canManage={detail.canManage}
+                  canComplete={detail.canComplete}
+                  onOpenSubtask={setViewId}
+                />
+              )}
+
+              {/* Dependencies */}
+              <TaskDependencies
+                taskId={detail._id}
+                projectId={detail.projectId}
+                blockedBy={detail.blockedBy}
+                blocks={detail.blocks}
+                canManage={detail.canManage}
+              />
 
               {/* Assignees */}
               <div className="flex flex-col gap-1.5">
@@ -409,9 +529,11 @@ export function TaskDetailPanel({
           try {
             await updateTask({ taskId: detail._id, archived: true })
             setArchiveOpen(false)
-            onOpenChange(false)
-          } catch {
-            toast.error("Couldn't archive the task.")
+            // Fall back to the parent when archiving a subtask, else close.
+            if (detail.parentTaskId) setViewId(detail.parentTaskId)
+            else onOpenChange(false)
+          } catch (e) {
+            toast.error(getErrorMessage(e, "Couldn't archive the task."))
           } finally {
             setBusy(false)
           }

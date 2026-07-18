@@ -43,6 +43,13 @@ export function deepLinkForEntity(ref: EntityRef | undefined): string | null {
     // A single claim's detail (requester + approver both land here).
     case "claims":
       return `/claims/${ref.id}`;
+    // A task notification — id is "projectId:taskId"; open the project workspace
+    // and deep-link the task's detail panel via the `?task=` query param.
+    case "projectTasks": {
+      const [projectId, taskId] = ref.id.split(":");
+      if (projectId && taskId) return `/projects/${projectId}?task=${taskId}`;
+      return null;
+    }
     default:
       return null;
   }

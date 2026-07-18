@@ -34,6 +34,12 @@ import { cn } from "@/lib/utils"
 import { TaskCard, type BoardTask } from "@/features/projects/components/task-card"
 import { TaskEditorDialog } from "@/features/projects/components/task-editor-dialog"
 import { StageEditor } from "@/features/projects/components/stage-editor"
+import { TaskFilterBar } from "@/features/projects/components/task-filter-bar"
+import {
+  type TaskFilter,
+  taskMatches,
+  isFilterActive,
+} from "@/features/projects/lib/task-filter"
 
 type BoardData = FunctionReturnType<typeof api.projects.board>
 type Stage = BoardData["stages"][number]
@@ -42,13 +48,29 @@ export function ProjectBoard({
   projectId,
   canManage,
   onOpenTask,
+  filter,
+  onFilterChange,
 }: {
   projectId: Id<"projects">
   canManage: boolean
   onOpenTask: (taskId: Id<"projectTasks">) => void
+  filter: TaskFilter
+  onFilterChange: (f: TaskFilter) => void
 }) {
   const data = useQuery(api.projects.board, { projectId })
   const moveTask = useMutation(api.projects.moveTask)
+
+  const filterActive = isFilterActive(filter)
+  const visibleTaskIds = React.useMemo(() => {
+    if (!data) return null
+    if (!filterActive) return null
+    const cf = new Map(data.tasks.map((t) => [t._id, t.customFields]))
+    return new Set<string>(
+      data.tasks
+        .filter((t) => taskMatches(t, filter, (id) => cf.get(id)))
+        .map((t) => t._id as string),
+    )
+  }, [data, filter, filterActive])
 
   // Local ordering so drags feel instant; re-synced from the server on change.
   const [items, setItems] = React.useState<Record<string, string[]>>({})
@@ -148,6 +170,9 @@ export function ProjectBoard({
   }
 
   const activeTask = activeId ? taskMap.get(activeId) : null
+  const dndEnabled = canManage && !filterActive
+  const visibleFor = (ids: string[]) =>
+    visibleTaskIds ? ids.filter((id) => visibleTaskIds.has(id)) : ids
 
   const columns = (
     <div className="flex items-start gap-3 overflow-x-auto px-4 pb-4 lg:px-6">
@@ -155,9 +180,10 @@ export function ProjectBoard({
         <BoardColumn
           key={stage._id}
           stage={stage}
-          taskIds={items[stage._id] ?? []}
+          taskIds={visibleFor(items[stage._id] ?? [])}
           taskMap={taskMap}
           canManage={canManage}
+          draggable={dndEnabled}
           onAdd={() => setAddStage(stage)}
           onOpenTask={onOpenTask}
         />
@@ -177,7 +203,16 @@ export function ProjectBoard({
 
   return (
     <>
-      {canManage ? (
+      <div className="px-4 pb-3 lg:px-6">
+        <TaskFilterBar
+          projectId={projectId}
+          filter={filter}
+          onChange={onFilterChange}
+          resultCount={visibleTaskIds?.size ?? data.tasks.length}
+          canShare={canManage}
+        />
+      </div>
+      {dndEnabled ? (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCorners}
@@ -217,6 +252,7 @@ function BoardColumn({
   taskIds,
   taskMap,
   canManage,
+  draggable,
   onAdd,
   onOpenTask,
 }: {
@@ -224,6 +260,7 @@ function BoardColumn({
   taskIds: string[]
   taskMap: Map<string, BoardTask>
   canManage: boolean
+  draggable: boolean
   onAdd: () => void
   onOpenTask: (taskId: Id<"projectTasks">) => void
 }) {
@@ -269,7 +306,7 @@ function BoardColumn({
                   key={id}
                   id={id}
                   task={task}
-                  draggable={canManage}
+                  draggable={draggable}
                   onOpen={() => onOpenTask(task._id)}
                 />
               )

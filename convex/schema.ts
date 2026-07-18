@@ -387,6 +387,10 @@ export default defineSchema({
   projectTasks: defineTable({
     orgId: v.id("organizations"),
     projectId: v.id("projects"),
+    // A child work item's parent task. Absent = top-level task. Subtasks inherit
+    // the parent's projectId; time logged to a subtask still rolls up to the
+    // project. Optional to widen safely (existing rows are top-level).
+    parentTaskId: v.optional(v.id("projectTasks")),
     // Kanban column the task sits in. Optional to widen safely; the migration
     // backfills existing rows and new tasks always set it.
     stageId: v.optional(v.id("projectStages")),
@@ -396,8 +400,29 @@ export default defineSchema({
     status: v.union(v.literal("open"), v.literal("done")),
     priority: v.optional(taskPriority),
     dueDate: v.optional(v.string()), // ISO "YYYY-MM-DD"
+    // Optional start date, pairs with dueDate to give a timeline bar span.
+    startDate: v.optional(v.string()), // ISO "YYYY-MM-DD"
     // Time estimate in minutes, for progress / burn-down against logged time.
     estimateMinutes: v.optional(v.number()),
+    // Lightweight checklist steps (no assignee/time), for trivial sub-steps.
+    checklist: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          text: v.string(),
+          done: v.boolean(),
+          order: v.number(),
+        }),
+      ),
+    ),
+    // Org-defined labels/tags applied to this task.
+    labelIds: v.optional(v.array(v.id("taskLabels"))),
+    // Org-defined custom field values, validated against active field defs.
+    customFields: v.optional(v.record(v.string(), v.any())),
+    // Milestone this task rolls up to (timeline / roadmap grouping).
+    milestoneId: v.optional(v.id("projectMilestones")),
+    // Employees watching this task (auto: assignees + commenters + creator).
+    watcherEmployeeIds: v.optional(v.array(v.id("employees"))),
     // Up to a small cap of supporting files (parallel arrays: id + display name).
     attachmentStorageIds: v.optional(v.array(v.id("_storage"))),
     attachmentNames: v.optional(v.array(v.string())),
@@ -411,6 +436,7 @@ export default defineSchema({
   })
     .index("by_project", ["projectId"])
     .index("by_stage", ["stageId"])
+    .index("by_parent", ["parentTaskId"])
     .index("by_org", ["orgId"]),
 
   // Comment / activity thread on a task. Visible to anyone who can see the task
@@ -453,6 +479,70 @@ export default defineSchema({
   })
     .index("by_task", ["taskId"])
     .index("by_employee", ["employeeId"])
+    .index("by_project", ["projectId"])
+    .index("by_org", ["orgId"]),
+
+  // Org-defined labels/tags applied to tasks. Managed by tasks:manage.
+  taskLabels: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    color: v.string(),
+    order: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Org-defined custom field schema for tasks. Mirrors the payment-request field
+  // pattern: a def list here, a `customFields` record on each task. Managed by
+  // tasks:manage.
+  taskFieldDefs: defineTable({
+    orgId: v.id("organizations"),
+    key: v.string(),
+    label: v.string(),
+    type: v.union(
+      v.literal("text"),
+      v.literal("number"),
+      v.literal("date"),
+      v.literal("select"),
+      v.literal("checkbox"),
+    ),
+    options: v.optional(v.array(v.string())),
+    order: v.number(),
+    active: v.boolean(),
+  }).index("by_org", ["orgId"]),
+
+  // Saved filter presets for the board/list views. Personal by default; a manager
+  // can publish one org-wide with `isShared`.
+  savedTaskViews: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    projectId: v.optional(v.id("projects")),
+    name: v.string(),
+    filter: v.string(), // JSON-encoded filter state
+    isShared: v.boolean(),
+  })
+    .index("by_user", ["orgId", "userId"])
+    .index("by_org", ["orgId"]),
+
+  // Dependency edges between tasks ("from blocks to"). Managed by tasks:manage.
+  taskLinks: defineTable({
+    orgId: v.id("organizations"),
+    projectId: v.id("projects"),
+    fromTaskId: v.id("projectTasks"),
+    toTaskId: v.id("projectTasks"),
+    type: v.literal("blocks"),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_from", ["fromTaskId"])
+    .index("by_to", ["toTaskId"]),
+
+  // Timeline milestones for a project. Tasks can roll up to a milestone.
+  projectMilestones: defineTable({
+    orgId: v.id("organizations"),
+    projectId: v.id("projects"),
+    name: v.string(),
+    dueDate: v.string(), // ISO "YYYY-MM-DD"
+    description: v.optional(v.string()),
+    order: v.number(),
+  })
     .index("by_project", ["projectId"])
     .index("by_org", ["orgId"]),
 
