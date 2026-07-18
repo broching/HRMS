@@ -10,11 +10,13 @@ import { IconMinus, IconPlus, IconArrowRight, IconCheck } from "@tabler/icons-re
 import {
   CORE_MAX_SEATS,
   MODULE_PRICING,
+  ENTERPRISE,
   computeBillingCents,
   computeCoreCents,
   formatSgd,
   type OptionalModuleKey,
 } from "@/convex/lib/plans"
+import { IconBuildingSkyscraper } from "@tabler/icons-react"
 import { OPTIONAL_MODULES, MODULE_META } from "@/convex/lib/modules"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -126,15 +128,60 @@ export function PricingPlans({
         />
       </div>
 
+      <EnterpriseCard atCap={seats >= CORE_MAX_SEATS} />
+
       <p className="text-muted-foreground text-center text-xs">
         Billed monthly in SGD · Cancel anytime · The Core platform is priced by
-        team size; each module is a flat monthly add-on. Prices update live. More
-        than {CORE_MAX_SEATS} employees?{" "}
-        <Link href="/leadmightyhr#contact" className="text-primary underline">
-          Talk to us
-        </Link>
-        .
+        team size; each module is a flat monthly add-on. Prices update live.
       </p>
+    </div>
+  )
+}
+
+function EnterpriseCard({ atCap }: { atCap: boolean }) {
+  return (
+    <div className="border-primary/30 from-primary/5 rounded-2xl border bg-gradient-to-br to-transparent p-5 shadow-sm sm:p-6">
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="bg-primary/10 text-primary flex size-9 items-center justify-center rounded-xl">
+              <IconBuildingSkyscraper className="size-5" />
+            </div>
+            <h3 className="text-lg font-semibold">{ENTERPRISE.name}</h3>
+          </div>
+          <p className="text-muted-foreground mt-2 max-w-xl text-sm">
+            {atCap ? (
+              <>
+                More than {CORE_MAX_SEATS} employees or need a{" "}
+                <strong>dedicated deployment</strong>? {ENTERPRISE.tagline}
+              </>
+            ) : (
+              ENTERPRISE.tagline
+            )}{" "}
+            Your own database and keys, every module included, priority support —
+            billed on a custom quote.
+          </p>
+          <ul className="mt-4 grid gap-1.5 sm:grid-cols-2">
+            {ENTERPRISE.features.map((f) => (
+              <li key={f} className="flex items-start gap-2 text-sm">
+                <IconCheck className="text-primary mt-0.5 size-4 shrink-0" />
+                <span>{f}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+          <Button asChild variant="outline">
+            <Link href="/leadmightyhr#contact">
+              Contact sales <IconArrowRight className="size-4" />
+            </Link>
+          </Button>
+          <span className="text-muted-foreground text-[11px]">
+            Custom quote · dedicated support
+          </span>
+        </div>
+      </div>
     </div>
   )
 }

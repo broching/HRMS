@@ -44,6 +44,7 @@ import type * as leavePolicies from "../leavePolicies.js";
 import type * as leaveRequests from "../leaveRequests.js";
 import type * as leaveTypes from "../leaveTypes.js";
 import type * as lib_audit from "../lib/audit.js";
+import type * as lib_deployment from "../lib/deployment.js";
 import type * as lib_emailTemplate from "../lib/emailTemplate.js";
 import type * as lib_enums from "../lib/enums.js";
 import type * as lib_modules from "../lib/modules.js";
@@ -150,6 +151,7 @@ declare const fullApi: ApiFromModules<{
   leaveRequests: typeof leaveRequests;
   leaveTypes: typeof leaveTypes;
   "lib/audit": typeof lib_audit;
+  "lib/deployment": typeof lib_deployment;
   "lib/emailTemplate": typeof lib_emailTemplate;
   "lib/enums": typeof lib_enums;
   "lib/modules": typeof lib_modules;

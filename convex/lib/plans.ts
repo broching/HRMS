@@ -105,6 +105,32 @@ export function computeBillingCents(
   return { baseCents, moduleCents, totalCents: baseCents + moduleCents };
 }
 
+// ─── Enterprise (sales-led, dedicated deployment) ────────────────────────────
+
+/**
+ * Marketing descriptor for the Enterprise offering — a custom, sales-led plan
+ * where the organisation runs on its OWN dedicated Convex deployment (separate
+ * database + keys) on its own domain, with all modules included and dedicated
+ * support. Priced by custom quote (billing handled manually), so there is no
+ * Stripe product; the CTA routes to the contact form. Shared by the landing
+ * pricing section and the in-app plan builder so the copy stays consistent.
+ */
+export const ENTERPRISE = {
+  name: "Enterprise",
+  tagline:
+    "For large organisations that need a dedicated, single-tenant deployment.",
+  features: [
+    "Your own dedicated Convex database, keys and infrastructure",
+    "Your own domain (e.g. hr.yourcompany.com)",
+    "Every module included — no add-ons to pick",
+    "Unlimited team size (150+ employees)",
+    "SSO-ready single sign-on",
+    "Priority support with a dedicated account manager & SLA",
+    "Guided onboarding and data migration",
+    "Custom quote billed on your terms",
+  ],
+} as const;
+
 // ─── Legacy tiered plans (pre-existing subscriptions only) ───────────────────
 
 export type PaidPlanKey = "starter" | "growth" | "business";

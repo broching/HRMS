@@ -10,6 +10,7 @@ import { Reveal } from "./reveal";
 import {
   CORE_MAX_SEATS,
   MODULE_PRICING,
+  ENTERPRISE,
   computeBillingCents,
   formatSgd,
   type OptionalModuleKey,
@@ -294,6 +295,60 @@ export function PricingSection() {
             </div>
           </Reveal>
         </div>
+
+        {/* ── Enterprise band (sales-led, dedicated deployment) ── */}
+        <Reveal delay={120} className="mt-6">
+          <div
+            className="lm-card overflow-hidden p-6 md:p-8"
+            style={{ background: "var(--lm-panel)" }}
+          >
+            <div className="grid gap-6 md:grid-cols-[1fr_auto] md:items-center">
+              <div>
+                <span className="lm-eyebrow">Enterprise</span>
+                <h3
+                  className="lm-display mt-2 text-[clamp(1.5rem,3.4vw,2rem)]"
+                  style={{ color: "var(--lm-ink)" }}
+                >
+                  A dedicated deployment, on your own domain.
+                </h3>
+                <p
+                  className="mt-2 max-w-xl text-sm leading-relaxed"
+                  style={{ color: "var(--lm-muted)" }}
+                >
+                  {ENTERPRISE.tagline} Your own database and keys, every module
+                  included, priority support — billed on a custom quote.
+                </p>
+                <ul className="mt-5 grid gap-2 sm:grid-cols-2">
+                  {ENTERPRISE.features.map((f) => (
+                    <li
+                      key={f}
+                      className="flex items-start gap-2 text-sm"
+                      style={{ color: "var(--lm-ink-2)" }}
+                    >
+                      <Check
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                        style={{ color: "var(--lm-accent)" }}
+                      />
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="flex flex-col items-start gap-3 md:items-end">
+                <Link href="#contact" className="lm-btn lm-btn-primary">
+                  Talk to sales <ArrowRight className="h-4 w-4" />
+                </Link>
+                <span
+                  className="lm-mono text-[0.72rem]"
+                  style={{ color: "var(--lm-muted-2)" }}
+                >
+                  Custom quote · dedicated support
+                </span>
+              </div>
+            </div>
+          </div>
+        </Reveal>
       </div>
     </section>
   );

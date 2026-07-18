@@ -10,6 +10,7 @@ import {
   type PlanKey,
 } from "./lib/plans";
 import { OPTIONAL_MODULES, sanitizeModuleKeys } from "./lib/modules";
+import { isDedicated } from "./lib/deployment";
 
 /**
  * Billing state for the org. The org is the Stripe customer; one `subscriptions`
@@ -20,8 +21,11 @@ import { OPTIONAL_MODULES, sanitizeModuleKeys } from "./lib/modules";
  */
 
 // Enforcement is opt-in so existing orgs are never locked out unexpectedly. Set
-// the Convex env var BILLING_ENFORCED=true to turn the paywall on.
+// the Convex env var BILLING_ENFORCED=true to turn the paywall on. A dedicated
+// Enterprise deployment is NEVER enforced — its billing is handled manually
+// (custom quote) outside the app, so the paywall must never show there.
 function billingEnforced(): boolean {
+  if (isDedicated()) return false;
   return process.env.BILLING_ENFORCED === "true";
 }
 
@@ -129,6 +133,9 @@ export const getBillingSummary = query({
   returns: v.object({
     hasSubscription: v.boolean(),
     enforced: v.boolean(),
+    // True on a dedicated Enterprise deployment — the billing page shows the
+    // managed-support panel instead of the self-serve plan builder.
+    dedicated: v.boolean(),
     orgName: v.string(),
     plan: v.union(v.string(), v.null()),
     planName: v.union(v.string(), v.null()),
@@ -178,6 +185,7 @@ export const getBillingSummary = query({
     return {
       hasSubscription: !!sub?.stripeSubscriptionId && !!sub?.status,
       enforced: billingEnforced(),
+      dedicated: isDedicated(),
       orgName: org.name,
       plan: sub?.plan ?? null,
       planName: planKey ? PLANS[planKey].name : null,

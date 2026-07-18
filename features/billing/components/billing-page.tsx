@@ -13,8 +13,16 @@ import {
   IconExternalLink,
   IconAlertTriangle,
   IconPuzzle,
+  IconBuildingSkyscraper,
+  IconShieldCheck,
+  IconMail,
 } from "@tabler/icons-react"
-import { formatSgd, CORE_TIERS, type OptionalModuleKey } from "@/convex/lib/plans"
+import {
+  formatSgd,
+  CORE_TIERS,
+  ENTERPRISE,
+  type OptionalModuleKey,
+} from "@/convex/lib/plans"
 import { MODULE_META } from "@/convex/lib/modules"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -66,6 +74,12 @@ export function BillingPage() {
     )
   }
 
+  // Dedicated Enterprise deployment: billing is managed manually (custom quote),
+  // so replace the whole self-serve builder with the managed-support panel.
+  if (summary.dedicated) {
+    return <DedicatedDeploymentPanel orgName={summary.orgName} />
+  }
+
   const active = summary.hasSubscription
 
   return (
@@ -107,6 +121,79 @@ export function BillingPage() {
           initialSeats={summary.seats ?? summary.activeEmployees}
         />
       )}
+    </div>
+  )
+}
+
+function DedicatedDeploymentPanel({ orgName }: { orgName: string }) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+        <div className="flex items-start gap-4">
+          <div className="bg-primary/10 text-primary flex size-12 shrink-0 items-center justify-center rounded-2xl">
+            <IconBuildingSkyscraper className="size-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-semibold">{orgName}</h2>
+              <span className="bg-primary/10 text-primary border-primary/20 rounded-full border px-2 py-0.5 text-[11px] font-semibold">
+                Enterprise · Dedicated deployment
+              </span>
+            </div>
+            <p className="text-muted-foreground mt-1 text-sm">
+              {orgName} runs on its own dedicated, single-tenant deployment —
+              your own database, keys and domain. Billing is handled by your
+              account manager under your Enterprise agreement, so there&apos;s
+              nothing to configure here. Every module is included.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-4 sm:grid-cols-3">
+          <Stat
+            icon={<IconShieldCheck className="size-4" />}
+            label="Deployment"
+            value="Dedicated"
+          />
+          <Stat
+            icon={<IconPuzzle className="size-4" />}
+            label="Modules"
+            value="All included"
+          />
+          <Stat
+            icon={<IconCreditCard className="size-4" />}
+            label="Billing"
+            value="Managed"
+          />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+        <div className="text-muted-foreground mb-3 text-xs font-semibold tracking-[0.14em] uppercase">
+          What&apos;s included
+        </div>
+        <ul className="grid gap-2 sm:grid-cols-2">
+          {ENTERPRISE.features.map((f) => (
+            <li key={f} className="flex items-start gap-2 text-sm">
+              <IconShieldCheck className="text-primary mt-0.5 size-4 shrink-0" />
+              <span>{f}</span>
+            </li>
+          ))}
+        </ul>
+
+        <div className="border-border mt-6 flex flex-col items-start gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-muted-foreground text-sm">
+            Need to change your plan, add seats or ask about the platform?
+            Contact your dedicated account manager.
+          </p>
+          <Button asChild variant="outline">
+            <a href="mailto:enterprise@leadmighty.com">
+              <IconMail className="size-4" />
+              Contact your account manager
+            </a>
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }

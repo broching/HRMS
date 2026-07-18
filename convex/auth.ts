@@ -9,10 +9,12 @@ import {
   sanitizePermissions,
 } from "./lib/permissions";
 import {
+  MODULES,
   ModuleKey,
   MODULE_FOR_PERMISSION,
   enabledModulesFromDisabled,
 } from "./lib/modules";
+import { isDedicated, dedicatedOrgClerkId } from "./lib/deployment";
 
 /**
  * Tenancy + RBAC core. Every domain query/mutation resolves the caller's
@@ -87,6 +89,10 @@ export async function resolveEnabledModules(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
 ): Promise<Set<ModuleKey>> {
+  // A dedicated Enterprise deployment always has every module on — billing is
+  // handled manually, so no `orgModules` row (or a stray super-admin toggle) can
+  // ever lock the enterprise out of a feature.
+  if (isDedicated()) return new Set(MODULES);
   const row = await ctx.db
     .query("orgModules")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -113,6 +119,12 @@ export async function getOrgContext(ctx: QueryCtx): Promise<OrgContext | null> {
 
   const clerkOrgId = identity.org_id;
   if (!clerkOrgId) return null;
+
+  // Dedicated Enterprise deployment: this instance is pinned to a single Clerk
+  // org. Refuse every other org, so even a mis-pointed frontend can only ever
+  // resolve context for — and thus read/write — the one org this DB belongs to.
+  const pinnedOrg = dedicatedOrgClerkId();
+  if (isDedicated() && pinnedOrg && clerkOrgId !== pinnedOrg) return null;
 
   const user = await ctx.db
     .query("users")
