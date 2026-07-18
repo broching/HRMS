@@ -240,7 +240,7 @@ export const generateQrToken = mutation({
 export const clockIn = mutation({
   args: {
     token: v.string(),
-    geo: geoArg,
+    geo: v.optional(geoArg),
     accuracy: v.optional(v.number()),
   },
   returns: v.object({
@@ -267,16 +267,25 @@ export const clockIn = mutation({
       throw new Error("This QR code has expired — scan the latest one on the display.");
     }
 
-    // Geofence (when the office has a configured location + radius).
+    // Geofence (when the office has a configured location + radius). Distance is
+    // always recorded for reference; it's only enforced when geoRequired isn't
+    // explicitly disabled for this office. Offices that enforce the fence still
+    // require a device fix — without one there's nothing to check against.
+    const enforceGeo =
+      office.geoRequired !== false && !!office.geo && !!office.radiusMeters;
     let distance: number | undefined;
-    if (office.geo && office.radiusMeters) {
+    if (office.geo && office.radiusMeters && geo) {
       const fence = checkGeofence(office.geo, geo, office.radiusMeters, accuracy);
       distance = fence.distance;
-      if (!fence.ok) {
+      if (enforceGeo && !fence.ok) {
         throw new Error(
           `You appear to be about ${Math.round(fence.distance)}m from ${office.name}. Move closer to clock in.`,
         );
       }
+    } else if (enforceGeo && !geo) {
+      throw new Error(
+        `${office.name} requires your location to clock in. Enable location access and try again.`,
+      );
     }
 
     const existingOpen = await ctx.db
@@ -313,7 +322,7 @@ export const clockIn = mutation({
 });
 
 export const clockOut = mutation({
-  args: { geo: geoArg, accuracy: v.optional(v.number()) },
+  args: { geo: v.optional(geoArg), accuracy: v.optional(v.number()) },
   returns: v.object({ workedMinutes: v.number() }),
   handler: async (ctx, { geo, accuracy }) => {
     const { orgId, userId } = await requireOrg(ctx);
@@ -330,14 +339,20 @@ export const clockOut = mutation({
 
     let distance: number | undefined;
     const office = open.officeId ? await ctx.db.get(open.officeId) : null;
-    if (office?.geo && office.radiusMeters) {
+    const enforceGeo =
+      !!office && office.geoRequired !== false && !!office.geo && !!office.radiusMeters;
+    if (office?.geo && office.radiusMeters && geo) {
       const fence = checkGeofence(office.geo, geo, office.radiusMeters, accuracy);
       distance = fence.distance;
-      if (!fence.ok) {
+      if (enforceGeo && !fence.ok) {
         throw new Error(
           `You appear to be about ${Math.round(fence.distance)}m from ${office.name}. Move closer to clock out.`,
         );
       }
+    } else if (enforceGeo && !geo) {
+      throw new Error(
+        `${office!.name} requires your location to clock out. Enable location access and try again.`,
+      );
     }
 
     const now = Date.now();

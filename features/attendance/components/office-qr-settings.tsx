@@ -8,6 +8,9 @@ import {
   IconCurrentLocation,
   IconQrcode,
   IconPrinter,
+  IconChevronRight,
+  IconChevronDown,
+  IconAlertTriangle,
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Doc, Id } from "@/convex/_generated/dataModel"
@@ -66,7 +69,27 @@ function OfficeCard({
     office.radiusMeters?.toString() ?? "100",
   )
   const [saving, setSaving] = React.useState(false)
+  const [advancedOpen, setAdvancedOpen] = React.useState(false)
+  // Optimistic mirror of office.geoRequired (absent = enforced by default).
+  const [geoRequired, setGeoRequired] = React.useState(office.geoRequired !== false)
   const radiusN = Math.max(10, parseInt(radius, 10) || 100)
+
+  async function toggleGeoRequired(next: boolean) {
+    setGeoRequired(next)
+    try {
+      await update({ id: office._id, geoRequired: next })
+      toast.success(
+        next
+          ? "Staff must be within the geofence to clock in."
+          : "Location check is off — staff can clock in from anywhere.",
+      )
+    } catch (e) {
+      setGeoRequired(!next)
+      toast.error(
+        getErrorMessage(e, "We couldn't update the location check. Try again."),
+      )
+    }
+  }
 
   async function toggleQr(enabled: boolean) {
     try {
@@ -177,6 +200,103 @@ function OfficeCard({
             <span className="text-muted-foreground text-xs tabular-nums">
               {lat.toFixed(5)}, {lng.toFixed(5)}
             </span>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-3 border-t pt-3">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((o) => !o)}
+            className="text-muted-foreground hover:text-foreground flex items-center gap-1 self-start text-sm font-medium transition-colors"
+          >
+            {advancedOpen ? (
+              <IconChevronDown className="size-4" />
+            ) : (
+              <IconChevronRight className="size-4" />
+            )}
+            Advanced
+          </button>
+
+          {advancedOpen && (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <Label htmlFor={`geo-req-${office._id}`} className="text-sm">
+                    Require location to clock in
+                  </Label>
+                  <p className="text-muted-foreground text-xs">
+                    When off, staff can clock in without being inside the
+                    geofence — useful if they clock in from desktops, where
+                    browser location is often off by a kilometre or more.
+                  </p>
+                </div>
+                <Switch
+                  id={`geo-req-${office._id}`}
+                  checked={geoRequired}
+                  onCheckedChange={toggleGeoRequired}
+                />
+              </div>
+
+              {!geoRequired && office.qrEnabled && mode === "poster" && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300">
+                  <IconAlertTriangle className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    This office uses a printed poster code that never expires.
+                    With the location check off, anyone who has the code can
+                    clock in from anywhere.
+                  </span>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-2">
+                <Label className="text-sm">Set coordinates manually</Label>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <Label
+                      htmlFor={`lat-${office._id}`}
+                      className="text-muted-foreground text-xs"
+                    >
+                      Latitude
+                    </Label>
+                    <Input
+                      id={`lat-${office._id}`}
+                      type="number"
+                      step="any"
+                      className="w-40"
+                      value={lat ?? ""}
+                      placeholder="1.3521"
+                      onChange={(e) =>
+                        setLat(e.target.value === "" ? null : Number(e.target.value))
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label
+                      htmlFor={`lng-${office._id}`}
+                      className="text-muted-foreground text-xs"
+                    >
+                      Longitude
+                    </Label>
+                    <Input
+                      id={`lng-${office._id}`}
+                      type="number"
+                      step="any"
+                      className="w-40"
+                      value={lng ?? ""}
+                      placeholder="103.8198"
+                      onChange={(e) =>
+                        setLng(e.target.value === "" ? null : Number(e.target.value))
+                      }
+                    />
+                  </div>
+                </div>
+                <p className="text-muted-foreground text-xs">
+                  The map and pin follow these values. Click{" "}
+                  <span className="font-medium">Save location</span> above to
+                  apply.
+                </p>
+              </div>
+            </div>
           )}
         </div>
 

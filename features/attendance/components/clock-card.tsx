@@ -40,11 +40,13 @@ export function ClockCard() {
     setScanOpen(false)
     setBusy("in")
     try {
-      const fix = await getDeviceLocation()
+      // Location is best-effort: grab a fix if we can, but let the office's
+      // settings (enforced server-side) decide whether it's actually required.
+      const fix = await getDeviceLocation().catch(() => null)
       const res = await clockIn({
         token,
-        geo: { lat: fix.lat, lng: fix.lng },
-        accuracy: fix.accuracy,
+        geo: fix ? { lat: fix.lat, lng: fix.lng } : undefined,
+        accuracy: fix?.accuracy,
       })
       toast.success(`Clocked in at ${res.officeName}`)
     } catch (e) {
@@ -59,10 +61,10 @@ export function ClockCard() {
   async function handleClockOut() {
     setBusy("out")
     try {
-      const fix = await getDeviceLocation()
+      const fix = await getDeviceLocation().catch(() => null)
       const res = await clockOut({
-        geo: { lat: fix.lat, lng: fix.lng },
-        accuracy: fix.accuracy,
+        geo: fix ? { lat: fix.lat, lng: fix.lng } : undefined,
+        accuracy: fix?.accuracy,
       })
       const h = Math.floor(res.workedMinutes / 60)
       const m = res.workedMinutes % 60

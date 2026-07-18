@@ -217,6 +217,11 @@ export default defineSchema({
     isDefault: v.optional(v.boolean()),
     geo: v.optional(v.object({ lat: v.number(), lng: v.number() })),
     radiusMeters: v.optional(v.number()),
+    // Whether the geofence is enforced at clock-in/out. Absent or true = enforce
+    // (the historical default). False = optional: a clock event still records
+    // the device location when available, but is never rejected for distance —
+    // useful where staff clock in from desktops (imprecise IP-based location).
+    geoRequired: v.optional(v.boolean()),
     // Mileage-claim rates for employees assigned to this office. Absent = not
     // configured yet — mileage claims are blocked until an admin sets it up.
     mileageSettings: v.optional(officeMileageSettings),

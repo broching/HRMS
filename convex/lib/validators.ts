@@ -123,6 +123,7 @@ export const officeDoc = v.object({
   isDefault: v.optional(v.boolean()),
   geo: v.optional(v.object({ lat: v.number(), lng: v.number() })),
   radiusMeters: v.optional(v.number()),
+  geoRequired: v.optional(v.boolean()),
   mileageSettings: v.optional(officeMileageSettings),
   qrEnabled: v.boolean(),
   qrMode: v.optional(v.union(v.literal("poster"), v.literal("kiosk"))),
