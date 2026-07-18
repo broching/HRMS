@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import {
@@ -86,7 +87,7 @@ export function LeaveDetailPanel({
       setNote("")
       if (close) onClose()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Action failed")
+      toast.error(getErrorMessage(e, "Action failed"))
     } finally {
       setBusy(false)
     }

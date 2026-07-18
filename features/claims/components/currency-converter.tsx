@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useAction } from "convex/react"
 import { IconRefresh } from "@tabler/icons-react"
@@ -124,7 +125,7 @@ export function CurrencyConverter({
         const res = await getRate({ from, to: baseCurrency, date: today() })
         latest.current.onChange({ ...latest.current.state, auto: res })
       } catch (e) {
-        setRateError(e instanceof Error ? e.message : "Couldn't fetch rate.")
+        setRateError(getErrorMessage(e, "Couldn't fetch rate."))
         latest.current.onChange({ ...latest.current.state, auto: null })
       } finally {
         setLoading(false)

@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -61,7 +62,7 @@ function AddGoalDialog({ employeeId }: { employeeId?: Id<"employees"> }) {
       setWeight("")
       setDueDate("")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't add goal")
+      toast.error(getErrorMessage(e, "Couldn't add goal"))
     } finally {
       setBusy(false)
     }
@@ -151,7 +152,7 @@ export function GoalsList({
     try {
       await update({ goalId, progress })
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't update")
+      toast.error(getErrorMessage(e, "Couldn't update"))
     }
   }
 
@@ -195,7 +196,7 @@ export function GoalsList({
                         await remove({ goalId: g._id })
                       } catch (e) {
                         toast.error(
-                          e instanceof Error ? e.message : "Couldn't remove",
+                          getErrorMessage(e, "Couldn't remove"),
                         )
                       }
                     }}

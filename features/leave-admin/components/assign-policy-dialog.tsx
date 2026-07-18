@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconSearch, IconX } from "@tabler/icons-react"
@@ -85,7 +86,7 @@ export function AssignPolicyDialog({
       toast.success("Policy assigned")
       setSelected(new Set())
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not assign")
+      toast.error(getErrorMessage(e, "Could not assign"))
     } finally {
       setBusy(false)
     }

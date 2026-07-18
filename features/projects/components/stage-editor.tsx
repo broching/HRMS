@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
@@ -85,7 +86,7 @@ export function StageEditor({
       await createStage({ projectId, name: newName })
       setNewName("")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't add the column.")
+      toast.error(getErrorMessage(e, "Couldn't add the column."))
     }
   }
 
@@ -211,7 +212,7 @@ export function StageEditor({
             })
             setDeleting(null)
           } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Couldn't delete the column.")
+            toast.error(getErrorMessage(e, "Couldn't delete the column."))
           } finally {
             setBusy(false)
           }

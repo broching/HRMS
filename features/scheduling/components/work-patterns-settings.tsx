@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -175,7 +176,7 @@ function PatternDialog({
       }
       setOpen(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save")
+      toast.error(getErrorMessage(e, "Couldn't save"))
     } finally {
       setBusy(false)
     }
@@ -295,7 +296,7 @@ function AssignmentTable({ patterns }: { patterns: PatternDoc[] }) {
                       })
                       toast.success("Updated")
                     } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Couldn't update")
+                      toast.error(getErrorMessage(e, "Couldn't update"))
                     }
                   }}
                 >
@@ -370,7 +371,7 @@ export function WorkPatternsSettings() {
                       await setDefault({ id: p._id })
                       toast.success("Default updated")
                     } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Couldn't update")
+                      toast.error(getErrorMessage(e, "Couldn't update"))
                     }
                   }}
                 >
@@ -396,7 +397,7 @@ export function WorkPatternsSettings() {
                       await remove({ id: p._id })
                       toast.success("Pattern removed")
                     } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Couldn't remove")
+                      toast.error(getErrorMessage(e, "Couldn't remove"))
                     }
                   }}
                   aria-label="Delete pattern"

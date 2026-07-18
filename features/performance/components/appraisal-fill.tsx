@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -129,7 +130,7 @@ function AnswerInput({
 
   function persist(value: Record<string, unknown>) {
     save({ reviewId, fieldId: field.id, side, value }).catch((e) =>
-      toast.error(e instanceof Error ? e.message : "Couldn't save."),
+      toast.error(getErrorMessage(e, "Couldn't save.")),
     )
   }
 
@@ -435,7 +436,7 @@ function ObjectivesBlock({
                   className="h-6 w-6"
                   onClick={() =>
                     remove({ objectiveId: o._id }).catch((e) =>
-                      toast.error(e instanceof Error ? e.message : "Failed"),
+                      toast.error(getErrorMessage(e, "Failed")),
                     )
                   }
                   aria-label="Remove objective"
@@ -670,7 +671,7 @@ export function AppraisalFill({
       await p
       toast.success(ok)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Action failed")
+      toast.error(getErrorMessage(e, "Action failed"))
     }
   }
 

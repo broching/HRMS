@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation, useQuery } from "convex/react"
 import { toast } from "sonner"
@@ -140,7 +141,7 @@ export function TaskEditorDialog({
       }
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save the task.")
+      toast.error(getErrorMessage(e, "Couldn't save the task."))
     } finally {
       setSaving(false)
     }

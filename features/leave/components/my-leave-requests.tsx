@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
@@ -98,7 +99,7 @@ export function MyLeaveRequests({ action }: { action?: React.ReactNode }) {
       toast.success("Request cancelled")
       setDetail(null)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not cancel")
+      toast.error(getErrorMessage(e, "Could not cancel"))
     }
   }
 
@@ -120,7 +121,7 @@ export function MyLeaveRequests({ action }: { action?: React.ReactNode }) {
       toast.success("Resubmitted for approval")
       setDetail(null)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not resubmit")
+      toast.error(getErrorMessage(e, "Could not resubmit"))
     } finally {
       setBusy(false)
     }

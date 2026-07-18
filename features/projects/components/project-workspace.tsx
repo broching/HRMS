@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
@@ -305,7 +306,7 @@ function EditProjectDialog({
       toast.success("Project updated")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't update the project.")
+      toast.error(getErrorMessage(e, "Couldn't update the project."))
     } finally {
       setSaving(false)
     }

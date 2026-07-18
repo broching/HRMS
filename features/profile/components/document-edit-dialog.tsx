@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation } from "convex/react"
 import { IconFile, IconTrash, IconArrowBackUp } from "@tabler/icons-react"
@@ -71,7 +72,7 @@ export function DocumentEditDialog({
       toast.success("Document updated")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not save")
+      toast.error(getErrorMessage(e, "Could not save"))
     } finally {
       setSaving(false)
     }

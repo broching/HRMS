@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -67,7 +68,7 @@ export function AddCandidateDialog({
       setStage("screening")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't add candidate")
+      toast.error(getErrorMessage(e, "Couldn't add candidate"))
     } finally {
       setBusy(false)
     }

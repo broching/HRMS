@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation, useQuery } from "convex/react"
 import { toast } from "sonner"
@@ -346,7 +347,7 @@ export function SetCompensationDialog({
       toast.success("Compensation saved")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save")
+      toast.error(getErrorMessage(e, "Couldn't save"))
     } finally {
       setBusy(false)
     }

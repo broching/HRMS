@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation, useQuery } from "convex/react"
 import { toast } from "sonner"
@@ -85,7 +86,7 @@ function RequestCard({ request }: { request: QueueRow }) {
       })
       toast.success("Feedback submitted. Thank you!")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not submit.")
+      toast.error(getErrorMessage(e, "Could not submit."))
     } finally {
       setSaving(false)
     }

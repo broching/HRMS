@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
@@ -57,7 +58,7 @@ export function PostCard({ post }: { post: Post }) {
       await p
       toast.success(ok)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Action failed")
+      toast.error(getErrorMessage(e, "Action failed"))
     }
   }
 

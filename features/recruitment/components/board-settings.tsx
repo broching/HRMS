@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -156,7 +157,7 @@ export function BoardSettings() {
       })
       toast.success("Board settings saved")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save settings")
+      toast.error(getErrorMessage(e, "Couldn't save settings"))
     } finally {
       setBusy(false)
     }

@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
 import { useMutation, useQuery } from "convex/react"
@@ -377,7 +378,7 @@ function Feedback360Panel({ data }: { data: Appraisal; reviewId: Id<"reviews"> }
       setGiverId("")
       toast.success("Feedback giver assigned.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not assign.")
+      toast.error(getErrorMessage(e, "Could not assign."))
     }
   }
 

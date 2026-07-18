@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors"
 import React from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -53,7 +54,7 @@ export function ContactSection() {
       reset();
       toast.success("Thanks — we'll be in touch shortly.");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Something went wrong. Try again.");
+      toast.error(getErrorMessage(err, "Something went wrong. Try again."));
     }
   };
 

@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
@@ -169,7 +170,7 @@ export function CreatePostDialog({
       }
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not save")
+      toast.error(getErrorMessage(e, "Could not save"))
     } finally {
       setSaving(false)
     }

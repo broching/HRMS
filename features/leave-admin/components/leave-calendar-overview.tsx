@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
@@ -120,7 +121,7 @@ export function LeaveCalendarOverview({
         count > 0 ? `Nudged ${count} approver(s).` : "No pending approvals to nudge.",
       )
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not nudge")
+      toast.error(getErrorMessage(e, "Could not nudge"))
     }
   }
 

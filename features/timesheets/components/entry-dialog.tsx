@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
@@ -161,7 +162,7 @@ export function EntryDialog({
       toast.success(editing ? "Entry updated" : "Time logged")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save the entry.")
+      toast.error(getErrorMessage(e, "Couldn't save the entry."))
     } finally {
       setSaving(false)
     }

@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -71,7 +72,7 @@ export function ScheduleInterviewDialog({
       setNotes("")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't schedule")
+      toast.error(getErrorMessage(e, "Couldn't schedule"))
     } finally {
       setBusy(false)
     }

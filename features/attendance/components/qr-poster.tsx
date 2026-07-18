@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { QRCodeSVG } from "qrcode.react"
 import { useMutation } from "convex/react"
@@ -33,7 +34,7 @@ export function QrPoster({
       })
       .catch((e) => {
         if (!cancelled)
-          setError(e instanceof Error ? e.message : "Couldn't generate the code")
+          setError(getErrorMessage(e, "Couldn't generate the code"))
       })
     return () => {
       cancelled = true

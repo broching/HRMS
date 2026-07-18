@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -94,7 +95,7 @@ export function LeaveTypeDialog({
       reset()
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not create")
+      toast.error(getErrorMessage(e, "Could not create"))
     } finally {
       setBusy(false)
     }

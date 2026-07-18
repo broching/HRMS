@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
@@ -456,7 +457,7 @@ function CreateProjectDialog({
       onOpenChange(false)
       router.push(`/projects/${id}`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't create the project.")
+      toast.error(getErrorMessage(e, "Couldn't create the project."))
     } finally {
       setSaving(false)
     }

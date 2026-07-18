@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useForm, type Control, type FieldPath } from "react-hook-form"
@@ -436,7 +437,7 @@ export function EmployeeForm({
             })
           } catch (e) {
             notes.push(
-              `email invite not sent (${e instanceof Error ? e.message : "unknown error"})`,
+              `email invite not sent (${getErrorMessage(e, "unknown error")})`,
             )
           }
         }
@@ -450,7 +451,7 @@ export function EmployeeForm({
             }
           } catch (e) {
             notes.push(
-              `could not add “${username}” (${e instanceof Error ? e.message : "unknown error"})`,
+              `could not add “${username}” (${getErrorMessage(e, "unknown error")})`,
             )
           }
         }
@@ -464,7 +465,7 @@ export function EmployeeForm({
       }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Could not save employee",
+        getErrorMessage(err, "Could not save employee"),
       )
     } finally {
       setSaving(false)

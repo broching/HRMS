@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation, useQuery } from "convex/react"
 import { toast } from "sonner"
@@ -63,7 +64,7 @@ function CompetencyForm({
       })
       onDone()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not save competency.")
+      toast.error(getErrorMessage(e, "Could not save competency."))
     } finally {
       setSaving(false)
     }

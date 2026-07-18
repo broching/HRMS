@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation, useQuery } from "convex/react"
 import { IconPlus, IconX, IconDeviceFloppy } from "@tabler/icons-react"
@@ -140,7 +141,7 @@ export function DevelopmentPlan({
       setDirty(false)
       toast.success("Development plan saved.")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not save plan.")
+      toast.error(getErrorMessage(e, "Could not save plan."))
     } finally {
       setSaving(false)
     }

@@ -85,7 +85,7 @@ function NewRunDialog({ trigger }: { trigger: React.ReactNode }) {
       setOpen(false)
       router.push(`/hr-lounge/payroll/runs/${id}`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't create run")
+      toast.error(getErrorMessage(e, "Couldn't create run"))
     } finally {
       setBusy(false)
     }

@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
@@ -87,7 +88,7 @@ export function PublicJob({
       })
       setDone(true)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't submit application")
+      toast.error(getErrorMessage(e, "Couldn't submit application"))
     } finally {
       setBusy(false)
     }

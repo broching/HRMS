@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconUsers } from "@tabler/icons-react"
@@ -60,7 +61,7 @@ export function ProjectPeople({
       toast.success("Project team updated")
       setEditing(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't update the team.")
+      toast.error(getErrorMessage(e, "Couldn't update the team."))
     } finally {
       setSaving(false)
     }

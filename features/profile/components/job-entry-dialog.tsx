@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -109,7 +110,7 @@ export function JobEntryDialog({
       toast.success("Job record saved")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not save")
+      toast.error(getErrorMessage(e, "Could not save"))
     } finally {
       setSaving(false)
     }

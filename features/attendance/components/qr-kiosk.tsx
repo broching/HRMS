@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { QRCodeSVG } from "qrcode.react"
 import { useMutation } from "convex/react"
@@ -31,7 +32,7 @@ export function QrKiosk({
       setError(null)
       setSecondsLeft(Math.max(1, Math.round((res.expiresAt - Date.now()) / 1000)))
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't generate a code")
+      setError(getErrorMessage(e, "Couldn't generate a code"))
     }
   }, [generate, officeId])
 

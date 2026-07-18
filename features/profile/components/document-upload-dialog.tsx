@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation } from "convex/react"
 import { IconX, IconPhoto, IconFile } from "@tabler/icons-react"
@@ -94,7 +95,7 @@ export function DocumentUploadDialog({
       toast.success("Document added")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not add document")
+      toast.error(getErrorMessage(e, "Could not add document"))
     } finally {
       setSaving(false)
     }

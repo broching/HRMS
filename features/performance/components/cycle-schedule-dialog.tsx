@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -145,7 +146,7 @@ export function CycleScheduleDialog({
       toast.success("Audience & schedule saved")
       onClose()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save.")
+      toast.error(getErrorMessage(e, "Couldn't save."))
     } finally {
       setBusy(false)
     }

@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconPlus, IconTrash } from "@tabler/icons-react"
@@ -31,7 +32,7 @@ export function HolidaysManager() {
       setDate("")
       setName("")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed")
+      toast.error(getErrorMessage(e, "Failed"))
     }
   }
 

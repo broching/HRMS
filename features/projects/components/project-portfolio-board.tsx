@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useMutation } from "convex/react"
@@ -85,7 +86,7 @@ export function ProjectPortfolioBoard({
         delete next[project._id]
         return next
       })
-      toast.error(err instanceof Error ? err.message : "Couldn't move the project.")
+      toast.error(getErrorMessage(err, "Couldn't move the project."))
     }
   }
 

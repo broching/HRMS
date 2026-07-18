@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -50,7 +51,7 @@ function AddTemplate() {
       toast.success("Template added")
       setName("")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't add")
+      toast.error(getErrorMessage(e, "Couldn't add"))
     } finally {
       setBusy(false)
     }
@@ -182,7 +183,7 @@ export function ShiftTemplatesSettings() {
                         toast.success("Template removed")
                       } catch (e) {
                         toast.error(
-                          e instanceof Error ? e.message : "Couldn't remove",
+                          getErrorMessage(e, "Couldn't remove"),
                         )
                       }
                     }}

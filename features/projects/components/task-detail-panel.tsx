@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import {
@@ -91,7 +92,7 @@ export function TaskDetailPanel({
     try {
       await setStatus({ taskId: detail._id, status: done ? "open" : "done" })
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't update the task.")
+      toast.error(getErrorMessage(e, "Couldn't update the task."))
     } finally {
       setBusy(false)
     }
@@ -107,7 +108,7 @@ export function TaskDetailPanel({
         files: next.map((a) => ({ storageId: a.id, name: a.name })),
       })
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't attach the files.")
+      toast.error(getErrorMessage(e, "Couldn't attach the files."))
     }
   }
 

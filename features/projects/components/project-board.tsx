@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
@@ -132,7 +133,7 @@ export function ProjectBoard({
         orderedTaskIds: next[overC] as Id<"projectTasks">[],
       })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't move the task.")
+      toast.error(getErrorMessage(err, "Couldn't move the task."))
     }
   }
 

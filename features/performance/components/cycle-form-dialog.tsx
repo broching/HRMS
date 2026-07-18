@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -72,7 +73,7 @@ export function CycleFormDialog({
       toast.success("Form saved")
       onClose()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save the form.")
+      toast.error(getErrorMessage(e, "Couldn't save the form."))
     } finally {
       setBusy(false)
     }
@@ -95,7 +96,7 @@ export function CycleFormDialog({
       toast.success("Saved as template")
       setTemplateNameOpen(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save template.")
+      toast.error(getErrorMessage(e, "Couldn't save template."))
     } finally {
       setSavingTemplate(false)
     }

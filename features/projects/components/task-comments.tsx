@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconMessageCircle, IconPencil, IconTrash } from "@tabler/icons-react"
@@ -35,7 +36,7 @@ export function TaskComments({ taskId }: { taskId: Id<"projectTasks"> }) {
       await addComment({ taskId, body: draft })
       setDraft("")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't post the comment.")
+      toast.error(getErrorMessage(e, "Couldn't post the comment."))
     } finally {
       setPosting(false)
     }
@@ -47,7 +48,7 @@ export function TaskComments({ taskId }: { taskId: Id<"projectTasks"> }) {
       await updateComment({ commentId, body: editDraft })
       setEditingId(null)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't update the comment.")
+      toast.error(getErrorMessage(e, "Couldn't update the comment."))
     }
   }
 

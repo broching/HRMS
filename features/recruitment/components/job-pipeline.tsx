@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
@@ -61,7 +62,7 @@ function CandidateCard({
     try {
       await setStage({ candidateId: c._id, stage })
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Move failed")
+      toast.error(getErrorMessage(e, "Move failed"))
     }
   }
   return (

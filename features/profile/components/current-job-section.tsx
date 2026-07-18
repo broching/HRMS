@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconPencil, IconLock } from "@tabler/icons-react"
@@ -94,7 +95,7 @@ export function CurrentJobSection({ employee }: { employee: ProfileData }) {
       toast.success("Job updated")
       setEditing(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not save")
+      toast.error(getErrorMessage(e, "Could not save"))
     } finally {
       setSaving(false)
     }

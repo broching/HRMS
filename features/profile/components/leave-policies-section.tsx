@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconAdjustmentsHorizontal, IconHistory } from "@tabler/icons-react"
@@ -229,7 +230,7 @@ function AdjustDialog({
       toast.success("Balance adjusted")
       onClose()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not adjust")
+      toast.error(getErrorMessage(e, "Could not adjust"))
     } finally {
       setSaving(false)
     }

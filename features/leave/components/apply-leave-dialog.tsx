@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconPlus, IconPaperclip, IconCheck } from "@tabler/icons-react"
@@ -97,7 +98,7 @@ export function ApplyLeaveDialog({ className }: { className?: string }) {
       setOpen(false)
       reset()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not submit")
+      toast.error(getErrorMessage(e, "Could not submit"))
     } finally {
       setSubmitting(false)
     }

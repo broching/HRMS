@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
@@ -189,7 +190,7 @@ export function LeavePolicyEditor({
       setNewName("")
       toast.success("Policy added")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not add policy")
+      toast.error(getErrorMessage(e, "Could not add policy"))
     } finally {
       setAdding(false)
     }

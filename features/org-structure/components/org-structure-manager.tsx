@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconTrash, IconPlus } from "@tabler/icons-react"
@@ -41,7 +42,7 @@ function CrudSection({
       await onAdd(v)
       setValue("")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not add")
+      toast.error(getErrorMessage(e, "Could not add"))
     } finally {
       setBusy(false)
     }

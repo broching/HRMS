@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -129,7 +130,7 @@ export function RosterBoard({ scope }: { scope: "team" | "org" }) {
           : "Nothing to publish",
       )
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't publish")
+      toast.error(getErrorMessage(e, "Couldn't publish"))
     }
   }
 
@@ -152,7 +153,7 @@ export function RosterBoard({ scope }: { scope: "team" | "org" }) {
       })
       toast.success("Overtime scheduled")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't schedule OT")
+      toast.error(getErrorMessage(e, "Couldn't schedule OT"))
     }
   }
 
@@ -422,7 +423,7 @@ function PendingOvertimePanel() {
                       await reject({ overtimeId: o._id })
                       toast.success("Overtime rejected")
                     } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Couldn't reject")
+                      toast.error(getErrorMessage(e, "Couldn't reject"))
                     }
                   }}
                 >
@@ -435,7 +436,7 @@ function PendingOvertimePanel() {
                       await approve({ overtimeId: o._id })
                       toast.success("Overtime approved")
                     } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Couldn't approve")
+                      toast.error(getErrorMessage(e, "Couldn't approve"))
                     }
                   }}
                 >

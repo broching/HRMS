@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { toast } from "sonner"
@@ -118,7 +119,7 @@ export function AssignShiftDialog({
       }
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save")
+      toast.error(getErrorMessage(e, "Couldn't save"))
     } finally {
       setBusy(false)
     }
@@ -132,7 +133,7 @@ export function AssignShiftDialog({
       toast.success("Shift removed")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't remove")
+      toast.error(getErrorMessage(e, "Couldn't remove"))
     } finally {
       setBusy(false)
     }

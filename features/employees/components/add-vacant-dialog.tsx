@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
@@ -88,7 +89,7 @@ export function AddVacantDialog({
       toast.success("Vacant position added")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not add position")
+      toast.error(getErrorMessage(e, "Could not add position"))
     } finally {
       setSaving(false)
     }

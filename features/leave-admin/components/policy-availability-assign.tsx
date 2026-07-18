@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import { IconSearch } from "@tabler/icons-react"
@@ -64,7 +65,7 @@ export function PolicyAvailabilityAssign({
         if (id) await unassign({ assignmentId: id })
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not update assignment")
+      toast.error(getErrorMessage(e, "Could not update assignment"))
     } finally {
       setBusy(false)
     }
@@ -88,7 +89,7 @@ export function PolicyAvailabilityAssign({
         }
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not update assignments")
+      toast.error(getErrorMessage(e, "Could not update assignments"))
     } finally {
       setBusy(false)
     }

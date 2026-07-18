@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation } from "convex/react"
@@ -74,7 +75,7 @@ export function MyProfile() {
       setOpen(false)
       // The homeCard query will update and the redirect effect will fire.
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not create profile")
+      toast.error(getErrorMessage(e, "Could not create profile"))
     } finally {
       setSaving(false)
     }

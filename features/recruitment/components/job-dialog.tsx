@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useQuery, useMutation } from "convex/react"
 import type { FunctionReturnType } from "convex/server"
@@ -118,7 +119,7 @@ export function JobDialog({
       }
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't save job")
+      toast.error(getErrorMessage(e, "Couldn't save job"))
     } finally {
       setBusy(false)
     }

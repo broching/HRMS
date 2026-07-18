@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import { useMutation } from "convex/react"
 import { IconX } from "@tabler/icons-react"
@@ -25,7 +26,7 @@ export function PhotoGallery({ employee }: { employee: ProfileData }) {
       await addPhoto({ storageId })
       toast.success("Photo added")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not add photo")
+      toast.error(getErrorMessage(e, "Could not add photo"))
     }
   }
 

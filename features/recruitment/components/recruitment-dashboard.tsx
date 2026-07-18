@@ -1,5 +1,6 @@
 "use client"
 
+import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
 import Link from "next/link"
 import { useQuery, useMutation } from "convex/react"
@@ -163,7 +164,7 @@ function OpenJobsTab() {
     try {
       await updateJob({ jobId, ...p })
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Update failed")
+      toast.error(getErrorMessage(e, "Update failed"))
     }
   }
 
@@ -401,7 +402,7 @@ function AllCandidatesTab() {
                         setStage({ candidateId: c._id, stage: v as CandidateStage }).catch(
                           (e) =>
                             toast.error(
-                              e instanceof Error ? e.message : "Update failed",
+                              getErrorMessage(e, "Update failed"),
                             ),
                         )
                       }
