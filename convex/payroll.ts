@@ -149,13 +149,23 @@ export function hourlyRateCents(baseMonthlyCents: number, weeklyHours = 44): num
   return Math.round((12 * baseMonthlyCents) / (52 * weeklyHours));
 }
 
-/** Overtime pay = hourly rate × multiplier × hours, in cents. */
+/**
+ * Effective hourly pay rate (cents) for an employee. Hourly-paid staff use their
+ * stored rate directly; fixed/monthly staff derive it from the MOM formula. Their
+ * `baseMonthlyCents` is 0, so deriving from it would give a zero rate.
+ */
+export function effectiveHourlyRateCents(comp: Doc<"compensation">): number {
+  if (comp.payType === "hourly") return comp.hourlyRateCents ?? 0;
+  return hourlyRateCents(comp.baseMonthlyCents);
+}
+
+/** Overtime pay = effective hourly rate × multiplier × hours, in cents. */
 export function overtimePayCents(
-  baseMonthlyCents: number,
+  comp: Doc<"compensation">,
   hours: number,
   multiplier: number,
 ): number {
-  return Math.round(hourlyRateCents(baseMonthlyCents) * multiplier * hours);
+  return Math.round(effectiveHourlyRateCents(comp) * multiplier * hours);
 }
 
 // Pure-ish: derive a payslip from a compensation record + employee dob + the
@@ -937,7 +947,7 @@ export const addAdjustment = mutation({
       const comp = await effectiveCompensation(ctx, args.employeeId, periodEnd);
       if (!comp) throw new Error("No compensation on file for this employee.");
       amountCents = overtimePayCents(
-        comp.baseMonthlyCents,
+        comp,
         args.overtime.hours,
         args.overtime.multiplier,
       );
@@ -1341,11 +1351,7 @@ export const pullOvertime = mutation({
       const comp = await effectiveCompensation(ctx, ot.employeeId, periodEnd);
       if (!comp) continue;
       const hours = ot.actualHours ?? ot.plannedHours;
-      const amountCents = overtimePayCents(
-        comp.baseMonthlyCents,
-        hours,
-        ot.multiplier,
-      );
+      const amountCents = overtimePayCents(comp, hours, ot.multiplier);
       if (amountCents <= 0) continue;
       const adjustmentId = await ctx.db.insert("payrollAdjustments", {
         orgId,

@@ -34,6 +34,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { dollarsToCents, formatMoney } from "@/features/payroll/lib/labels"
+import { getErrorMessage } from "@/lib/errors"
 
 type ItemType = "addition" | "deduction" | "employer" | "overtime"
 
@@ -106,7 +107,7 @@ export function AddAdjustmentDialog({
       reset()
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't add item")
+      toast.error(getErrorMessage(e, "Couldn't add item"))
     } finally {
       setBusy(false)
     }
@@ -270,7 +271,7 @@ export function BulkAdjustmentsDialog({
       setLabel("")
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't add items")
+      toast.error(getErrorMessage(e, "Couldn't add items"))
     } finally {
       setBusy(false)
     }
