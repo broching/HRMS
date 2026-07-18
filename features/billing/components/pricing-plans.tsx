@@ -158,8 +158,8 @@ function EnterpriseCard({ atCap }: { atCap: boolean }) {
             ) : (
               ENTERPRISE.tagline
             )}{" "}
-            Your own database and keys, every module included, priority support —
-            billed on a custom quote.
+            Your own database and keys, configured to your workflows, with
+            dedicated support — billed on a custom quote.
           </p>
           <ul className="mt-4 grid gap-1.5 sm:grid-cols-2">
             {ENTERPRISE.features.map((f) => (

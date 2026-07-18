@@ -2,8 +2,10 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useQuery } from "convex/react"
+import { useQuery, useMutation } from "convex/react"
 import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
+import { toast } from "sonner"
 import {
   IconShieldLock,
   IconBuilding,
@@ -14,6 +16,10 @@ import {
   IconSearch,
   IconExternalLink,
   IconArrowLeft,
+  IconMail,
+  IconArchive,
+  IconCheck,
+  IconInbox,
 } from "@tabler/icons-react"
 import { formatSgd } from "@/convex/lib/plans"
 import { cn } from "@/lib/utils"
@@ -308,7 +314,204 @@ function Dashboard() {
           </Table>
         </div>
       </div>
+
+      <Leads />
     </div>
+  )
+}
+
+// ─── Leads (landing contact form → inbox) ────────────────────────────────────
+
+function Leads() {
+  const leads = useQuery(api.superAdmin.leads)
+  const setStatus = useMutation(api.superAdmin.setLeadStatus)
+  const [filter, setFilter] = React.useState<"open" | "all">("open")
+
+  if (leads === undefined) {
+    return <Skeleton className="h-64 rounded-2xl" />
+  }
+
+  const newCount = leads.filter((l) => l.status === "new").length
+  const rows =
+    filter === "open" ? leads.filter((l) => l.status !== "archived") : leads
+
+  async function move(
+    leadId: Id<"contactLeads">,
+    status: "new" | "contacted" | "archived",
+  ) {
+    try {
+      await setStatus({ leadId, status })
+    } catch {
+      toast.error("Couldn't update the lead. Try again.")
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-border bg-card shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="bg-muted text-muted-foreground flex size-9 items-center justify-center rounded-xl">
+            <IconInbox className="size-5" />
+          </div>
+          <div>
+            <h2 className="font-semibold">Contact leads</h2>
+            <p className="text-muted-foreground text-sm">
+              {newCount > 0 ? `${newCount} new · ` : ""}
+              {leads.length} total · from the landing form
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-1 rounded-lg border border-border p-0.5">
+          {(["open", "all"] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={cn(
+                "rounded-md px-3 py-1 text-sm font-medium capitalize transition-colors",
+                filter === f
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="text-muted-foreground p-10 text-center text-sm">
+          {filter === "open"
+            ? "No open leads — you're all caught up."
+            : "No leads yet. Enquiries from the landing page land here."}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {rows.map((l) => (
+            <LeadRow key={l.id} lead={l} onMove={move} />
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function LeadRow({
+  lead,
+  onMove,
+}: {
+  lead: {
+    id: Id<"contactLeads">
+    name: string
+    email: string
+    company: string | null
+    product: string | null
+    message: string
+    status: string
+    createdAt: number
+  }
+  onMove: (
+    id: Id<"contactLeads">,
+    status: "new" | "contacted" | "archived",
+  ) => void
+}) {
+  const archived = lead.status === "archived"
+  return (
+    <li className={cn("p-4 sm:px-5", archived && "opacity-60")}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium">{lead.name}</span>
+            <LeadStatus status={lead.status} />
+            {lead.company && (
+              <span className="text-muted-foreground text-sm">
+                · {lead.company}
+              </span>
+            )}
+            {lead.product && (
+              <Badge variant="secondary" className="text-[11px]">
+                {lead.product}
+              </Badge>
+            )}
+          </div>
+          <a
+            href={`mailto:${lead.email}`}
+            className="text-primary text-sm hover:underline"
+          >
+            {lead.email}
+          </a>
+          <p className="text-muted-foreground mt-1.5 text-sm whitespace-pre-wrap">
+            {lead.message}
+          </p>
+          <p className="text-muted-foreground/70 mt-1.5 text-xs">
+            {formatDate(lead.createdAt)}
+          </p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button variant="outline" size="sm" asChild>
+            <a href={`mailto:${lead.email}`}>
+              <IconMail className="size-4" /> Reply
+            </a>
+          </Button>
+          {lead.status === "new" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onMove(lead.id, "contacted")}
+            >
+              <IconCheck className="size-4" /> Contacted
+            </Button>
+          )}
+          {!archived ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Archive lead"
+              onClick={() => onMove(lead.id, "archived")}
+            >
+              <IconArchive className="size-4" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onMove(lead.id, "new")}
+            >
+              Restore
+            </Button>
+          )}
+        </div>
+      </div>
+    </li>
+  )
+}
+
+function LeadStatus({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    new: {
+      label: "New",
+      cls: "bg-primary/10 text-primary border-primary/20",
+    },
+    contacted: {
+      label: "Contacted",
+      cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+    },
+    archived: {
+      label: "Archived",
+      cls: "bg-muted text-muted-foreground border-border",
+    },
+  }
+  const s = map[status] ?? map.new
+  return (
+    <span
+      className={cn(
+        "rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
+        s.cls,
+      )}
+    >
+      {s.label}
+    </span>
   )
 }
 

@@ -84,6 +84,59 @@ export const whoami = query({
   },
 });
 
+// ─── Contact leads (landing "Contact us" form → this inbox) ──────────────────
+
+const LEAD_STATUS = v.union(
+  v.literal("new"),
+  v.literal("contacted"),
+  v.literal("archived"),
+);
+
+// Every lead captured from the public landing form, newest first. Super-admin
+// only — the same allow-list that gates the rest of the console.
+export const leads = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      id: v.id("contactLeads"),
+      name: v.string(),
+      email: v.string(),
+      company: v.union(v.string(), v.null()),
+      product: v.union(v.string(), v.null()),
+      message: v.string(),
+      source: v.union(v.string(), v.null()),
+      status: LEAD_STATUS,
+      createdAt: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    await requireSuperAdmin(ctx);
+    const rows = await ctx.db.query("contactLeads").order("desc").take(500);
+    return rows.map((r) => ({
+      id: r._id,
+      name: r.name,
+      email: r.email,
+      company: r.company ?? null,
+      product: r.product ?? null,
+      message: r.message,
+      source: r.source ?? null,
+      status: r.status ?? ("new" as const),
+      createdAt: r._creationTime,
+    }));
+  },
+});
+
+// Move a lead through the inbox (new → contacted → archived). Super-admin only.
+export const setLeadStatus = mutation({
+  args: { leadId: v.id("contactLeads"), status: LEAD_STATUS },
+  returns: v.null(),
+  handler: async (ctx, { leadId, status }) => {
+    await requireSuperAdmin(ctx);
+    await ctx.db.patch(leadId, { status });
+    return null;
+  },
+});
+
 function priceFor(plan: string | undefined, seats: number | undefined) {
   if (!plan || seats == null || !(plan in PLANS)) return null;
   const key = plan as PlanKey;

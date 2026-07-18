@@ -9,10 +9,9 @@ import { PrismMark, Wordmark } from "./prism-mark";
 import Image from "next/image";
 
 const LINKS = [
-  { name: "Platform", href: "/#platform" },
-  { name: "Products", href: "/#products" },
-  { name: "LeadMightyHR", href: "/leadmightyhr" },
+  { name: "Modules", href: "/#modules" },
   { name: "Pricing", href: "/#pricing" },
+  { name: "FAQ", href: "/#faq" },
   { name: "Contact", href: "/#contact" },
 ];
 

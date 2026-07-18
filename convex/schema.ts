@@ -1674,6 +1674,14 @@ export default defineSchema({
     product: v.optional(v.string()),
     message: v.string(),
     source: v.optional(v.string()), // where the lead came from, e.g. "landing"
+    // Triage state in the super-admin leads inbox. Absent = "new" (legacy rows).
+    status: v.optional(
+      v.union(
+        v.literal("new"),
+        v.literal("contacted"),
+        v.literal("archived"),
+      ),
+    ),
   }).index("by_email", ["email"]),
 
   // ─── Billing (existing) ──────────────────────────────────────────────────

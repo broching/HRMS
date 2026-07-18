@@ -142,9 +142,9 @@ function DedicatedDeploymentPanel({ orgName }: { orgName: string }) {
             </div>
             <p className="text-muted-foreground mt-1 text-sm">
               {orgName} runs on its own dedicated, single-tenant deployment —
-              your own database, keys and domain. Billing is handled by your
-              account manager under your Enterprise agreement, so there&apos;s
-              nothing to configure here. Every module is included.
+              your own database, keys and domain, configured to how your team
+              works. Billing is handled by your account manager under your
+              Enterprise agreement, so there&apos;s nothing to configure here.
             </p>
           </div>
         </div>
@@ -158,7 +158,7 @@ function DedicatedDeploymentPanel({ orgName }: { orgName: string }) {
           <Stat
             icon={<IconPuzzle className="size-4" />}
             label="Modules"
-            value="All included"
+            value="Configured"
           />
           <Stat
             icon={<IconCreditCard className="size-4" />}

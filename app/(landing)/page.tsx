@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { ArrowRight } from "lucide-react";
 import { LandingNav } from "./_components/landing-nav";
 import { HrHero } from "./leadmightyhr/_components/hr-hero";
 import { Reveal } from "./_components/reveal";
 import { ModuleShowcase } from "./leadmightyhr/_components/module-showcase";
 import { PricingSection } from "./_components/pricing-section";
+import { FaqSection } from "./_components/faq-section";
+import { ContactSection } from "./_components/contact-section";
 import { SiteFooter } from "./_components/site-footer";
 
 
@@ -37,35 +37,9 @@ export default function LeadMightyHrPage() {
 
       <PricingSection />
 
-      {/* Closing CTA */}
-      <section className="mx-auto max-w-6xl px-5 py-24">
-        <Reveal>
-          <div
-            className="relative overflow-hidden rounded-3xl px-6 py-14 text-center md:px-12 md:py-20"
-            style={{
-              background: "linear-gradient(135deg, color-mix(in oklab, var(--lm-accent) 12%, var(--lm-panel)), var(--lm-panel))",
-              border: "1px solid color-mix(in oklab, var(--lm-accent) 26%, var(--lm-line))",
-              boxShadow: "var(--lm-shadow-lg)",
-            }}
-          >
-            <h2 className="lm-display mx-auto max-w-2xl text-[clamp(2rem,4.4vw,3rem)]">
-              See LeadMightyHR on your own team.
-            </h2>
-            <p className="mx-auto mt-4 max-w-xl text-[1.05rem]" style={{ color: "var(--lm-ink-2)" }}>
-              Tell us what you&apos;re running today and we&apos;ll get you set up — usually
-              within a day. Real people, no scripted demo.
-            </p>
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-              <Link href="/#contact" className="lm-btn lm-btn-primary">
-                Talk to us <ArrowRight className="h-4 w-4" />
-              </Link>
-              <Link href="/#products" className="lm-btn lm-btn-ghost">
-                See the whole suite
-              </Link>
-            </div>
-          </div>
-        </Reveal>
-      </section>
+      <FaqSection />
+
+      <ContactSection />
 
       <SiteFooter />
     </main>

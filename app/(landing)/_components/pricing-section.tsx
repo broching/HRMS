@@ -170,7 +170,8 @@ export function PricingSection() {
         </Reveal>
 
         {/* ── Module picker + running total ── */}
-        <div className="mt-6 grid gap-5 lg:grid-cols-[1fr_20rem]">
+        <div className="relative mt-6">
+          <div className="grid gap-5 lg:grid-cols-[1fr_20rem]">
           <Reveal>
             <div
               className="lm-card p-6 md:p-8"
@@ -294,6 +295,43 @@ export function PricingSection() {
               </p>
             </div>
           </Reveal>
+          </div>
+
+          {/* Mobile: the running total stays pinned to the bottom of the screen
+              so the price is always visible while you scroll the toggles above
+              it. Scoped to this configurator so it releases before Enterprise. */}
+          <div className="lg:hidden sticky bottom-3 z-30 mt-4">
+            <div
+              className="lm-card flex items-center justify-between gap-3 px-4 py-3"
+              style={{
+                background: "color-mix(in oklab, var(--lm-panel) 90%, transparent)",
+                backdropFilter: "blur(12px)",
+              }}
+            >
+              <div className="min-w-0">
+                <div
+                  className="lm-mono text-[0.64rem]"
+                  style={{ color: "var(--lm-muted-2)" }}
+                >
+                  {seats} {seats === 1 ? "employee" : "employees"} ·{" "}
+                  {modules.length} module{modules.length === 1 ? "" : "s"}
+                </div>
+                <div
+                  className="lm-display text-[1.55rem] leading-none tabular-nums"
+                  style={{ color: "var(--lm-ink)" }}
+                >
+                  {formatSgd(cost.totalCents)}
+                  <span
+                    className="lm-mono ml-1 text-xs"
+                    style={{ color: "var(--lm-muted)" }}
+                  >
+                    /mo
+                  </span>
+                </div>
+              </div>
+              <PlanCTA compact />
+            </div>
+          </div>
         </div>
 
         {/* ── Enterprise band (sales-led, dedicated deployment) ── */}
@@ -315,8 +353,9 @@ export function PricingSection() {
                   className="mt-2 max-w-xl text-sm leading-relaxed"
                   style={{ color: "var(--lm-muted)" }}
                 >
-                  {ENTERPRISE.tagline} Your own database and keys, every module
-                  included, priority support — billed on a custom quote.
+                  {ENTERPRISE.tagline} Your own database and keys, configured to
+                  your workflows, with dedicated support — billed on a custom
+                  quote.
                 </p>
                 <ul className="mt-5 grid gap-2 sm:grid-cols-2">
                   {ENTERPRISE.features.map((f) => (
@@ -398,19 +437,23 @@ function RulerStepper({
   );
 }
 
-function PlanCTA() {
+function PlanCTA({ compact }: { compact?: boolean }) {
+  const cls = compact
+    ? "lm-btn lm-btn-primary shrink-0 !px-4 !py-2.5 text-sm"
+    : "lm-btn lm-btn-primary w-full";
   return (
     <>
       <Unauthenticated>
         <SignUpButton mode="modal">
-          <button className="lm-btn lm-btn-primary w-full">
+          <button className={cls}>
             Get started <ArrowRight className="h-4 w-4" />
           </button>
         </SignUpButton>
       </Unauthenticated>
       <Authenticated>
-        <Link href="/hr-lounge/billing" className="lm-btn lm-btn-primary w-full">
-          Build your plan <ArrowRight className="h-4 w-4" />
+        <Link href="/hr-lounge/billing" className={cls}>
+          {compact ? "Build plan" : "Build your plan"}{" "}
+          <ArrowRight className="h-4 w-4" />
         </Link>
       </Authenticated>
     </>

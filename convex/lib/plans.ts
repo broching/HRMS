@@ -118,16 +118,16 @@ export function computeBillingCents(
 export const ENTERPRISE = {
   name: "Enterprise",
   tagline:
-    "For large organisations that need a dedicated, single-tenant deployment.",
+    "A tailored deployment, configured to how your organisation actually works.",
   features: [
-    "Your own dedicated Convex database, keys and infrastructure",
+    "Your own dedicated deployment — separate database, keys and infrastructure",
     "Your own domain (e.g. hr.yourcompany.com)",
-    "Every module included — no add-ons to pick",
-    "Unlimited team size (150+ employees)",
+    "Configured to your workflows, with the modules your team actually needs",
+    "Custom integrations and guided data migration",
     "SSO-ready single sign-on",
     "Priority support with a dedicated account manager & SLA",
-    "Guided onboarding and data migration",
-    "Custom quote billed on your terms",
+    "Onboarding tailored to your team",
+    "Custom pricing, quoted to your needs",
   ],
 } as const;
 
