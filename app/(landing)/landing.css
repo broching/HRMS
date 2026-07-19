@@ -338,6 +338,117 @@ html:has(.lm-root) {
   80%, 100% { transform: scale(2.4); opacity: 0; }
 }
 
+/* ── Hero orchestration ─────────────────────────────────────────────────
+   A staged page-load sequence: elements carry .lm-enter with a --d delay;
+   headline lines rise out of clip masks; the drafted underline draws last. */
+@keyframes lm-rise-in {
+  from { opacity: 0; transform: translateY(22px); }
+  to { opacity: 1; transform: none; }
+}
+.lm-enter {
+  opacity: 0;
+  animation: lm-rise-in 850ms cubic-bezier(0.22, 1, 0.36, 1) var(--d, 0ms) forwards;
+}
+
+.lm-line-mask {
+  display: block;
+  overflow: hidden;
+  padding-bottom: 0.1em;
+  margin-bottom: -0.1em;
+}
+@keyframes lm-line-up {
+  from { transform: translateY(115%); }
+  to { transform: none; }
+}
+.lm-line-mask > span {
+  display: block;
+  transform: translateY(115%);
+  animation: lm-line-up 950ms cubic-bezier(0.22, 1, 0.36, 1) var(--d, 0ms) forwards;
+}
+
+/* Drafted underline that rules itself in beneath the accent phrase.
+   Painted as a background (not a pseudo-element) so it survives the phrase
+   wrapping across lines; clone gives each line fragment its own rule. */
+@keyframes lm-rule-draw {
+  to { background-size: 100% 0.09em; }
+}
+.lm-underline-draw {
+  background-image: linear-gradient(90deg, var(--lm-accent), var(--lm-accent-2));
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 0% 0.09em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  padding-bottom: 0.04em;
+  animation: lm-rule-draw 650ms cubic-bezier(0.65, 0, 0.35, 1) 1150ms forwards;
+}
+
+/* "From blueprint to product": the wireframe ghost draws first, the live
+   frame rises in beneath it, then the ghost recedes. */
+@keyframes lm-ghost-out {
+  to { opacity: 0; }
+}
+.lm-hero-ghost {
+  animation: lm-ghost-out 700ms ease 2350ms forwards;
+}
+@keyframes lm-frame-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.977); }
+  to { opacity: 1; transform: none; }
+}
+.lm-hero-frame-in {
+  opacity: 0;
+  animation: lm-frame-in 950ms cubic-bezier(0.22, 1, 0.36, 1) 1500ms forwards;
+}
+
+/* Pointer tilt on the hero frame — JS drives the custom props. */
+.lm-tilt {
+  transform: perspective(1100px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
+  transition: transform 450ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+/* Hand-written drafting callout + its self-drawing connector. */
+.lm-callout {
+  font-family: var(--lm-hand);
+  font-size: 1.25rem;
+  line-height: 1.15;
+  color: var(--lm-ink-2);
+  rotate: -2deg;
+}
+
+/* ── Module sheets ──────────────────────────────────────────────────────── */
+/* Feature card lift — quiet until hovered, then rises toward the accent. */
+.lm-feature-card {
+  transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 300ms ease, border-color 300ms ease;
+}
+.lm-feature-card:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in oklab, var(--lm-accent) 45%, var(--lm-line)) !important;
+  box-shadow: var(--lm-shadow-lg);
+}
+
+/* Clickable module blocks on the landing showcase. */
+.lm-module-link {
+  display: block;
+  border-radius: 1rem;
+  transition: transform 350ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lm-module-link:hover {
+  transform: translateY(-4px);
+}
+.lm-module-link .lm-module-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  color: var(--lm-accent);
+  transition: gap 250ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lm-module-link:hover .lm-module-cta {
+  gap: 0.7rem;
+}
+
 /* Reveal-on-scroll base (driven by IntersectionObserver adding .is-in). */
 .lm-reveal {
   opacity: 0;

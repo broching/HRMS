@@ -291,6 +291,143 @@ export function ClaimsScreen() {
   );
 }
 
+// ── Performance (weighted appraisal + 360) ──────────────────────────────────
+export function PerformanceScreen() {
+  const objectives = [
+    { l: "Ship design system v2", w: "40%", score: 4.5 },
+    { l: "Cut onboarding time 30%", w: "30%", score: 4.0 },
+  ];
+  const competencies = [
+    { l: "Collaboration", score: 4.6 },
+    { l: "Craft", score: 4.2 },
+  ];
+  const bar = (score: number, hue: string) => (
+    <div className="h-1.5 flex-1 overflow-hidden rounded-full" style={{ background: "var(--lm-paper-2)" }}>
+      <div className="h-full rounded-full" style={{ width: `${(score / 5) * 100}%`, background: hue }} />
+    </div>
+  );
+  return (
+    <div className="p-4 text-[12px]" style={{ color: "var(--lm-ink)" }}>
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <div className="font-semibold">H2 2026 appraisal · Wei Ling Tan</div>
+          <div className="text-[10px]" style={{ color: "var(--lm-muted)" }}>Objectives 70% · Competencies 30%</div>
+        </div>
+        <span className="lm-mono rounded-full px-2.5 py-0.5 text-[11px] font-bold text-white" style={{ background: "var(--lm-accent)" }}>4.4</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        <div className="p-3" style={screenCard}>
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--lm-muted)" }}>Objectives · 70%</div>
+          {objectives.map((o) => (
+            <div key={o.l} className="flex items-center gap-2 py-1">
+              <span className="w-40 truncate">{o.l}</span>
+              <span className="lm-mono text-[10px]" style={{ color: "var(--lm-muted)" }}>{o.w}</span>
+              {bar(o.score, "var(--lm-accent)")}
+              <span className="lm-mono w-7 text-right font-semibold">{o.score.toFixed(1)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="p-3" style={screenCard}>
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--lm-muted)" }}>Competencies · 30%</div>
+          {competencies.map((c) => (
+            <div key={c.l} className="flex items-center gap-2 py-1">
+              <span className="w-40 truncate">{c.l}</span>
+              <span className="lm-mono text-[10px]" style={{ color: "var(--lm-muted)" }}>—</span>
+              {bar(c.score, "var(--lm-finance)")}
+              <span className="lm-mono w-7 text-right font-semibold">{c.score.toFixed(1)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-between rounded-lg px-3 py-2" style={{ ...screenCard, background: "var(--lm-panel-2)" }}>
+          <span>360° feedback · 6 responses</span>
+          <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: "color-mix(in oklab, var(--lm-sales) 14%, #fff)", color: "var(--lm-sales)" }}>
+            Anonymous
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Recruitment (pipeline + public board) ───────────────────────────────────
+export function RecruitmentScreen() {
+  const cols = [
+    { l: "Applied", n: 12, people: ["Grace Lim", "Ethan Ong"] },
+    { l: "Interview", n: 4, people: ["Farah Aziz"] },
+    { l: "Offer", n: 1, people: ["Jon Teo"] },
+  ];
+  return (
+    <div className="p-4 text-[12px]" style={{ color: "var(--lm-ink)" }}>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="font-semibold">Product Engineer · Full-time</div>
+        <span className="lm-mono flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px]" style={{ background: "color-mix(in oklab, var(--lm-finance) 12%, #fff)", color: "var(--lm-finance)" }}>
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--lm-finance)" }} />
+          boards/acme · live
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {cols.map((c) => (
+          <div key={c.l} className="rounded-lg p-2" style={{ background: "var(--lm-panel-2)", border: "1px solid var(--lm-line)" }}>
+            <div className="mb-1.5 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--lm-muted)" }}>
+              {c.l}
+              <span className="lm-mono">{c.n}</span>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {c.people.map((p) => (
+                <div key={p} className="flex items-center gap-1.5 rounded-md px-1.5 py-1.5" style={{ background: "#fff", border: "1px solid var(--lm-line)" }}>
+                  <Avatar name={p} hue="var(--lm-sales)" />
+                  <span className="truncate text-[11px] font-medium">{p}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2.5 text-[11px]" style={{ color: "var(--lm-muted)" }}>
+        Candidates apply on your public board — no login needed.
+      </p>
+    </div>
+  );
+}
+
+// ── Reports (statistics + exporter) ─────────────────────────────────────────
+export function ReportsScreen() {
+  const bars = [42, 55, 48, 62, 70, 66];
+  return (
+    <div className="grid gap-3 p-4 text-[12px] sm:grid-cols-[1.15fr_0.85fr]" style={{ color: "var(--lm-ink)" }}>
+      <div className="p-3" style={screenCard}>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="font-semibold">Headcount</span>
+          <span className="lm-mono text-[10px]" style={{ color: "var(--lm-finance)" }}>+9.4% YTD</span>
+        </div>
+        <div className="flex h-24 items-end gap-1.5">
+          {bars.map((h, i) => (
+            <div key={i} className="flex-1 rounded-t-[3px]" style={{ height: `${h}%`, background: i === bars.length - 1 ? "var(--lm-accent)" : "color-mix(in oklab, var(--lm-accent) 30%, #fff)" }} />
+          ))}
+        </div>
+        <div className="lm-mono mt-1.5 flex justify-between text-[9px]" style={{ color: "var(--lm-muted-2)" }}>
+          <span>Feb</span><span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2">
+        {[
+          { l: "Attrition", v: "3.1%" },
+          { l: "Leave taken", v: "412 d" },
+          { l: "Payroll cost", v: "S$182k" },
+        ].map((s) => (
+          <div key={s.l} className="flex items-center justify-between rounded-lg px-3 py-2" style={screenCard}>
+            <span style={{ color: "var(--lm-muted)" }}>{s.l}</span>
+            <span className="lm-mono font-semibold">{s.v}</span>
+          </div>
+        ))}
+        <button className="lm-mono mt-auto flex items-center justify-center gap-1 rounded-lg py-2 text-[11px] font-semibold text-white" style={{ background: "var(--lm-accent)" }}>
+          Export CSV / Excel <ArrowRight className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── 6. Attendance (rotating QR + GPS) ───────────────────────────────────────
 export function AttendanceScreen() {
   // A decorative QR-like grid.
