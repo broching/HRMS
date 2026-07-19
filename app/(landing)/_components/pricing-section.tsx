@@ -9,9 +9,12 @@ import { SectionHeading } from "./section-heading";
 import { Reveal } from "./reveal";
 import {
   CORE_MAX_SEATS,
+  CORE_TIERS,
+  EXTRA_SEAT_CENTS,
   MODULE_PRICING,
   ENTERPRISE,
   computeBillingCents,
+  coreBreakdown,
   formatSgd,
   type OptionalModuleKey,
 } from "@/convex/lib/plans";
@@ -19,7 +22,6 @@ import { OPTIONAL_MODULES, MODULE_META } from "@/convex/lib/modules";
 
 const MIN = 1;
 const MAX = CORE_MAX_SEATS;
-const PRESETS = [5, 25, 50, 100];
 
 const pctOf = (s: number) => ((s - MIN) / (MAX - MIN)) * 100;
 const clamp = (n: number) =>
@@ -36,6 +38,7 @@ export function PricingSection() {
 
   const modules = MODS.filter((m) => selected.has(m));
   const cost = computeBillingCents(seats, modules);
+  const core = coreBreakdown(seats);
 
   const toggle = (k: OptionalModuleKey) =>
     setSelected((prev) => {
@@ -92,8 +95,11 @@ export function PricingSection() {
                   className="lm-mono mt-1 text-[0.72rem]"
                   style={{ color: "var(--lm-muted-2)" }}
                 >
-                  Core platform · scales with team size ={" "}
+                  Core platform ={" "}
                   {formatSgd(cost.baseCents)}/mo
+                  {core.extraSeats > 0
+                    ? ` · ${formatSgd(core.tierCents)} tier + ${core.extraSeats} × ${formatSgd(EXTRA_SEAT_CENTS)}`
+                    : " · scales with team size"}
                 </p>
               </div>
 
@@ -136,34 +142,57 @@ export function PricingSection() {
                 }}
               />
 
-              {/* Presets */}
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <span
-                  className="lm-mono mr-1 text-xs"
-                  style={{ color: "var(--lm-muted-2)" }}
-                >
-                  Jump to
-                </span>
-                {PRESETS.map((n) => {
-                  const on = seats === n;
-                  return (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => setSeats(n)}
-                      className="lm-mono rounded-full px-3 py-1 text-xs transition-colors"
-                      style={{
-                        border: `1px solid ${on ? "var(--lm-accent)" : "var(--lm-line-2)"}`,
-                        color: on ? "var(--lm-accent)" : "var(--lm-muted)",
-                        background: on
-                          ? "color-mix(in oklab, var(--lm-accent) 8%, transparent)"
-                          : "transparent",
-                      }}
-                    >
-                      {n}
-                    </button>
-                  );
-                })}
+              {/* Price per tier — the Core anchors, each showing its flat price.
+                  Between anchors, headcount is +S$5/employee. */}
+              <div className="mt-5">
+                <div className="mb-2 flex items-center justify-between">
+                  <span
+                    className="lm-mono text-xs"
+                    style={{ color: "var(--lm-muted-2)" }}
+                  >
+                    Price per tier
+                  </span>
+                  <span
+                    className="lm-mono text-xs"
+                    style={{ color: "var(--lm-muted-2)" }}
+                  >
+                    +{formatSgd(EXTRA_SEAT_CENTS)}/employee between tiers
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                  {CORE_TIERS.map((t) => {
+                    const on = core.tierUpTo === t.upTo;
+                    return (
+                      <button
+                        key={t.upTo}
+                        type="button"
+                        onClick={() => setSeats(t.upTo)}
+                        className="flex flex-col items-center gap-0.5 rounded-xl px-2 py-2.5 transition-colors"
+                        style={{
+                          border: `1px solid ${on ? "var(--lm-accent)" : "var(--lm-line-2)"}`,
+                          background: on
+                            ? "color-mix(in oklab, var(--lm-accent) 8%, transparent)"
+                            : "transparent",
+                        }}
+                      >
+                        <span
+                          className="lm-mono text-[0.68rem]"
+                          style={{ color: "var(--lm-muted-2)" }}
+                        >
+                          {t.upTo} {t.upTo === 1 ? "seat" : "seats"}
+                        </span>
+                        <span
+                          className="text-sm font-semibold tabular-nums"
+                          style={{
+                            color: on ? "var(--lm-accent)" : "var(--lm-ink)",
+                          }}
+                        >
+                          {formatSgd(t.cents)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>

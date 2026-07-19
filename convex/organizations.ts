@@ -120,6 +120,96 @@ export const current = query({
   },
 });
 
+// ─── Onboarding (custom create flow) ───────────────────────────────────────
+
+// Create the Convex organization row for the caller's ACTIVE Clerk org, right
+// after the onboarding wizard calls Clerk's createOrganization + setActive —
+// without waiting on the `organization.created` webhook (which is asynchronous
+// and may lag). Trusts the active org from the JWT (like members.ensureSelf),
+// is idempotent, and seeds the org's defaults on first insert. The webhook's
+// upsertFromClerk later reconciles name/slug/image harmlessly.
+export const provisionCurrent = mutation({
+  args: { name: v.string(), expectClerkOrgId: v.optional(v.string()) },
+  returns: v.union(v.id("organizations"), v.null()),
+  handler: async (ctx, { name, expectClerkOrgId }) => {
+    const identity = (await ctx.auth.getUserIdentity()) as
+      | { org_id?: string; org_slug?: string }
+      | null;
+    const clerkOrgId = identity?.org_id;
+    if (!clerkOrgId) return null; // active org not on the token yet — caller retries
+    // Guard the "create new company" race: the token may still carry the
+    // previous active org for a moment after setActive. Wait until it flips.
+    if (expectClerkOrgId && clerkOrgId !== expectClerkOrgId) return null;
+
+    const existing = await orgByClerkId(ctx, clerkOrgId);
+    if (existing) return existing._id;
+
+    const orgId = await ctx.db.insert("organizations", {
+      clerkOrgId,
+      name: name.trim() || "My company",
+      slug: identity.org_slug,
+      country: DEFAULT_ORG_COUNTRY,
+      settings: { ...DEFAULT_ORG_SETTINGS },
+    });
+    await ctx.runMutation(internal.seed.seedOrganization, { orgId });
+    return orgId;
+  },
+});
+
+// Persist the details collected by the onboarding wizard onto the org: locale
+// (country/timezone), the company profile (industry/size), and the primary
+// office (renaming the seeded default rather than adding a duplicate). Requires
+// org:manage — the creator/admin, resolved once members.ensureSelf has run.
+export const completeOnboarding = mutation({
+  args: {
+    industry: v.optional(v.string()),
+    companySize: v.optional(v.string()),
+    country: v.string(),
+    timezone: v.string(),
+    currency: v.optional(v.string()),
+    officeName: v.optional(v.string()),
+    officeAddress: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { orgId, org, userId } = await requirePermission(ctx, "org:manage");
+    const currency = args.currency?.trim() || org.settings.currency;
+    const settings = {
+      ...org.settings,
+      timezone: args.timezone,
+      currency,
+      industry: args.industry?.trim() || undefined,
+      companySize: args.companySize?.trim() || undefined,
+    };
+    await ctx.db.patch(orgId, { country: args.country, settings });
+
+    // Fold the primary-office details into the seeded default office.
+    const offices = await ctx.db
+      .query("offices")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    const primary = offices.find((o) => o.isDefault) ?? offices[0];
+    if (primary) {
+      await ctx.db.patch(primary._id, {
+        name: args.officeName?.trim() || primary.name,
+        address: args.officeAddress?.trim() || primary.address,
+        timezone: args.timezone,
+        defaultCurrency: currency,
+      });
+    }
+
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "organization.onboarding.complete",
+      entity: "organizations",
+      entityId: orgId,
+      after: { country: args.country, settings },
+    });
+    return null;
+  },
+});
+
 // ─── Organization logo (our own UI over Convex storage) ────────────────────
 
 // Short-lived upload URL for a new org logo. Requires org:manage.

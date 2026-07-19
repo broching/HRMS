@@ -9,10 +9,13 @@ import { toast } from "sonner"
 import { IconMinus, IconPlus, IconArrowRight, IconCheck } from "@tabler/icons-react"
 import {
   CORE_MAX_SEATS,
+  CORE_TIERS,
+  EXTRA_SEAT_CENTS,
   MODULE_PRICING,
   ENTERPRISE,
   computeBillingCents,
   computeCoreCents,
+  coreBreakdown,
   formatSgd,
   type OptionalModuleKey,
 } from "@/convex/lib/plans"
@@ -24,7 +27,6 @@ import { Switch } from "@/components/ui/switch"
 
 const MIN_SEATS = 1
 const MAX_SEATS = CORE_MAX_SEATS
-const PRESETS = [5, 25, 50, 100]
 
 type Props = {
   /** Seed the headcount slider (e.g. the org's current active employees). */
@@ -35,6 +37,8 @@ type Props = {
   hasSubscription?: boolean
   /** Only admins may start checkout; others see a disabled CTA. */
   canManage: boolean
+  /** CTA label override (e.g. "Get started" in onboarding). */
+  ctaLabel?: string
   className?: string
 }
 
@@ -43,6 +47,7 @@ export function PricingPlans({
   currentModules,
   hasSubscription,
   canManage,
+  ctaLabel,
   className,
 }: Props) {
   const [seats, setSeats] = React.useState<number>(() =>
@@ -124,6 +129,7 @@ export function PricingPlans({
           canManage={canManage}
           pending={pending}
           hasSubscription={hasSubscription}
+          ctaLabel={ctaLabel}
           onSubscribe={subscribe}
         />
       </div>
@@ -230,6 +236,7 @@ function OrderSummary({
   canManage,
   pending,
   hasSubscription,
+  ctaLabel,
   onSubscribe,
 }: {
   seats: number
@@ -238,8 +245,10 @@ function OrderSummary({
   canManage: boolean
   pending: boolean
   hasSubscription?: boolean
+  ctaLabel?: string
   onSubscribe: () => void
 }) {
+  const core = coreBreakdown(seats)
   return (
     <div className="h-fit rounded-2xl border border-border bg-card p-5 shadow-sm lg:sticky lg:top-20">
       <h3 className="font-semibold">Your plan</h3>
@@ -253,6 +262,14 @@ function OrderSummary({
             {formatSgd(cost.baseCents)}
           </span>
         </div>
+        {core.extraSeats > 0 && (
+          <div className="text-muted-foreground/80 -mt-1 flex items-center justify-between text-xs">
+            <span>
+              Tier {formatSgd(core.tierCents)} + {core.extraSeats} extra ×{" "}
+              {formatSgd(EXTRA_SEAT_CENTS)}
+            </span>
+          </div>
+        )}
         {modules.map((m) => (
           <div key={m} className="flex items-center justify-between">
             <span className="text-muted-foreground">{MODULE_META[m].name}</span>
@@ -287,7 +304,7 @@ function OrderSummary({
           ? "Redirecting…"
           : hasSubscription
             ? "Update subscription"
-            : "Subscribe"}
+            : (ctaLabel ?? "Subscribe")}
         {!pending && <IconArrowRight className="size-4" />}
       </Button>
       {!canManage ? (
@@ -321,6 +338,7 @@ function HeadcountControl({
   onChange: (n: number) => void
 }) {
   const pct = ((seats - MIN_SEATS) / (MAX_SEATS - MIN_SEATS)) * 100
+  const core = coreBreakdown(seats)
   return (
     <div className="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
@@ -332,11 +350,20 @@ function HeadcountControl({
             How many employees will you manage?
           </h3>
           <p className="text-muted-foreground mt-0.5 text-sm">
-            The Core platform scales with your team —{" "}
+            Core is{" "}
             <span className="text-foreground font-semibold">
               {formatSgd(computeCoreCents(seats))}
             </span>
-            /month for {seats} {seats === 1 ? "employee" : "employees"}.
+            /month for {seats} {seats === 1 ? "employee" : "employees"}
+            {core.extraSeats > 0 ? (
+              <>
+                {" "}
+                — {formatSgd(core.tierCents)} tier + {core.extraSeats} ×{" "}
+                {formatSgd(EXTRA_SEAT_CENTS)}.
+              </>
+            ) : (
+              "."
+            )}
           </p>
         </div>
 
@@ -377,23 +404,38 @@ function HeadcountControl({
             background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${pct}%, var(--secondary) ${pct}%, var(--secondary) 100%)`,
           }}
         />
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-muted-foreground mr-1 text-xs">Quick pick:</span>
-          {PRESETS.map((n) => (
-            <button
-              key={n}
-              type="button"
-              onClick={() => onChange(n)}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                seats === n
-                  ? "border-primary/30 bg-primary/10 text-primary"
-                  : "border-border text-muted-foreground hover:bg-accent",
-              )}
-            >
-              {n}
-            </button>
-          ))}
+        <div className="mt-4">
+          <div className="text-muted-foreground mb-2 flex items-center justify-between text-[11px] font-semibold tracking-[0.1em] uppercase">
+            <span>Price per tier</span>
+            <span className="normal-case tracking-normal">
+              +{formatSgd(EXTRA_SEAT_CENTS)}/employee between tiers
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+            {CORE_TIERS.map((t) => {
+              const active = core.tierUpTo === t.upTo
+              return (
+                <button
+                  key={t.upTo}
+                  type="button"
+                  onClick={() => onChange(t.upTo)}
+                  className={cn(
+                    "flex flex-col items-center gap-0.5 rounded-xl border px-2 py-2.5 transition-colors",
+                    active
+                      ? "border-primary/40 bg-primary/5"
+                      : "border-border hover:bg-accent/50",
+                  )}
+                >
+                  <span className="text-muted-foreground text-[11px]">
+                    {t.upTo} {t.upTo === 1 ? "seat" : "seats"}
+                  </span>
+                  <span className="text-sm font-bold tabular-nums">
+                    {formatSgd(t.cents)}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
     </div>

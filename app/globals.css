@@ -111,6 +111,33 @@
   --shadow-2xl: 0px 10px 20px -5px hsl(0 0% 0% / 1.00);
 }
 
+/* Forces the light palette on a subtree even when <html> is in dark mode — used
+   by the onboarding funnel, which is intentionally light regardless of the
+   viewer's theme. Redeclares the theme tokens so token-driven components
+   (buttons, cards, inputs) render light without touching the global theme. */
+.onboarding-light {
+  color-scheme: light;
+  --background: oklch(1.0000 0 0);
+  --foreground: oklch(0.2077 0.0398 265.7549);
+  --card: oklch(1.0000 0 0);
+  --card-foreground: oklch(0.2077 0.0398 265.7549);
+  --popover: oklch(1.0000 0 0);
+  --popover-foreground: oklch(0.2077 0.0398 265.7549);
+  --primary: oklch(0.5461 0.2152 262.8809);
+  --primary-foreground: oklch(1.0000 0 0);
+  --secondary: oklch(0.9683 0.0069 247.8956);
+  --secondary-foreground: oklch(0.2795 0.0368 260.0310);
+  --muted: oklch(0.9842 0.0034 247.8575);
+  --muted-foreground: oklch(0.5544 0.0407 257.4166);
+  --accent: oklch(0.9705 0.0142 254.6042);
+  --accent-foreground: oklch(0.4244 0.1809 265.6377);
+  --destructive: oklch(0.6368 0.2078 25.3313);
+  --destructive-foreground: oklch(1.0000 0 0);
+  --border: oklch(0.9288 0.0126 255.5078);
+  --input: oklch(0.9288 0.0126 255.5078);
+  --ring: oklch(0.6231 0.1880 259.8145);
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

@@ -25,20 +25,24 @@ import { OPTIONAL_MODULES, MODULE_META } from "./modules";
 export type OptionalModuleKey = Exclude<ModuleKey, "core">;
 
 /**
- * Core platform price by team size (SGD cents). Volume-tiered: an org pays the
- * flat price of whichever bracket its headcount falls into — Stripe bills the
- * same via a volume-tiered price (quantity = seats). Above the top bracket,
- * pricing is sales-led (Enterprise / contact us).
+ * Core platform price anchors by team size (SGD cents). Each tier is the volume
+ * price for a team of exactly that many employees. Between anchors, headcount is
+ * priced by adding `EXTRA_SEAT_CENTS` per employee on top of a lower anchor —
+ * and we always charge the cheapest of the two (see `coreBreakdown`), so growing
+ * a team never forces a jump to a whole new tier. Above the top anchor, pricing
+ * is sales-led (Enterprise / contact us).
  */
 export const CORE_TIERS: readonly { upTo: number; cents: number }[] = [
-  { upTo: 5, cents: 3900 },
-  { upTo: 10, cents: 5900 },
-  { upTo: 25, cents: 10900 },
+  { upTo: 5, cents: 2900 },
+  { upTo: 25, cents: 9900 },
   { upTo: 50, cents: 16900 },
-  { upTo: 75, cents: 22900 },
+  { upTo: 75, cents: 19900 },
   { upTo: 100, cents: 27900 },
   { upTo: 150, cents: 37900 },
 ];
+
+/** Price of one employee added beyond a Core tier anchor (SGD cents). */
+export const EXTRA_SEAT_CENTS = 500;
 
 /** Largest self-serve team size; beyond it, pricing is sales-led (Enterprise). */
 export const CORE_MAX_SEATS = CORE_TIERS[CORE_TIERS.length - 1].upTo;
@@ -49,15 +53,51 @@ export function isEnterpriseSeats(seats: number): boolean {
 }
 
 /**
- * Core platform monthly price (SGD cents) for `seats` employees — the flat price
- * of the bracket the team falls into. Past the top bracket we return the top
- * price (the UI routes such teams to sales, but the number stays sane for any
- * stray value, matching the Stripe price's top volume tier).
+ * How a team of `seats` is priced against the Core anchors: the cheapest
+ * combination of a tier anchor plus per-employee add-ons above it. `tierUpTo`
+ * is the anchor we bill from, `tierCents` its flat price, and `extraSeats` the
+ * employees charged at `EXTRA_SEAT_CENTS` each on top. At an exact anchor size
+ * this is just the anchor (no extras); between anchors it's the anchor below
+ * plus $5/employee, unless the next anchor's bulk price already wins.
+ */
+export function coreBreakdown(seats: number): {
+  tierUpTo: number;
+  tierCents: number;
+  extraSeats: number;
+  extraCents: number;
+  totalCents: number;
+} {
+  const s = Math.max(1, Math.ceil(seats || 0));
+  let best: {
+    tierUpTo: number;
+    tierCents: number;
+    extraSeats: number;
+    extraCents: number;
+    totalCents: number;
+  } | null = null;
+  for (const t of CORE_TIERS) {
+    const extraSeats = Math.max(0, s - t.upTo);
+    const extraCents = extraSeats * EXTRA_SEAT_CENTS;
+    const totalCents = t.cents + extraCents;
+    if (!best || totalCents < best.totalCents) {
+      best = {
+        tierUpTo: t.upTo,
+        tierCents: t.cents,
+        extraSeats,
+        extraCents,
+        totalCents,
+      };
+    }
+  }
+  return best!;
+}
+
+/**
+ * Core platform monthly price (SGD cents) for `seats` employees — the cheapest
+ * of the tier anchors and per-employee add-ons (see `coreBreakdown`).
  */
 export function computeCoreCents(seats: number): number {
-  const s = Math.max(1, Math.ceil(seats || 0));
-  for (const t of CORE_TIERS) if (s <= t.upTo) return t.cents;
-  return CORE_TIERS[CORE_TIERS.length - 1].cents;
+  return coreBreakdown(seats).totalCents;
 }
 
 /** Flat monthly add-on price per optional module (SGD cents). */
@@ -70,7 +110,7 @@ export const MODULE_PRICING: Record<OptionalModuleKey, { monthlyCents: number }>
   timesheets: { monthlyCents: 1500 },
   performance: { monthlyCents: 1200 },
   recruitment: { monthlyCents: 1500 },
-  reports: { monthlyCents: 1000 },
+  reports: { monthlyCents: 500 },
 };
 
 /** The env var holding a module's Stripe price id (resolved in stripe.ts). */

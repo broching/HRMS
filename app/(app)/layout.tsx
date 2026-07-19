@@ -16,7 +16,9 @@ export default async function AppLayout({
 }) {
   const { userId, orgId } = await auth()
   if (!userId) redirect("/")
-  if (!orgId) redirect("/select-org")
+  // No active org yet → the custom onboarding funnel (creates the org + collects
+  // details, then the plan/payment step). Replaces the old Clerk org picker.
+  if (!orgId) redirect("/onboarding")
 
   return (
     <div className="bg-muted/20 group/layout flex min-h-svh flex-col">

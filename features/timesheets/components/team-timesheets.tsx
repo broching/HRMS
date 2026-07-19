@@ -43,7 +43,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import {
+  toCsv,
+  toExcelHtml,
+  downloadFile,
+  type Cell,
+} from "@/features/reports/lib/export"
 import {
   todayIso,
   mondayOfIso,
@@ -59,6 +72,7 @@ import {
   formatHoursDecimal,
   formatDayLabel,
   formatClock,
+  minutesToHours,
   dowLabel,
   dayOfMonth,
 } from "@/features/timesheets/lib/time"
@@ -1192,27 +1206,97 @@ function PersonDialog({
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
   }, [entries])
 
+  // One row per logged entry, with a grand total — the individual's timesheet
+  // for the range currently shown on the board, ready for a spreadsheet.
+  function buildMatrix(): { headers: string[]; body: Cell[][] } {
+    const headers = [
+      "Date",
+      "Project",
+      "Task",
+      "Start time",
+      "Hours",
+      "Minutes",
+      "Billable",
+      "Description",
+    ]
+    const body: Cell[][] = []
+    let total = 0
+    for (const [, dayEntries] of byDay) {
+      for (const e of dayEntries) {
+        total += e.minutes
+        body.push([
+          e.date,
+          e.projectName,
+          e.taskName ?? "",
+          e.startMinute != null ? formatClock(e.startMinute) : "",
+          minutesToHours(e.minutes),
+          e.minutes,
+          e.billable ? "Yes" : "No",
+          e.description,
+        ])
+      }
+    }
+    body.push(["", "", "", "TOTAL", minutesToHours(total), total, "", ""])
+    return { headers, body }
+  }
+
+  function exportTimesheet(kind: "excel" | "csv") {
+    if (!person || !entries || entries.length === 0) {
+      toast.error("No time logged in this range to export.")
+      return
+    }
+    const { headers, body } = buildMatrix()
+    const safeName = person.name.replace(/[^\w\- ]+/g, "").trim() || "employee"
+    const base = `Timesheet — ${safeName} — ${from}_to_${to}`
+    if (kind === "excel") {
+      downloadFile(`${base}.xls`, toExcelHtml(base, headers, body), "application/vnd.ms-excel")
+    } else {
+      downloadFile(`${base}.csv`, toCsv(headers, body), "text/csv;charset=utf-8")
+    }
+    toast.success("Timesheet exported")
+  }
+
+  const hasEntries = !!entries && entries.length > 0
+
   return (
     <Dialog open={person !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {person && (
-              <Avatar className="size-7">
-                <AvatarFallback className="text-[10px] font-medium">
-                  {initials(person.name)}
-                </AvatarFallback>
-              </Avatar>
-            )}
-            <span className="flex flex-col">
-              <span>{person?.name}</span>
-              {person?.jobTitle && (
-                <span className="text-muted-foreground text-xs font-normal">
-                  {person.jobTitle}
-                </span>
+          <div className="flex items-start justify-between gap-3 pr-6">
+            <DialogTitle className="flex items-center gap-2">
+              {person && (
+                <Avatar className="size-7">
+                  <AvatarFallback className="text-[10px] font-medium">
+                    {initials(person.name)}
+                  </AvatarFallback>
+                </Avatar>
               )}
-            </span>
-          </DialogTitle>
+              <span className="flex flex-col">
+                <span>{person?.name}</span>
+                {person?.jobTitle && (
+                  <span className="text-muted-foreground text-xs font-normal">
+                    {person.jobTitle}
+                  </span>
+                )}
+              </span>
+            </DialogTitle>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" disabled={!hasEntries}>
+                  <IconDownload className="size-4" />
+                  Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => exportTimesheet("excel")}>
+                  Export as Excel
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => exportTimesheet("csv")}>
+                  Export as CSV
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </DialogHeader>
         {entries === undefined ? (
           <Skeleton className="h-40 w-full" />

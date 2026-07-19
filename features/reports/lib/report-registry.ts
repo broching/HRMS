@@ -107,14 +107,14 @@ export const REPORTS: ReportDef[] = [
     title: "Timesheets by Project",
     description: "Build your own report containing timesheets by project",
     icon: IconClock,
-    available: false,
+    available: true,
   },
   {
     key: "timesheet_employee",
     title: "Timesheet by Employee",
     description: "Build your own report containing employee timesheet",
     icon: IconClockDollar,
-    available: false,
+    available: true,
   },
 ]
 

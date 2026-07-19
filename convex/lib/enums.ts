@@ -1268,6 +1268,9 @@ export const orgSettings = v.object({
   currency: v.string(),
   weekStart: v.number(), // 0 = Sunday, 1 = Monday
   fiscalYearStartMonth: v.number(), // 1-12
+  // Company profile captured at onboarding (optional; absent on older orgs).
+  industry: v.optional(v.string()),
+  companySize: v.optional(v.string()), // e.g. "1-10", "11-50"
 });
 
 // Default settings applied when an organization is first synced (Singapore).

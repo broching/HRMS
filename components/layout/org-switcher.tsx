@@ -4,7 +4,12 @@ import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useAuth, useOrganizationList } from "@clerk/nextjs"
 import { useQuery } from "convex/react"
-import { IconChevronDown, IconBuilding, IconCheck } from "@tabler/icons-react"
+import {
+  IconChevronDown,
+  IconBuilding,
+  IconCheck,
+  IconPlus,
+} from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -13,6 +18,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
@@ -126,6 +132,13 @@ export function OrgSwitcher() {
             </DropdownMenuItem>
           )
         })}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => router.push("/onboarding?new=1")} className="gap-2">
+          <span className="flex size-6 items-center justify-center">
+            <IconPlus className="size-4" />
+          </span>
+          <span className="flex-1">Create new company</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

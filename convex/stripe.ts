@@ -12,6 +12,7 @@ import {
   type OptionalModuleKey,
   isOptionalModuleKey,
   modulePriceEnvKey,
+  coreBreakdown,
 } from "./lib/plans";
 import { OPTIONAL_MODULES } from "./lib/modules";
 
@@ -61,6 +62,21 @@ function resolveBasePriceId(): string {
     throw new ConvexError({
       code: "CONFIG",
       message: "No Stripe price configured for the Core platform (STRIPE_PRICE_BASE).",
+    });
+  }
+  return id;
+}
+
+// Per-employee add-on price ($5/seat) charged on top of a Core tier anchor for
+// employees between tiers (see coreBreakdown). Only needed when a team sits
+// above an anchor; exact-anchor teams check out with the base tier alone.
+function resolveExtraSeatPriceId(): string {
+  const id = process.env.STRIPE_PRICE_EXTRA_SEAT;
+  if (!id) {
+    throw new ConvexError({
+      code: "CONFIG",
+      message:
+        "No Stripe price configured for extra employees (STRIPE_PRICE_EXTRA_SEAT).",
     });
   }
   return id;
@@ -123,18 +139,29 @@ export const createCheckoutSession = action({
     }
 
     const base = appBaseUrl();
+    // Core = a tier anchor billed via the volume-tiered base price (quantity =
+    // the anchor's seat count) plus, between anchors, one $5/seat add-on line.
+    const core = coreBreakdown(seats);
     const lineItems = [
-      { price: resolveBasePriceId(), quantity: seats },
+      { price: resolveBasePriceId(), quantity: core.tierUpTo },
+      ...(core.extraSeats > 0
+        ? [{ price: resolveExtraSeatPriceId(), quantity: core.extraSeats }]
+        : []),
       ...modules.map((m) => ({ price: resolveModulePriceId(m), quantity: 1 })),
     ];
     const sessionParams = {
       mode: "subscription" as const,
       line_items: lineItems,
       client_reference_id: auth.orgId,
-      // `modules` metadata is a backup; the webhook derives the paid set from the
-      // subscription's actual line-item prices (modulePriceMap).
+      // `modules`/`seats` metadata is authoritative for the webhook: the paid set
+      // is still cross-checked against the subscription's line-item prices, but
+      // `seats` is the true headcount (the base line quantity is the tier anchor).
       subscription_data: {
-        metadata: { orgId: auth.orgId, modules: modules.join(",") },
+        metadata: {
+          orgId: auth.orgId,
+          modules: modules.join(","),
+          seats: String(seats),
+        },
       },
       allow_promotion_codes: true,
       billing_address_collection: "auto" as const,
@@ -295,19 +322,34 @@ async function syncSubscription(
   }
   const modMap = modulePriceMap();
 
-  let seats: number | undefined;
+  // True headcount comes from metadata (the base line quantity is only the tier
+  // anchor). Fall back to base + extra-seat line quantities for older subs.
+  const metaSeats = sub.metadata?.seats
+    ? Number(sub.metadata.seats)
+    : undefined;
+  const extraSeatPriceId = process.env.STRIPE_PRICE_EXTRA_SEAT;
+
   let baseItem: Stripe.SubscriptionItem | undefined;
+  let derivedSeats = 0;
   const modules: OptionalModuleKey[] = [];
   for (const it of sub.items.data) {
     const pid = it.price?.id;
     if (!pid) continue;
     if (basePriceId && pid === basePriceId) {
       baseItem = it;
-      seats = it.quantity;
+      derivedSeats += it.quantity ?? 0;
+    } else if (extraSeatPriceId && pid === extraSeatPriceId) {
+      derivedSeats += it.quantity ?? 0;
     } else if (modMap[pid]) {
       modules.push(modMap[pid]);
     }
   }
+  const seats =
+    metaSeats && Number.isFinite(metaSeats) && metaSeats > 0
+      ? metaSeats
+      : derivedSeats > 0
+        ? derivedSeats
+        : undefined;
 
   const patch = {
     stripeCustomerId: customerId,
