@@ -92,9 +92,7 @@ export const roster = query({
           e.departmentId ? ctx.db.get(e.departmentId) : Promise.resolve(null),
           e.teamId ? ctx.db.get(e.teamId) : Promise.resolve(null),
           e.positionId ? ctx.db.get(e.positionId) : Promise.resolve(null),
-          e.photoStorageId
-            ? ctx.storage.getUrl(e.photoStorageId)
-            : Promise.resolve(null),
+          Promise.resolve(e.photoUrl ?? null),
         ]);
         return {
           _id: e._id,

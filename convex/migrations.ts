@@ -71,3 +71,23 @@ export const seedProjectStages = internalMutation({
     return { projects: projects.length, stagesCreated, tasksUpdated };
   },
 });
+
+// Backfill the denormalized `photoUrl` on employees from their `photoStorageId`.
+// Convex serving URLs are stable, so we resolve once and store the result;
+// list/tree reads then use the field instead of an N-per-row getUrl call.
+// Idempotent: only touches rows that have a storageId but no cached url.
+export const backfillEmployeePhotoUrls = internalMutation({
+  args: {},
+  returns: v.object({ scanned: v.number(), updated: v.number() }),
+  handler: async (ctx) => {
+    const employees = await ctx.db.query("employees").collect();
+    let updated = 0;
+    for (const e of employees) {
+      if (!e.photoStorageId || e.photoUrl) continue;
+      const url = await ctx.storage.getUrl(e.photoStorageId);
+      await ctx.db.patch(e._id, { photoUrl: url ?? undefined });
+      updated++;
+    }
+    return { scanned: employees.length, updated };
+  },
+});

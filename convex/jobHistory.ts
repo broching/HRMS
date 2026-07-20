@@ -96,9 +96,7 @@ export const listForEmployee = query({
           managerInitials: manager
             ? initialsOf(manager.firstName, manager.lastName)
             : null,
-          managerPhotoUrl: manager?.photoStorageId
-            ? await ctx.storage.getUrl(manager.photoStorageId)
-            : null,
+          managerPhotoUrl: manager?.photoUrl ?? null,
           employmentType: r.employmentType ?? null,
           isCurrent: r._id === currentId,
           note: r.note ?? null,

@@ -1430,9 +1430,7 @@ export const get = query({
       employeeId: req.employeeId,
       employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
       employeeNumber: emp?.employeeNumber ?? "—",
-      employeePhotoUrl: emp?.photoStorageId
-        ? await ctx.storage.getUrl(emp.photoStorageId)
-        : null,
+      employeePhotoUrl: emp?.photoUrl ?? null,
       departmentName: dept?.name ?? null,
       positionTitle: position?.title ?? null,
       leaveTypeId: req.leaveTypeId,

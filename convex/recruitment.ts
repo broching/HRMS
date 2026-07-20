@@ -68,9 +68,7 @@ async function hydrateJob(ctx: QueryCtx, job: Doc<"jobs">) {
       .withIndex("by_job", (q) => q.eq("jobId", job._id))
       .collect(),
   ]);
-  const hiringManagerPhotoUrl = mgr?.photoStorageId
-    ? await ctx.storage.getUrl(mgr.photoStorageId)
-    : null;
+  const hiringManagerPhotoUrl = mgr?.photoUrl ?? null;
   return {
     _id: job._id,
     _creationTime: job._creationTime,

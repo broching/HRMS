@@ -272,9 +272,7 @@ export const dashboard = query({
       const e = await ctx.db.get(id);
       const info: Person = {
         name: e ? `${e.firstName} ${e.lastName}` : "Unknown",
-        photoUrl: e?.photoStorageId
-          ? await ctx.storage.getUrl(e.photoStorageId)
-          : null,
+        photoUrl: e?.photoUrl ?? null,
       };
       empCache.set(id, info);
       return info;

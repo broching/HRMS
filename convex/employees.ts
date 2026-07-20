@@ -1,5 +1,9 @@
 import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
+import {
+  paginationOptsValidator,
+  paginationResultValidator,
+} from "convex/server";
 import { Id } from "./_generated/dataModel";
 import {
   hrmsRole,
@@ -185,26 +189,104 @@ export const list = query({
     const posTitle = new Map(positions.map((p) => [p._id, p.title]));
     const officeName = new Map(offices.map((o) => [o._id, o.name]));
 
-    return await Promise.all(
-      rows.map(async (e) => ({
-        _id: e._id,
-        employeeNumber: e.employeeNumber,
-        firstName: e.firstName,
-        lastName: e.lastName,
-        preferredName: e.preferredName,
-        status: e.status,
-        employmentType: e.employmentType,
-        joinDate: e.joinDate,
-        workEmail: e.contact?.workEmail,
-        departmentName: e.departmentId ? deptName.get(e.departmentId) : undefined,
-        positionTitle: e.positionId ? posTitle.get(e.positionId) : undefined,
-        officeName: e.officeId ? officeName.get(e.officeId) : undefined,
-        photoUrl: e.photoStorageId
-          ? await ctx.storage.getUrl(e.photoStorageId)
-          : null,
-        isVacant: e.isVacant,
-      })),
-    );
+    return rows.map((e) => ({
+      _id: e._id,
+      employeeNumber: e.employeeNumber,
+      firstName: e.firstName,
+      lastName: e.lastName,
+      preferredName: e.preferredName,
+      status: e.status,
+      employmentType: e.employmentType,
+      joinDate: e.joinDate,
+      workEmail: e.contact?.workEmail,
+      departmentName: e.departmentId ? deptName.get(e.departmentId) : undefined,
+      positionTitle: e.positionId ? posTitle.get(e.positionId) : undefined,
+      officeName: e.officeId ? officeName.get(e.officeId) : undefined,
+      photoUrl: e.photoUrl ?? null,
+      isVacant: e.isVacant,
+    }));
+  },
+});
+
+// Paginated directory page — the employee-list table. Kept separate from
+// `list` (which the name-picker callers rely on as a plain array) so the table
+// has no directory-size ceiling. See usePaginatedQuery in employee-directory.
+export const directoryPage = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    search: v.optional(v.string()),
+    status: v.optional(employeeStatus),
+    departmentId: v.optional(v.id("departments")),
+    officeId: v.optional(v.id("offices")),
+    joinedBefore: v.optional(v.string()), // ISO date — joinDate <= this
+  },
+  returns: paginationResultValidator(employeeRow),
+  handler: async (ctx, args) => {
+    const { orgId } = await requireOrg(ctx);
+    const search = args.search?.trim();
+
+    // Non-search results are ordered by employeeNumber (stable directory order)
+    // via by_org_employeeNumber; search results are relevance-ordered. Status is
+    // pushed into the search index (its only free filter field). The remaining
+    // optional filters have no dedicated index and are applied to each page in
+    // memory below.
+    const base = search
+      ? ctx.db.query("employees").withSearchIndex("search_name", (s) => {
+          const b = s.search("searchName", search).eq("orgId", orgId);
+          return args.status ? b.eq("status", args.status) : b;
+        })
+      : ctx.db
+          .query("employees")
+          .withIndex("by_org_employeeNumber", (i) => i.eq("orgId", orgId));
+
+    const result = await base.paginate(args.paginationOpts);
+
+    // Secondary filters (no dedicated index) applied to the fetched page. A page
+    // may render short when filters are active; usePaginatedQuery's isDone /
+    // loadMore keeps fetching until the data is exhausted. This scans no more
+    // rows than the previous full-org collect did.
+    let rows = result.page;
+    if (!search && args.status) {
+      rows = rows.filter((e) => e.status === args.status);
+    }
+    if (args.departmentId) {
+      rows = rows.filter((e) => e.departmentId === args.departmentId);
+    }
+    if (args.officeId) {
+      rows = rows.filter((e) => e.officeId === args.officeId);
+    }
+    if (args.joinedBefore) {
+      rows = rows.filter((e) => e.joinDate <= args.joinedBefore!);
+    }
+
+    // Resolve small org-structure lookups once for label hydration.
+    const [departments, positions, offices] = await Promise.all([
+      ctx.db.query("departments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("positions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      ctx.db.query("offices").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+    ]);
+    const deptName = new Map(departments.map((d) => [d._id, d.name]));
+    const posTitle = new Map(positions.map((p) => [p._id, p.title]));
+    const officeName = new Map(offices.map((o) => [o._id, o.name]));
+
+    const page = rows.map((e) => ({
+      _id: e._id,
+      employeeNumber: e.employeeNumber,
+      firstName: e.firstName,
+      lastName: e.lastName,
+      preferredName: e.preferredName,
+      status: e.status,
+      employmentType: e.employmentType,
+      joinDate: e.joinDate,
+      workEmail: e.contact?.workEmail,
+      departmentName: e.departmentId ? deptName.get(e.departmentId) : undefined,
+      positionTitle: e.positionId ? posTitle.get(e.positionId) : undefined,
+      officeName: e.officeId ? officeName.get(e.officeId) : undefined,
+      photoUrl: e.photoUrl ?? null,
+      isVacant: e.isVacant,
+    }));
+
+    return { ...result, page };
   },
 });
 
@@ -375,9 +457,7 @@ export const myTeamRows = query({
         departmentName: e.departmentId ? deptName.get(e.departmentId) : undefined,
         positionTitle: e.positionId ? posTitle.get(e.positionId) : undefined,
         officeName: e.officeId ? officeName.get(e.officeId) : undefined,
-        photoUrl: e.photoStorageId
-          ? await ctx.storage.getUrl(e.photoStorageId)
-          : null,
+        photoUrl: e.photoUrl ?? null,
         isVacant: e.isVacant,
       })),
     );
@@ -426,9 +506,7 @@ export const orgChart = query({
         officeId: e.officeId ?? null,
         officeName: e.officeId ? (officeName.get(e.officeId) ?? null) : null,
         workEmail: e.contact?.workEmail ?? null,
-        photoUrl: e.photoStorageId
-          ? await ctx.storage.getUrl(e.photoStorageId)
-          : null,
+        photoUrl: e.photoUrl ?? null,
         isVacant: !!e.isVacant,
       })),
     );
@@ -461,9 +539,7 @@ export const get = query({
       employee.managerId ? ctx.db.get(employee.managerId) : null,
       employee.officeId ? ctx.db.get(employee.officeId) : null,
     ]);
-    const photoUrl = employee.photoStorageId
-      ? await ctx.storage.getUrl(employee.photoStorageId)
-      : null;
+    const photoUrl = employee.photoUrl ?? null;
     const galleryUrls = (
       await Promise.all(
         (employee.galleryStorageIds ?? []).map(async (storageId) => {
@@ -633,9 +709,7 @@ export const homeCard = query({
         employeeId: t._id,
         name: `${t.preferredName ?? t.firstName} ${t.lastName}`,
         initials: initialsOf(t.firstName, t.lastName),
-        photoUrl: t.photoStorageId
-          ? await ctx.storage.getUrl(t.photoStorageId)
-          : null,
+        photoUrl: t.photoUrl ?? null,
       })),
     )
 
@@ -644,9 +718,7 @@ export const homeCard = query({
       employeeId: me._id,
       employeeNumber: me.employeeNumber,
       name: `${me.preferredName ?? me.firstName} ${me.lastName}`,
-      photoUrl: me.photoStorageId
-        ? await ctx.storage.getUrl(me.photoStorageId)
-        : null,
+      photoUrl: me.photoUrl ?? null,
       positionTitle: position?.title ?? null,
       employmentType: me.employmentType,
       joinDate: me.joinDate,
@@ -657,9 +729,7 @@ export const homeCard = query({
         ? {
             name: `${manager.preferredName ?? manager.firstName} ${manager.lastName}`,
             initials: initialsOf(manager.firstName, manager.lastName),
-            photoUrl: manager.photoStorageId
-              ? await ctx.storage.getUrl(manager.photoStorageId)
-              : null,
+            photoUrl: manager.photoUrl ?? null,
           }
         : null,
       team,
@@ -1437,7 +1507,10 @@ export const setMyPhoto = mutation({
     const me = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     if (!me) throw new Error("You don't have an employee profile.");
     if (me.photoStorageId) await ctx.storage.delete(me.photoStorageId);
-    await ctx.db.patch(me._id, { photoStorageId: storageId });
+    await ctx.db.patch(me._id, {
+      photoStorageId: storageId,
+      photoUrl: (await ctx.storage.getUrl(storageId)) ?? undefined,
+    });
     return null;
   },
 });
@@ -1493,7 +1566,10 @@ export const setPhoto = mutation({
     if (existing.photoStorageId) {
       await ctx.storage.delete(existing.photoStorageId);
     }
-    await ctx.db.patch(employeeId, { photoStorageId: storageId });
+    await ctx.db.patch(employeeId, {
+      photoStorageId: storageId,
+      photoUrl: (await ctx.storage.getUrl(storageId)) ?? undefined,
+    });
     return null;
   },
 });

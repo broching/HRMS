@@ -261,6 +261,9 @@ export default defineSchema({
     lastName: v.string(),
     preferredName: v.optional(v.string()),
     photoStorageId: v.optional(v.id("_storage")),
+    // Denormalized, stable serving URL for photoStorageId. Cached at write time
+    // so list/tree reads are a field access instead of an N-per-row getUrl call.
+    photoUrl: v.optional(v.string()),
     dob: v.optional(v.string()), // ISO date "YYYY-MM-DD"
     gender: v.optional(gender),
     maritalStatus: v.optional(maritalStatus),

@@ -25,9 +25,7 @@ async function hydrateRow(ctx: QueryCtx, req: Doc<"leaveRequests">) {
     _creationTime: req._creationTime,
     employeeId: req.employeeId,
     employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
-    employeePhotoUrl: emp?.photoStorageId
-      ? await ctx.storage.getUrl(emp.photoStorageId)
-      : null,
+    employeePhotoUrl: emp?.photoUrl ?? null,
     leaveTypeId: req.leaveTypeId,
     leaveTypeName: lt?.name ?? "—",
     leaveTypeColor: lt?.color ?? "#6b7280",
@@ -174,9 +172,7 @@ export const employees = query({
         name,
         positionTitle,
         departmentName,
-        photoUrl: e.photoStorageId
-          ? await ctx.storage.getUrl(e.photoStorageId)
-          : null,
+        photoUrl: e.photoUrl ?? null,
         status: e.status,
         _sort: name.toLowerCase(),
       });

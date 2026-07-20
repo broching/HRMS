@@ -879,9 +879,7 @@ export const attendanceDayBoard = query({
       const employeeId = emp._id;
       const [position, photoUrl] = await Promise.all([
         emp.positionId ? ctx.db.get(emp.positionId) : Promise.resolve(null),
-        emp.photoStorageId
-          ? ctx.storage.getUrl(emp.photoStorageId)
-          : Promise.resolve(null),
+        Promise.resolve(emp.photoUrl ?? null),
       ]);
 
       recs.sort((a, b) => a.clockInAt - b.clockInAt);

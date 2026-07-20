@@ -243,11 +243,8 @@ async function seedStages(
       }),
     );
   }
-  const rows: Doc<"projectStages">[] = [];
-  for (const id of ids) {
-    const r = await ctx.db.get(id);
-    if (r) rows.push(r);
-  }
+  const fetched = await Promise.all(Array.from(ids, (id) => ctx.db.get(id)));
+  const rows = fetched.filter((r): r is Doc<"projectStages"> => r !== null);
   return rows;
 }
 
@@ -809,11 +806,12 @@ export const taskDetail = query({
         .query("taskAssignments")
         .withIndex("by_task", (q) => q.eq("taskId", s._id))
         .collect();
-      const sAssignees = [];
-      for (const r of sa) {
-        const e = await ctx.db.get(r.employeeId);
-        sAssignees.push({ employeeId: r.employeeId, name: e ? displayName(e) : "—" });
-      }
+      const sAssignees = await Promise.all(
+        sa.map(async (r) => {
+          const e = await ctx.db.get(r.employeeId);
+          return { employeeId: r.employeeId, name: e ? displayName(e) : "—" };
+        }),
+      );
       subtasks.push({
         _id: s._id,
         name: s.name,
@@ -937,11 +935,12 @@ export const subtasks = query({
         .query("taskAssignments")
         .withIndex("by_task", (q) => q.eq("taskId", s._id))
         .collect();
-      const assignees = [];
-      for (const r of sa) {
-        const e = await ctx.db.get(r.employeeId);
-        assignees.push({ employeeId: r.employeeId, name: e ? displayName(e) : "—" });
-      }
+      const assignees = await Promise.all(
+        sa.map(async (r) => {
+          const e = await ctx.db.get(r.employeeId);
+          return { employeeId: r.employeeId, name: e ? displayName(e) : "—" };
+        }),
+      );
       out.push({
         _id: s._id,
         name: s.name,
@@ -1010,9 +1009,11 @@ export const myTasks = query({
     // Resolve project labels once.
     const projectIds = new Set([...taskMap.values()].map((x) => x.task.projectId));
     const projMap = new Map<Id<"projects">, Doc<"projects">>();
-    for (const id of projectIds) {
-      const p = await ctx.db.get(id);
-      if (p) projMap.set(id, p);
+    const fetchedProjects = await Promise.all(
+      Array.from(projectIds, (id) => ctx.db.get(id)),
+    );
+    for (const p of fetchedProjects) {
+      if (p) projMap.set(p._id, p);
     }
     // Assignee counts per project.
     const countCache = new Map<Id<"projects">, { perTask: Map<Id<"projectTasks">, number>; projectLevel: number }>();
@@ -1895,10 +1896,12 @@ export const board = query({
     for (const r of projRows) empIds.add(r.employeeId);
     for (const r of taskRows) empIds.add(r.employeeId);
     const nameMap = new Map<Id<"employees">, string>();
-    for (const id of empIds) {
-      const e = await ctx.db.get(id);
+    const empIdList = Array.from(empIds);
+    const empDocs = await Promise.all(empIdList.map((id) => ctx.db.get(id)));
+    empIdList.forEach((id, i) => {
+      const e = empDocs[i];
       nameMap.set(id, e ? displayName(e) : "—");
-    }
+    });
     const projectLevel = projRows.map((r) => ({
       employeeId: r.employeeId,
       name: nameMap.get(r.employeeId) ?? "—",
@@ -2129,9 +2132,16 @@ export const overview = query({
       ...projAssignees,
       ...perEmpTasks.keys(),
     ]);
+    const workforceList = Array.from(workforce);
+    const workforceDocs = await Promise.all(
+      workforceList.map((id) => ctx.db.get(id)),
+    );
+    const empByIdWf = new Map(
+      workforceDocs.flatMap((e) => (e ? [[e._id, e] as const] : [])),
+    );
     const byEmployee = [];
     for (const employeeId of workforce) {
-      const emp = await ctx.db.get(employeeId);
+      const emp = empByIdWf.get(employeeId) ?? null;
       const agg = empAgg.get(employeeId) ?? { minutes: 0, entries: 0 };
       const assignedIds = projAssignees.has(employeeId)
         ? allTaskIds
@@ -2711,10 +2721,12 @@ export const timeline = query({
     const empIds = new Set<Id<"employees">>();
     for (const r of [...projRows, ...taskRows]) empIds.add(r.employeeId);
     const nameMap = new Map<Id<"employees">, string>();
-    for (const id of empIds) {
-      const e = await ctx.db.get(id);
+    const empIdList = Array.from(empIds);
+    const empDocs = await Promise.all(empIdList.map((id) => ctx.db.get(id)));
+    empIdList.forEach((id, i) => {
+      const e = empDocs[i];
       nameMap.set(id, e ? displayName(e) : "—");
-    }
+    });
     const projLevel = projRows.map((r) => ({
       employeeId: r.employeeId,
       name: nameMap.get(r.employeeId) ?? "—",

@@ -1415,9 +1415,7 @@ export const getRunWorkspace = query({
         const [dept, position, photoUrl, adjustments] = await Promise.all([
           emp?.departmentId ? ctx.db.get(emp.departmentId) : Promise.resolve(null),
           emp?.positionId ? ctx.db.get(emp.positionId) : Promise.resolve(null),
-          emp?.photoStorageId
-            ? ctx.storage.getUrl(emp.photoStorageId)
-            : Promise.resolve(null),
+          Promise.resolve(emp?.photoUrl ?? null),
           ctx.db
             .query("payrollAdjustments")
             .withIndex("by_run_employee", (q) =>

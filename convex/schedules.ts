@@ -854,9 +854,7 @@ export const rosterDay = query({
 
     const people = await Promise.all(
       enriched.map(async ({ emp, payType, pattern, jobTitle }) => {
-        const photoUrl = emp.photoStorageId
-          ? await ctx.storage.getUrl(emp.photoStorageId)
-          : null;
+        const photoUrl = emp.photoUrl ?? null;
 
         const blocks: {
           kind: "scheduled" | "overtime" | "actual";

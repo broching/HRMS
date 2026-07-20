@@ -82,14 +82,9 @@ export const headcounts = query({
       }
     }
     const urlById = new Map<string, string | null>();
-    await Promise.all(
-      [...sampled.values()].map(async (e) => {
-        urlById.set(
-          e._id,
-          e.photoStorageId ? await ctx.storage.getUrl(e.photoStorageId) : null,
-        );
-      }),
-    );
+    for (const e of sampled.values()) {
+      urlById.set(e._id, e.photoUrl ?? null);
+    }
 
     function toStats(map: Map<string, Bucket>) {
       return [...map.entries()].map(([id, b]) => ({
@@ -186,9 +181,7 @@ export const groupPanel = query({
         employeeId: e._id,
         name: empName(e),
         jobTitle,
-        photoUrl: e.photoStorageId
-          ? await ctx.storage.getUrl(e.photoStorageId)
-          : null,
+        photoUrl: e.photoUrl ?? null,
       })),
     );
 

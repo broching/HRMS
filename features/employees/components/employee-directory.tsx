@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useQuery, useMutation } from "convex/react"
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react"
 import { toast } from "sonner"
 import {
   IconPlus,
@@ -136,21 +136,34 @@ export function EmployeeDirectory({
 
   const departments = useQuery(api.departments.list) ?? []
   const offices = useQuery(api.offices.list) ?? []
-  const employees = useQuery(api.employees.list, {
-    search: search || undefined,
-    departmentId:
-      departmentId === ALL ? undefined : (departmentId as Id<"departments">),
-    officeId: officeId === ALL ? undefined : (officeId as Id<"offices">),
-    joinedBefore: joinedBefore || undefined,
-  })
+  // Server-side cursor pagination: `results` accumulates each loaded batch, so
+  // there is no directory-size ceiling. We keep a familiar numbered pager over
+  // what's loaded and surface a "Load more" affordance to pull the next batch.
+  const {
+    results: employees,
+    status,
+    loadMore,
+  } = usePaginatedQuery(
+    api.employees.directoryPage,
+    {
+      search: search || undefined,
+      departmentId:
+        departmentId === ALL ? undefined : (departmentId as Id<"departments">),
+      officeId: officeId === ALL ? undefined : (officeId as Id<"offices">),
+      joinedBefore: joinedBefore || undefined,
+    },
+    { initialNumItems: 50 },
+  )
+  const isFirstLoad = status === "LoadingFirstPage"
+  const canLoadMore = status === "CanLoadMore" || status === "LoadingMore"
 
   const colCount = 5 + (memberControls ? 1 : 0) + (canManageMembers ? 1 : 0)
 
-  const total = employees?.length ?? 0
+  const total = employees.length
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const current = Math.min(page, pageCount)
   const start = (current - 1) * PAGE_SIZE
-  const pageRows = employees?.slice(start, start + PAGE_SIZE) ?? []
+  const pageRows = employees.slice(start, start + PAGE_SIZE)
 
   return (
     <div className="flex flex-col gap-4">
@@ -227,11 +240,11 @@ export function EmployeeDirectory({
 
       <div className="px-4 lg:px-6">
         <p className="text-muted-foreground text-sm">
-          {employees === undefined
+          {isFirstLoad
             ? "Loading…"
             : total === 0
               ? "No employees found."
-              : `Showing ${start + 1} – ${Math.min(start + PAGE_SIZE, total)} of ${total} employees`}
+              : `Showing ${start + 1} – ${Math.min(start + PAGE_SIZE, total)} of ${total}${canLoadMore ? "+" : ""} employees`}
         </p>
       </div>
 
@@ -251,7 +264,7 @@ export function EmployeeDirectory({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {employees === undefined ? (
+            {isFirstLoad ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <TableRow key={i}>
                   <TableCell colSpan={colCount}>
@@ -370,37 +383,51 @@ export function EmployeeDirectory({
         </Table>
       </div>
 
-      {total > PAGE_SIZE && (
-        <div className="flex items-center justify-center gap-1 px-4 lg:px-6">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            disabled={current <= 1}
-            onClick={() => setPage(current - 1)}
-          >
-            <IconChevronLeft className="size-4" />
-          </Button>
-          {Array.from({ length: pageCount }).map((_, i) => (
+      {(total > PAGE_SIZE || canLoadMore) && (
+        <div className="flex flex-col items-center gap-3 px-4 lg:px-6">
+          {total > PAGE_SIZE && (
+            <div className="flex items-center justify-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                disabled={current <= 1}
+                onClick={() => setPage(current - 1)}
+              >
+                <IconChevronLeft className="size-4" />
+              </Button>
+              {Array.from({ length: pageCount }).map((_, i) => (
+                <Button
+                  key={i}
+                  variant={current === i + 1 ? "default" : "ghost"}
+                  size="icon"
+                  className={cn("size-8 tabular-nums")}
+                  onClick={() => setPage(i + 1)}
+                >
+                  {i + 1}
+                </Button>
+              ))}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                disabled={current >= pageCount}
+                onClick={() => setPage(current + 1)}
+              >
+                <IconChevronRight className="size-4" />
+              </Button>
+            </div>
+          )}
+          {canLoadMore && (
             <Button
-              key={i}
-              variant={current === i + 1 ? "default" : "ghost"}
-              size="icon"
-              className={cn("size-8 tabular-nums")}
-              onClick={() => setPage(i + 1)}
+              variant="outline"
+              size="sm"
+              disabled={status === "LoadingMore"}
+              onClick={() => loadMore(50)}
             >
-              {i + 1}
+              {status === "LoadingMore" ? "Loading…" : "Load more employees"}
             </Button>
-          ))}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            disabled={current >= pageCount}
-            onClick={() => setPage(current + 1)}
-          >
-            <IconChevronRight className="size-4" />
-          </Button>
+          )}
         </div>
       )}
     </div>
