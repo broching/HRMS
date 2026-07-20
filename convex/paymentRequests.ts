@@ -1190,11 +1190,19 @@ export const mine = query({
     const { orgId, userId } = await requireOrg(ctx);
     const own = await employeeByUserId(ctx, orgId, userId);
     if (!own) return [];
-    let rows = await ctx.db
-      .query("paymentRequests")
-      .withIndex("by_employee", (q) => q.eq("employeeId", own._id))
-      .collect();
-    if (month) rows = rows.filter((r) => r.incurredMonth === month);
+    // Month-scope the read via by_employee_month when a month is selected so we
+    // only load that month's requests instead of the employee's full history.
+    const rows = month
+      ? await ctx.db
+          .query("paymentRequests")
+          .withIndex("by_employee_month", (q) =>
+            q.eq("employeeId", own._id).eq("incurredMonth", month),
+          )
+          .collect()
+      : await ctx.db
+          .query("paymentRequests")
+          .withIndex("by_employee", (q) => q.eq("employeeId", own._id))
+          .collect();
     rows.sort((a, b) => b._creationTime - a._creationTime);
     // The requestor's own list never surfaces a mark-paid action.
     return await Promise.all(rows.map((r) => hydrateRow(ctx, r)));
@@ -1233,10 +1241,18 @@ export const approvalQueue = query({
     const orgCtx = await requireOrg(ctx);
     const settings = await resolvePaymentRequestSettings(ctx, orgCtx.orgId);
     const isOversight = ctxHasPermission(orgCtx, "payment_requests:read:all");
-    const rows = await ctx.db
-      .query("paymentRequests")
-      .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
-      .collect();
+    // Month-scope the read via by_org_month when a month is selected.
+    const rows = month
+      ? await ctx.db
+          .query("paymentRequests")
+          .withIndex("by_org_month", (q) =>
+            q.eq("orgId", orgCtx.orgId).eq("incurredMonth", month),
+          )
+          .collect()
+      : await ctx.db
+          .query("paymentRequests")
+          .withIndex("by_org", (q) => q.eq("orgId", orgCtx.orgId))
+          .collect();
     const out: Doc<"paymentRequests">[] = [];
     for (const r of rows) {
       if (r.status === "draft") continue;
@@ -1280,11 +1296,19 @@ export const allRequests = query({
   returns: v.array(prRow),
   handler: async (ctx, { month, status }) => {
     const { orgId } = await requirePermission(ctx, "payment_requests:read:all");
-    let rows = await ctx.db
-      .query("paymentRequests")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .collect();
-    if (month) rows = rows.filter((r) => r.incurredMonth === month);
+    // Month-scope the read via by_org_month when a month is selected so we only
+    // load that month's requests instead of the org's entire history.
+    let rows = month
+      ? await ctx.db
+          .query("paymentRequests")
+          .withIndex("by_org_month", (q) =>
+            q.eq("orgId", orgId).eq("incurredMonth", month),
+          )
+          .collect()
+      : await ctx.db
+          .query("paymentRequests")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect();
     if (status) rows = rows.filter((r) => r.status === status);
     rows.sort((a, b) => b._creationTime - a._creationTime);
     // read:all is oversight — the caller may mark approved requests paid.

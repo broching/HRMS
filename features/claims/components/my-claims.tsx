@@ -60,7 +60,7 @@ const STATUSES: ClaimStatus[] = [
 
 export function MyClaims() {
   const [month, setMonth] = React.useState(currentMonth())
-  const claims = useQuery(api.claims.mine)
+  const claims = useQuery(api.claims.mine, { month })
   const batches = useQuery(api.claims.myBatches) ?? []
   const claimTypes = useQuery(api.claimTypes.list, { includeInactive: true }) ?? []
   const del = useMutation(api.claims.deleteClaim)

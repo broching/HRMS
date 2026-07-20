@@ -1709,17 +1709,29 @@ export const addComment = mutation({
 // ─── Queries ─────────────────────────────────────────────────────────────
 
 export const mine = query({
-  args: {},
+  args: { month: v.optional(v.string()) }, // "YYYY-MM" — scopes the read
   returns: v.array(claimRow),
-  handler: async (ctx) => {
+  handler: async (ctx, { month }) => {
     const orgCtx = await getOrgContext(ctx);
     if (!orgCtx) return [];
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     if (!own) return [];
-    const claims = await ctx.db
-      .query("claims")
-      .withIndex("by_employee", (q) => q.eq("employeeId", own._id))
-      .collect();
+    // When a month is selected, range-scope the read to that month's incurred
+    // dates via by_employee_incurredDate instead of loading the full history.
+    const claims = month
+      ? await ctx.db
+          .query("claims")
+          .withIndex("by_employee_incurredDate", (q) =>
+            q
+              .eq("employeeId", own._id)
+              .gte("incurredDate", `${month}-01`)
+              .lte("incurredDate", `${month}-31`),
+          )
+          .collect()
+      : await ctx.db
+          .query("claims")
+          .withIndex("by_employee", (q) => q.eq("employeeId", own._id))
+          .collect();
     claims.sort((a, b) => b._creationTime - a._creationTime);
     return await Promise.all(claims.map((c) => hydrateClaim(ctx, c)));
   },

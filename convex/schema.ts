@@ -944,6 +944,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_employee", ["employeeId"])
+    .index("by_employee_incurredDate", ["employeeId", "incurredDate"])
     .index("by_group", ["groupId"]),
 
   claimComments: defineTable({
@@ -1054,7 +1055,8 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_employee", ["employeeId"])
-    .index("by_org_month", ["orgId", "incurredMonth"]),
+    .index("by_org_month", ["orgId", "incurredMonth"])
+    .index("by_employee_month", ["employeeId", "incurredMonth"]),
 
   paymentRequestComments: defineTable({
     orgId: v.id("organizations"),
