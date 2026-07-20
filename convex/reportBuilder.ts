@@ -15,12 +15,16 @@ import { ctxHasPermission } from "./auth";
 type Cell = string | number | null;
 type Row = Record<string, Cell>;
 type Column = { key: string; label: string; group: string };
+// Optional date scope for date-filterable reports (e.g. Leave Records).
+// `month` is 1–12 and requires `year`; `year` alone means the whole year.
+type Period = { month?: number; year?: number };
 
 // Report key → the permission required to pull it.
 const REPORT_PERMISSION: Record<string, Permission> = {
   employee_information: "employees:read:all",
   identity_documents: "employees:read:all",
   leave_balances: "leave:approve:all",
+  leave_records: "leave:approve:all",
   expense_claims: "claims:approve:finance",
   employee_payroll: "payroll:manage",
   company_payroll: "payroll:manage",
@@ -66,6 +70,13 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   work_pass: "Work pass",
   identity: "Identity",
   other: "Other",
+};
+const LEAVE_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  approved: "Approved",
+  rejected: "Rejected",
+  cancelled: "Cancelled",
+  info_requested: "Info requested",
 };
 const CLAIM_STATUS_LABELS: Record<string, string> = {
   pending_manager: "Pending manager",
@@ -284,6 +295,71 @@ async function buildLeaveBalances(
       };
     })
     .sort((a, b) => String(a._sort).localeCompare(String(b._sort)))
+    .map(({ _sort, ...r }) => r);
+  return { columns, rows };
+}
+
+// Leave Records — one row per leave request (the leaves employees actually
+// take), optionally scoped to a month/year. The date picker filters by the
+// request's start date via the `by_org_start` index, which also bounds the read.
+async function buildLeaveRecords(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  period: Period,
+): Promise<{ columns: Column[]; rows: Row[] }> {
+  const { byId, nameOf } = await loadEmployeeContext(ctx, orgId);
+  const leaveTypes = await ctx.db
+    .query("leaveTypes")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const typeName = new Map(leaveTypes.map((t) => [t._id, t.name]));
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const requests = await ctx.db
+    .query("leaveRequests")
+    .withIndex("by_org_start", (q) => {
+      if (period.year) {
+        const lo = period.month
+          ? `${period.year}-${pad(period.month)}-01`
+          : `${period.year}-01-01`;
+        const hi = period.month
+          ? `${period.year}-${pad(period.month)}-31`
+          : `${period.year}-12-31`;
+        return q.eq("orgId", orgId).gte("startDate", lo).lte("startDate", hi);
+      }
+      return q.eq("orgId", orgId);
+    })
+    .take(10000);
+
+  const columns: Column[] = [
+    { key: "internalId", label: "Internal Id", group: "Leave Records" },
+    { key: "employee", label: "Employee", group: "Leave Records" },
+    { key: "leaveType", label: "Leave Type", group: "Leave Records" },
+    { key: "startDate", label: "Start Date", group: "Leave Records" },
+    { key: "endDate", label: "End Date", group: "Leave Records" },
+    { key: "days", label: "Days", group: "Leave Records" },
+    { key: "status", label: "Status", group: "Leave Records" },
+    { key: "reason", label: "Reason", group: "Leave Records" },
+    { key: "appliedOn", label: "Applied On", group: "Leave Records" },
+  ];
+  const rows: Row[] = requests
+    .map((r) => {
+      const emp = byId.get(r.employeeId);
+      return {
+        internalId: emp?.employeeNumber ?? null,
+        employee: nameOf(r.employeeId),
+        leaveType: typeName.get(r.leaveTypeId) ?? "—",
+        startDate: r.startDate,
+        endDate: r.endDate,
+        days: Math.round(r.totalDays * 10) / 10,
+        status: LEAVE_STATUS_LABELS[r.status] ?? r.status,
+        reason: r.reason ?? null,
+        appliedOn: new Date(r._creationTime).toISOString().slice(0, 10),
+        // Newest leave first, then by person.
+        _sort: `${r.startDate}|${nameOf(r.employeeId)}`,
+      };
+    })
+    .sort((a, b) => String(b._sort).localeCompare(String(a._sort)))
     .map(({ _sort, ...r }) => r);
   return { columns, rows };
 }
@@ -618,7 +694,12 @@ async function buildTimesheetByEmployee(
 // ─── Public query ──────────────────────────────────────────────────────────
 
 export const dataset = query({
-  args: { report: v.string() },
+  args: {
+    report: v.string(),
+    // Date scope for date-filterable reports; ignored by the rest.
+    month: v.optional(v.number()),
+    year: v.optional(v.number()),
+  },
   returns: v.union(
     v.null(),
     v.object({
@@ -634,12 +715,12 @@ export const dataset = query({
       ),
     }),
   ),
-  handler: async (ctx, { report }) => {
+  handler: async (ctx, { report, month, year }) => {
     const orgCtx = await getOrgContext(ctx);
     if (!orgCtx) return null;
     const perm = REPORT_PERMISSION[report];
     if (!perm || !ctxHasPermission(orgCtx, perm)) return null;
-    return await buildReport(ctx, orgCtx, report);
+    return await buildReport(ctx, orgCtx, report, { month, year });
   },
 });
 
@@ -647,6 +728,7 @@ async function buildReport(
   ctx: QueryCtx,
   orgCtx: OrgContext,
   report: string,
+  period: Period,
 ): Promise<{ columns: Column[]; rows: Row[] } | null> {
   const orgId = orgCtx.orgId;
   switch (report) {
@@ -656,6 +738,8 @@ async function buildReport(
       return buildIdentityDocuments(ctx, orgId);
     case "leave_balances":
       return buildLeaveBalances(ctx, orgId);
+    case "leave_records":
+      return buildLeaveRecords(ctx, orgId, period);
     case "expense_claims":
       return buildExpenseClaims(ctx, orgId);
     case "employee_payroll":

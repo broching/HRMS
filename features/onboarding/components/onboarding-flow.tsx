@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useOrganizationList, useUser, useClerk } from "@clerk/nextjs"
+import { useRouter } from "next/navigation"
 import { useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { ConvexError } from "convex/values"
@@ -110,7 +111,9 @@ export function OnboardingFlow() {
   const { signOut } = useClerk()
   const { isLoaded, createOrganization, setActive } = useOrganizationList()
 
+  const router = useRouter()
   const org = useQuery(api.organizations.current)
+  const access = useQuery(api.billing.getAccess)
   const provision = useMutation(api.organizations.provisionCurrent)
   const ensureSelf = useMutation(api.members.ensureSelf)
   const complete = useMutation(api.organizations.completeOnboarding)
@@ -156,6 +159,21 @@ export function OnboardingFlow() {
 
   const createdRef = React.useRef(false)
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }))
+
+  // Bounce fully-onboarded users out of the funnel: an org that already exists
+  // when the page opens (we didn't just create it this session) and whose
+  // billing access is granted has finished onboarding — it belongs in the app,
+  // not here. The "?new=1" create-another-company path is exempt, and an org we
+  // create mid-flow (createdRef) must stay so the plan step can run.
+  const leaving = React.useRef(false)
+  React.useEffect(() => {
+    if (leaving.current || isNew || createdRef.current) return
+    if (org === undefined || access === undefined) return
+    if (org && access.allowed) {
+      leaving.current = true
+      router.replace("/dashboard")
+    }
+  }, [org, access, isNew, router])
 
   const seatsGuess =
     SIZES.find((s) => s.label === form.size)?.seats ?? 10
@@ -226,6 +244,18 @@ export function OnboardingFlow() {
     if (step === 1) return !!form.country && !!form.timezone
     return true
   }, [step, form])
+
+  // Hold the funnel back while we decide whether an existing org should be
+  // redirected, so an already-onboarded user never sees it flash.
+  const deciding =
+    !isNew && !createdRef.current && !!org && access === undefined
+  if (leaving.current || deciding) {
+    return (
+      <div className="bg-background flex min-h-svh items-center justify-center">
+        <IconLoader2 className="text-muted-foreground size-6 animate-spin" />
+      </div>
+    )
+  }
 
   return (
     <div className="onboarding-light bg-background text-foreground min-h-svh">

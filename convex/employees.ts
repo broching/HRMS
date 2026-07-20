@@ -1593,6 +1593,7 @@ export const quickUpdateJob = mutation({
   args: {
     employeeId: v.id("employees"),
     departmentId: v.optional(v.union(v.id("departments"), v.null())),
+    teamId: v.optional(v.union(v.id("teams"), v.null())),
     positionId: v.optional(v.union(v.id("positions"), v.null())),
     officeId: v.optional(v.union(v.id("offices"), v.null())),
   },
@@ -1617,6 +1618,14 @@ export const quickUpdateJob = mutation({
           throw new ConvexError({ code: "INVALID", message: "Unknown department." });
       }
       patch.departmentId = args.departmentId ?? undefined;
+    }
+    if (args.teamId !== undefined) {
+      if (args.teamId !== null) {
+        const t = await ctx.db.get(args.teamId);
+        if (!t || t.orgId !== orgId)
+          throw new ConvexError({ code: "INVALID", message: "Unknown team." });
+      }
+      patch.teamId = args.teamId ?? undefined;
     }
     if (args.positionId !== undefined) {
       if (args.positionId !== null) {

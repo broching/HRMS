@@ -25,7 +25,11 @@ export default async function ReportBuilderDetailPage({
         </Link>
       </div>
       <h1 className="text-2xl font-semibold tracking-tight">{def.title}</h1>
-      <ReportBuilderDetail reportKey={def.key} title={def.title} />
+      <ReportBuilderDetail
+        reportKey={def.key}
+        title={def.title}
+        dateFilter={def.dateFilter ?? false}
+      />
     </div>
   )
 }

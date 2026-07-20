@@ -48,6 +48,30 @@ Two modes, selected purely by env:
 > dedicated database only ever contains the pinned org's data, so there's nothing
 > for them to leak.
 
+## Seeing the whole fleet (super-admin console)
+
+A dedicated deployment is a **separate Convex project** and its data never shows
+up in the shared deployment's tenant queries. To list every project side by side
+— the shared multi-tenant one plus each Enterprise customer's dedicated
+deployment — the **`/super-admin` → "Convex fleet"** panel calls the Convex
+**Management API** (`superAdmin.platformProjects`). It enumerates the team's
+projects and each one's production deployment URL, flagging the deployment the
+console itself is running on.
+
+Set two env vars on the deployment that hosts the console (the shared one), using
+a **Team Access Token** from Convex dashboard → **Team Settings → Access Tokens**
+(prefer a service-account team member so the token isn't tied to a person):
+
+```
+CONVEX_MANAGEMENT_TOKEN=ey...      # the team access token (server-side only)
+CONVEX_TEAM_ID=41                  # the numeric team id shown when creating it
+```
+
+The token is read server-side only and never reaches the client. If either var
+is unset the panel degrades gracefully to a "not configured" hint (super-admin
+only). Access to the whole console — including this panel — is gated by
+`SUPER_ADMIN_USER_IDS`; anyone not on the allow-list gets a plain 404.
+
 ## Provisioning a new enterprise (runbook)
 
 Prereqs: the org already exists as a **Clerk organization** (note its

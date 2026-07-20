@@ -13,7 +13,6 @@ import {
   IconFileInvoice,
   IconChartBar,
   IconReportAnalytics,
-  IconSitemap,
   IconBuildingCog,
   IconCreditCard,
   IconBriefcase,
@@ -56,28 +55,23 @@ const ITEMS: Item[] = [
     href: "/hr-lounge",
     exact: true,
     permission: "employees:manage",
-    group: "People",
+    group: "People & organization",
   },
-  {
-    label: "Org Structure",
-    icon: IconSitemap,
-    href: "/hr-lounge/org-structure",
-    permission: "employees:manage",
-    group: "People",
-  },
+  // Org structure now lives as a tab under Organization (below) — no separate
+  // People entry.
   {
     label: "Recruitment",
     icon: IconBriefcase,
     href: "/hr-lounge/recruitment",
     permission: "recruitment:manage",
-    group: "People",
+    group: "People & organization",
   },
   {
     label: "Performance",
     icon: IconChartBar,
     href: "/hr-lounge/performance",
     permission: "performance:manage",
-    group: "People",
+    group: "People & organization",
   },
   // ── Payroll & claims ──
   {
@@ -161,14 +155,14 @@ const ITEMS: Item[] = [
     icon: IconBuildingCog,
     href: "/hr-lounge/org-settings",
     permission: "org:manage",
-    group: "Organization",
+    group: "People & organization",
   },
   {
     label: "Billing & plan",
     icon: IconCreditCard,
     href: "/hr-lounge/billing",
     permission: "org:manage",
-    group: "Organization",
+    group: "People & organization",
   },
 ]
 

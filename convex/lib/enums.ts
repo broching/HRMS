@@ -1019,6 +1019,54 @@ export const payslipLayoutBlock = v.object({
   text: v.optional(v.string()),
   heading: v.optional(v.boolean()),
   align: v.optional(payslipTextAlign),
+  // Grid geometry on a 12-column canvas (react-grid-layout). Optional for
+  // back-compat with linear-stack templates; assigned on first edit and clamped
+  // server-side before storing. x/w are column units (0–12); y/h are row units.
+  x: v.optional(v.number()),
+  y: v.optional(v.number()),
+  w: v.optional(v.number()),
+  h: v.optional(v.number()),
+});
+
+// Blocks for the payment-request document's drag/resize layout (mirrors the
+// payslip builder). Section-level granularity: `details` is the whole field
+// column; logo/heading/attachNote/signatures/footer are the surrounding
+// sections; customText/divider/spacer are user-added decoration.
+export const paymentRequestBlockType = v.union(
+  v.literal("logo"),
+  v.literal("heading"),
+  v.literal("details"),
+  v.literal("attachNote"),
+  v.literal("signatures"),
+  v.literal("footer"),
+  v.literal("customText"),
+  v.literal("divider"),
+  v.literal("spacer"),
+);
+export type PaymentRequestBlockType =
+  | "logo"
+  | "heading"
+  | "details"
+  | "attachNote"
+  | "signatures"
+  | "footer"
+  | "customText"
+  | "divider"
+  | "spacer";
+
+export const paymentRequestLayoutBlock = v.object({
+  id: v.string(),
+  type: paymentRequestBlockType,
+  visible: v.boolean(),
+  text: v.optional(v.string()),
+  heading: v.optional(v.boolean()),
+  align: v.optional(payslipTextAlign),
+  // Grid geometry on a 12-column canvas (react-grid-layout), clamped
+  // server-side before storing. Optional for back-compat.
+  x: v.optional(v.number()),
+  y: v.optional(v.number()),
+  w: v.optional(v.number()),
+  h: v.optional(v.number()),
 });
 
 // Vertical spacing preset for the whole document.
@@ -1302,3 +1350,51 @@ export const projectPhase = v.union(
   v.literal("completed"),
 );
 export type ProjectPhase = "planning" | "active" | "on_hold" | "completed";
+
+// ─── Custom reports (Tableau-style chart builder) ────────────────────────
+
+// One chart tile in a custom report. Aggregation is computed client-side from
+// the source dataset's rows; only this configuration is persisted. Field keys
+// (`dimension`/`measure`/`series`) reference columns of the chosen dataset.
+export const customReportChart = v.object({
+  id: v.string(),
+  title: v.string(),
+  type: v.union(
+    v.literal("bar"),
+    v.literal("line"),
+    v.literal("area"),
+    v.literal("pie"),
+    v.literal("kpi"),
+    v.literal("table"),
+  ),
+  // Categorical or date field for the X axis / category. Absent for a KPI.
+  dimension: v.optional(v.string()),
+  // Numeric field to aggregate. Absent = count of records.
+  measure: v.optional(v.string()),
+  // Optional second categorical field for colour/series breakdown.
+  series: v.optional(v.string()),
+  aggregation: v.union(
+    v.literal("sum"),
+    v.literal("avg"),
+    v.literal("count"),
+    v.literal("min"),
+    v.literal("max"),
+    v.literal("count_distinct"),
+  ),
+  // Date-bucket granularity, used only when `dimension` is a date field.
+  granularity: v.optional(
+    v.union(v.literal("day"), v.literal("month"), v.literal("year")),
+  ),
+  sort: v.optional(
+    v.union(
+      v.literal("value_desc"),
+      v.literal("value_asc"),
+      v.literal("label_asc"),
+    ),
+  ),
+  limit: v.optional(v.number()),
+  // Tile width on the dashboard grid: sm = 1 col, md = 2 col, lg = full width.
+  size: v.optional(
+    v.union(v.literal("sm"), v.literal("md"), v.literal("lg")),
+  ),
+});

@@ -325,20 +325,34 @@ export function WorkPatternsSettings() {
   const patterns = useQuery(api.workPatterns.list) as PatternDoc[] | undefined
   const setDefault = useMutation(api.workPatterns.setDefault)
   const remove = useMutation(api.workPatterns.remove)
+  const ensureDefault = useMutation(api.workPatterns.ensureDefault)
+
+  // Every org should always have a default work pattern (standard 9–5 Mon–Fri).
+  // Seed it for orgs that don't yet have one; harmless/idempotent otherwise.
+  React.useEffect(() => {
+    void ensureDefault({}).catch(() => {})
+  }, [ensureDefault])
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6">
       <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>Work patterns</CardTitle>
-          <PatternDialog
-            trigger={
-              <Button size="sm">
-                <IconPlus className="size-4" />
-                New pattern
-              </Button>
-            }
-          />
+        <CardHeader className="flex-col items-start gap-1 space-y-0">
+          <div className="flex w-full items-center justify-between">
+            <CardTitle>Work patterns</CardTitle>
+            <PatternDialog
+              trigger={
+                <Button size="sm">
+                  <IconPlus className="size-4" />
+                  New pattern
+                </Button>
+              }
+            />
+          </div>
+          <p className="text-muted-foreground text-sm font-normal">
+            The org default (starred) auto-fills the roster for salaried staff
+            who don&rsquo;t have their own pattern. Edit it to match your
+            standard hours, or add patterns for teams that work differently.
+          </p>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {patterns === undefined ? (

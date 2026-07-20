@@ -13,6 +13,14 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Sheet,
@@ -55,19 +63,51 @@ function cellText(v: Cell): string {
   return v
 }
 
+const MONTH_NAMES = Array.from({ length: 12 }, (_, i) =>
+  new Date(2000, i, 1).toLocaleString("en", { month: "long" }),
+)
+// A short window of years around now for the year picker.
+const YEAR_OPTIONS = (() => {
+  const now = new Date().getFullYear()
+  return Array.from({ length: 6 }, (_, i) => now - i)
+})()
+
 export function ReportBuilderDetail({
   reportKey,
   title,
+  dateFilter = false,
 }: {
   reportKey: string
   title: string
+  dateFilter?: boolean
 }) {
-  const data = useQuery(api.reportBuilder.dataset, { report: reportKey })
+  // Date scope for date-filterable reports. Default to the current year, all
+  // months ("all"). Ignored entirely when `dateFilter` is false.
+  const [year, setYear] = React.useState(new Date().getFullYear())
+  const [month, setMonth] = React.useState<string>("all")
+
+  const data = useQuery(
+    api.reportBuilder.dataset,
+    dateFilter
+      ? {
+          report: reportKey,
+          year,
+          month: month === "all" ? undefined : Number(month),
+        }
+      : { report: reportKey },
+  )
 
   const [visible, setVisible] = React.useState<Record<string, boolean>>({})
   const [filters, setFilters] = React.useState<Record<string, string>>({})
   const [search, setSearch] = React.useState("")
   const initialised = React.useRef(false)
+
+  // Keep the last successful dataset so switching the date scope doesn't blank
+  // the table/filters while the new query is in flight.
+  const lastData = React.useRef<typeof data>(undefined)
+  if (data !== undefined) lastData.current = data
+  const effective = data === undefined ? lastData.current : data
+  const refetching = data === undefined && lastData.current != null
 
   // Default every column to visible once the dataset arrives.
   React.useEffect(() => {
@@ -79,10 +119,10 @@ export function ReportBuilderDetail({
     }
   }, [data])
 
-  if (data === undefined) {
+  if (effective === undefined) {
     return <Skeleton className="h-96 w-full" />
   }
-  if (data === null) {
+  if (effective === null) {
     return (
       <p className="text-muted-foreground py-10 text-sm">
         You don&apos;t have access to this report, or it has no data.
@@ -90,8 +130,8 @@ export function ReportBuilderDetail({
     )
   }
 
-  const columns = data.columns as Column[]
-  const rows = data.rows as Row[]
+  const columns = effective.columns as Column[]
+  const rows = effective.rows as Row[]
   const visibleColumns = columns.filter((c) => visible[c.key] !== false)
 
   const activeFilters = Object.entries(filters).filter(
@@ -270,14 +310,52 @@ export function ReportBuilderDetail({
       <Card>
         <CardContent className="flex flex-col gap-3 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Input
-              placeholder="Search…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-64"
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                placeholder="Search…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-64"
+              />
+              {dateFilter && (
+                <div className="flex items-center gap-2">
+                  <Label className="text-muted-foreground sr-only">Period</Label>
+                  <Select
+                    value={month}
+                    onValueChange={(v) => setMonth(v)}
+                  >
+                    <SelectTrigger className="w-[140px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All months</SelectItem>
+                      {MONTH_NAMES.map((name, i) => (
+                        <SelectItem key={i + 1} value={String(i + 1)}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={String(year)}
+                    onValueChange={(v) => setYear(Number(v))}
+                  >
+                    <SelectTrigger className="w-[100px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {YEAR_OPTIONS.map((y) => (
+                        <SelectItem key={y} value={String(y)}>
+                          {y}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
             <p className="text-muted-foreground text-sm">
-              Displaying {filtered.length} item(s)
+              {refetching ? "Loading…" : `Displaying ${filtered.length} item(s)`}
             </p>
           </div>
 

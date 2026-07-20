@@ -61,6 +61,21 @@ export const remove = mutation({
     const { orgId, userId } = await requirePermission(ctx, "employees:manage");
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new Error("Team not found.");
+    // Block deletion while people are still on this team — move them first.
+    const holders = await ctx.db
+      .query("employees")
+      .withIndex("by_org_team", (q) => q.eq("orgId", orgId).eq("teamId", id))
+      .collect();
+    const people = holders.filter(
+      (e) => e.status !== "terminated" && !e.isVacant,
+    );
+    if (people.length > 0) {
+      throw new Error(
+        `Move the ${people.length} ${
+          people.length === 1 ? "person" : "people"
+        } on this team to another one before deleting it.`,
+      );
+    }
     await ctx.db.delete(id);
     await writeAuditLog(ctx, {
       orgId,

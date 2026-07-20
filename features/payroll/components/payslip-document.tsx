@@ -13,6 +13,8 @@ import {
 import {
   DENSITY_GAP_REM,
   normalizeLayout,
+  GRID_COLS,
+  ROW_PX,
   type LayoutBlock,
 } from "@/features/payroll/lib/payslip-layout"
 import type { PayslipBlockType, PayslipDensity } from "@/convex/lib/enums"
@@ -74,7 +76,12 @@ export function PayslipDocument({ slip }: { slip: Payslip }) {
   const accent = template.accentColor
   const density: PayslipDensity = template.density ?? "normal"
   const scale = template.fontScale ?? 1
-  const blocks = effectiveLayout(template).filter((b) => b.visible)
+  // Arrange by grid position: top-to-bottom, then left-to-right. `grid-auto-flow
+  // dense` packs blocks that sit on the same row (e.g. a half-width logo beside
+  // half-width payment details) side by side.
+  const blocks = effectiveLayout(template)
+    .filter((b) => b.visible)
+    .sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
 
   function Group({ type }: { type: LineType }) {
     const lines = slip.lines.filter((l) => l.type === type)
@@ -330,7 +337,7 @@ export function PayslipDocument({ slip }: { slip: Payslip }) {
       case "divider":
         return <hr className="border-t" />
       case "spacer":
-        return <div className="h-4" aria-hidden />
+        return <div className="h-full w-full" aria-hidden />
       default:
         return null
     }
@@ -338,18 +345,40 @@ export function PayslipDocument({ slip }: { slip: Payslip }) {
 
   return (
     <div
-      className="payslip-print bg-card flex flex-col rounded-lg border p-6 lg:p-8"
+      className="payslip-print bg-card grid rounded-lg border p-6 lg:p-8"
       style={{
         fontFamily: template.fontFamily,
         fontSize: `${16 * scale}px`,
         color: template.textColor ?? undefined,
         gap: `${DENSITY_GAP_REM[density]}rem`,
+        gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`,
+        gridAutoFlow: "row dense",
+        alignItems: "start",
       }}
     >
       {blocks.map((block) => {
         const node = renderBlock(block)
         if (node === null) return null
-        return <div key={block.id}>{node}</div>
+        const w = Math.min(GRID_COLS, Math.max(1, block.w ?? GRID_COLS))
+        const x = Math.min(GRID_COLS - w, Math.max(0, block.x ?? 0))
+        // A spacer takes its exact height (it's pure whitespace). Every other
+        // block takes its grid height as a *minimum*, so dragging a block taller
+        // carries through to the page, while content taller than the box still
+        // grows (a table is never clipped).
+        const isSpacer = block.type === "spacer"
+        return (
+          <div
+            key={block.id}
+            style={{
+              gridColumn: `${x + 1} / span ${w}`,
+              height: isSpacer ? `${(block.h ?? 3) * ROW_PX}px` : undefined,
+              minHeight:
+                !isSpacer && block.h ? `${block.h * ROW_PX}px` : undefined,
+            }}
+          >
+            {node}
+          </div>
+        )
       })}
     </div>
   )

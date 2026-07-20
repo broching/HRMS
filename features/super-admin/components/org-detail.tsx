@@ -29,6 +29,7 @@ import {
   IconFiles,
   IconAlertTriangle,
 } from "@tabler/icons-react"
+import { notFound } from "next/navigation"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -39,10 +40,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  Shell,
-  AccessDenied,
-} from "@/features/super-admin/components/super-admin-console"
+import { Shell } from "@/features/super-admin/components/super-admin-console"
 
 // Categorical palette tuned for the dark slate console shell (not app tokens).
 const PALETTE = [
@@ -69,11 +67,8 @@ export function OrgDetail({ orgId }: { orgId: Id<"organizations"> }) {
     )
   }
   if (!me.isSuperAdmin) {
-    return (
-      <Shell>
-        <AccessDenied subject={me.subject} email={me.email} />
-      </Shell>
-    )
+    // Not a super admin → this org drill-down simply doesn't exist for them.
+    notFound()
   }
   return (
     <Shell name={me.name ?? me.email}>

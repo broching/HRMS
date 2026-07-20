@@ -47,6 +47,7 @@ import {
   claimEditEntry,
   paymentRequestStatus,
   paymentRequestField,
+  paymentRequestLayoutBlock,
   paymentRequestShow,
   paymentRequestItem,
   officeMileageSettings,
@@ -95,6 +96,7 @@ import {
   feedback360Answer,
   taskPriority,
   projectPhase,
+  customReportChart,
 } from "./lib/enums";
 
 // Per-module email notification config. `enabled` gates whether emails send for
@@ -311,6 +313,8 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_department", ["orgId", "departmentId"])
+    .index("by_org_team", ["orgId", "teamId"])
+    .index("by_org_position", ["orgId", "positionId"])
     .index("by_org_manager", ["orgId", "managerId"])
     .index("by_org_employeeNumber", ["orgId", "employeeNumber"])
     .index("by_org_loginEmail", ["orgId", "loginEmail"])
@@ -968,6 +972,8 @@ export default defineSchema({
     fontScale: v.optional(v.number()), // 1 = default (~0.85–1.25)
     density: v.optional(payslipDensity),
     show: v.optional(paymentRequestShow), // which sections are visible
+    // Drag/resize block layout (12-col grid). Absent = classic stacked flow.
+    layout: v.optional(v.array(paymentRequestLayoutBlock)),
   }).index("by_org", ["orgId"]),
 
   // Org-wide payment-request configuration (one row per org). Mirrors the claim
@@ -1870,5 +1876,23 @@ export default defineSchema({
     fromName: v.optional(v.string()),
     accentColor: v.optional(v.string()),
     footerText: v.optional(v.string()),
+  }).index("by_org", ["orgId"]),
+
+  // ─── Custom reports (Tableau-style chart builder) ────────────────────────
+
+  // A saved custom report = a small dashboard of chart tiles built over one of
+  // the report-builder datasets. Aggregation is computed client-side from the
+  // dataset rows; only the chart configuration is persisted here. The `charts`
+  // array is bounded by the UI (a handful of tiles), so it stays well under the
+  // 1MB document limit.
+  customReports: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    description: v.optional(v.string()),
+    // Source dataset key (see features/reports/lib/custom-report.ts SOURCES).
+    dataset: v.string(),
+    charts: v.array(customReportChart),
+    createdByUserId: v.id("users"),
+    updatedAt: v.number(),
   }).index("by_org", ["orgId"]),
 });

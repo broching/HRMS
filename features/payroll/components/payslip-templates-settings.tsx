@@ -9,31 +9,15 @@ import {
   IconTrash,
   IconStar,
   IconUpload,
-  IconGripVertical,
+  IconArrowsMove,
   IconEye,
   IconEyeOff,
+  IconPencil,
+  IconLayoutGrid,
 } from "@tabler/icons-react"
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core"
-import {
-  restrictToVerticalAxis,
-  restrictToParentElement,
-} from "@dnd-kit/modifiers"
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable"
-import { CSS } from "@dnd-kit/utilities"
+import ReactGridLayout, { WidthProvider, type Layout } from "react-grid-layout"
+import "react-grid-layout/css/styles.css"
+import "react-resizable/css/styles.css"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import type { PayslipBlockType, PayslipDensity } from "@/convex/lib/enums"
@@ -65,11 +49,23 @@ import {
   BLOCK_META,
   DENSITY_OPTIONS,
   FONT_OPTIONS,
+  GRID_COLS,
+  ROW_PX,
+  defaultBlockHeight,
+  nextRow,
   makeBlock,
   makeDefaultLayout,
   normalizeLayout,
   type LayoutBlock,
 } from "@/features/payroll/lib/payslip-layout"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+
+const GridLayout = WidthProvider(ReactGridLayout)
 
 type Template = FunctionReturnType<typeof api.payslipTemplates.list>[number]
 type Payslip = FunctionReturnType<typeof api.payroll.getPayslip>
@@ -175,116 +171,90 @@ function sampleSlip(form: Form, logoUrl: string | null): Payslip {
   }
 }
 
-// ─── Block builder ──────────────────────────────────────────────────────────
+// ─── Block builder (drag + resize canvas) ───────────────────────────────────
 
-function SortableBlock({
+// One tile on the layout canvas. The whole header is the drag handle; the body
+// carries per-block controls. react-grid-layout owns position + size.
+function BlockTile({
   block,
   onPatch,
   onRemove,
+  onEditText,
 }: {
   block: LayoutBlock
   onPatch: (p: Partial<LayoutBlock>) => void
   onRemove: (() => void) | null
+  onEditText: (() => void) | null
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: block.id })
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.6 : undefined,
-    zIndex: isDragging ? 10 : undefined,
-    position: "relative",
-  }
   const meta = BLOCK_META[block.type]
   return (
     <div
-      ref={setNodeRef}
-      style={style}
-      className="bg-background rounded-md border"
+      className={cn(
+        "bg-background flex h-full flex-col overflow-hidden rounded-md border",
+        !block.visible && "opacity-50",
+      )}
     >
-      <div className="flex items-center gap-2 px-2 py-2">
-        <button
-          type="button"
-          className="text-muted-foreground/50 hover:text-foreground cursor-grab touch-none active:cursor-grabbing"
-          aria-label="Drag to reorder"
-          {...attributes}
-          {...listeners}
-        >
-          <IconGripVertical className="size-4" />
-        </button>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            {meta.label}
-            {!meta.structural && (
-              <Badge variant="secondary" className="text-[10px]">
-                custom
-              </Badge>
-            )}
-          </div>
-          <p className="text-muted-foreground truncate text-xs">{meta.hint}</p>
-        </div>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          className="size-7"
-          aria-label={block.visible ? "Hide block" : "Show block"}
-          onClick={() => onPatch({ visible: !block.visible })}
-        >
-          {block.visible ? (
-            <IconEye className="size-4" />
-          ) : (
-            <IconEyeOff className="text-muted-foreground size-4" />
+      <div className="block-drag flex cursor-move items-center gap-1.5 border-b px-2 py-1.5">
+        <IconArrowsMove className="text-muted-foreground/60 size-3.5 shrink-0" />
+        <span className="truncate text-xs font-medium">{meta.label}</span>
+        {!meta.structural && (
+          <Badge variant="secondary" className="shrink-0 text-[9px]">
+            custom
+          </Badge>
+        )}
+        <div className="ml-auto flex shrink-0 items-center">
+          {onEditText && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="size-6"
+              aria-label="Edit text"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={onEditText}
+            >
+              <IconPencil className="size-3.5" />
+            </Button>
           )}
-        </Button>
-        {onRemove && (
           <Button
             type="button"
             size="icon"
             variant="ghost"
-            className="text-destructive size-7"
-            aria-label="Remove block"
-            onClick={onRemove}
+            className="size-6"
+            aria-label={block.visible ? "Hide block" : "Show block"}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => onPatch({ visible: !block.visible })}
           >
-            <IconTrash className="size-3.5" />
+            {block.visible ? (
+              <IconEye className="size-3.5" />
+            ) : (
+              <IconEyeOff className="text-muted-foreground size-3.5" />
+            )}
           </Button>
+          {onRemove && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="text-destructive size-6"
+              aria-label="Remove block"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={onRemove}
+            >
+              <IconTrash className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+      <div className="text-muted-foreground min-h-0 flex-1 px-2 py-1 text-[11px]">
+        {block.type === "customText" ? (
+          <p className="line-clamp-3 italic">
+            {block.text?.trim() || "Empty text — click the pencil to edit."}
+          </p>
+        ) : (
+          <p className="line-clamp-2">{meta.hint}</p>
         )}
       </div>
-
-      {block.type === "customText" && block.visible && (
-        <div className="flex flex-col gap-2 border-t p-2">
-          <Textarea
-            value={block.text ?? ""}
-            onChange={(e) => onPatch({ text: e.target.value })}
-            placeholder="Text to show on the payslip…"
-            rows={2}
-          />
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-xs">
-              <Switch
-                checked={block.heading ?? false}
-                onCheckedChange={(c) => onPatch({ heading: c })}
-              />
-              Heading style
-            </label>
-            <Select
-              value={block.align ?? "left"}
-              onValueChange={(v) =>
-                onPatch({ align: v as "left" | "center" | "right" })
-              }
-            >
-              <SelectTrigger className="h-8 w-28">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="left">Left</SelectItem>
-                <SelectItem value="center">Center</SelectItem>
-                <SelectItem value="right">Right</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -296,19 +266,32 @@ function BlockBuilder({
   layout: LayoutBlock[]
   onChange: (next: LayoutBlock[]) => void
 }) {
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  )
-  function onDragEnd(e: DragEndEvent) {
-    const { active, over } = e
-    if (!over || active.id === over.id) return
-    const from = layout.findIndex((b) => b.id === active.id)
-    const to = layout.findIndex((b) => b.id === over.id)
-    if (from < 0 || to < 0) return
-    onChange(arrayMove(layout, from, to))
+  const [editId, setEditId] = React.useState<string | null>(null)
+  const editing = layout.find((b) => b.id === editId) ?? null
+
+  const rglLayout: Layout[] = layout.map((b) => ({
+    i: b.id,
+    x: b.x ?? 0,
+    y: b.y ?? 0,
+    w: b.w ?? GRID_COLS,
+    h: b.h ?? defaultBlockHeight(b.type),
+    minW: 2,
+    minH: 2,
+  }))
+
+  function onLayoutChange(next: Layout[]) {
+    const map = new Map(next.map((l) => [l.i, l]))
+    let changed = false
+    const merged = layout.map((b) => {
+      const l = map.get(b.id)
+      if (!l) return b
+      if (b.x !== l.x || b.y !== l.y || b.w !== l.w || b.h !== l.h) {
+        changed = true
+        return { ...b, x: l.x, y: l.y, w: l.w, h: l.h }
+      }
+      return b
+    })
+    if (changed) onChange(merged)
   }
   function patch(id: string, p: Partial<LayoutBlock>) {
     onChange(layout.map((b) => (b.id === id ? { ...b, ...p } : b)))
@@ -317,13 +300,26 @@ function BlockBuilder({
     onChange(layout.filter((b) => b.id !== id))
   }
   function add(type: PayslipBlockType) {
-    onChange([...layout, makeBlock(type)])
+    const b = makeBlock(type)
+    onChange([
+      ...layout,
+      {
+        ...b,
+        x: 0,
+        y: nextRow(layout),
+        w: GRID_COLS,
+        h: defaultBlockHeight(type),
+      },
+    ])
   }
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <Label>Layout blocks</Label>
+        <Label className="flex items-center gap-1.5">
+          <IconLayoutGrid className="size-4" />
+          Layout
+        </Label>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm">
@@ -341,32 +337,88 @@ function BlockBuilder({
         </DropdownMenu>
       </div>
       <p className="text-muted-foreground text-xs">
-        Drag to reorder. Toggle the eye to show/hide a section on the payslip.
+        Drag a block by its header to move it, and drag its bottom-right corner
+        to resize. Position, width and height carry through to the printed
+        payslip.
       </p>
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        modifiers={[restrictToVerticalAxis, restrictToParentElement]}
-        onDragEnd={onDragEnd}
-      >
-        <SortableContext
-          items={layout.map((b) => b.id)}
-          strategy={verticalListSortingStrategy}
+
+      <div className="bg-muted/30 rounded-lg border p-2">
+        <GridLayout
+          className="payslip-layout-grid"
+          layout={rglLayout}
+          cols={GRID_COLS}
+          rowHeight={ROW_PX}
+          margin={[8, 8]}
+          isBounded
+          draggableHandle=".block-drag"
+          onLayoutChange={onLayoutChange}
+          compactType="vertical"
         >
-          <div className="flex flex-col gap-2">
-            {layout.map((b) => (
-              <SortableBlock
-                key={b.id}
+          {layout.map((b) => (
+            <div key={b.id}>
+              <BlockTile
                 block={b}
                 onPatch={(p) => patch(b.id, p)}
                 onRemove={
                   BLOCK_META[b.type].structural ? null : () => remove(b.id)
                 }
+                onEditText={
+                  b.type === "customText" ? () => setEditId(b.id) : null
+                }
               />
-            ))}
-          </div>
-        </SortableContext>
-      </DndContext>
+            </div>
+          ))}
+        </GridLayout>
+      </div>
+
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(o) => !o && setEditId(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit text block</DialogTitle>
+          </DialogHeader>
+          {editing && (
+            <div className="flex flex-col gap-3">
+              <Textarea
+                value={editing.text ?? ""}
+                onChange={(e) => patch(editing.id, { text: e.target.value })}
+                placeholder="Text to show on the payslip…"
+                rows={4}
+                autoFocus
+              />
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-sm">
+                  <Switch
+                    checked={editing.heading ?? false}
+                    onCheckedChange={(c) => patch(editing.id, { heading: c })}
+                  />
+                  Heading style
+                </label>
+                <Select
+                  value={editing.align ?? "left"}
+                  onValueChange={(v) =>
+                    patch(editing.id, {
+                      align: v as "left" | "center" | "right",
+                    })
+                  }
+                >
+                  <SelectTrigger className="h-8 w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="left">Left</SelectItem>
+                    <SelectItem value="center">Center</SelectItem>
+                    <SelectItem value="right">Right</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button onClick={() => setEditId(null)}>Done</Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -716,12 +768,12 @@ export function PayslipTemplatesSettings() {
             </div>
           </div>
 
-          {/* Live preview */}
-          <div className="overflow-hidden">
+          {/* Live preview — sticky so it stays in view while editing/resizing */}
+          <div className="lg:sticky lg:top-4 lg:self-start">
             <p className="text-muted-foreground mb-2 text-xs font-medium uppercase">
               Preview
             </p>
-            <div className="origin-top">
+            <div className="origin-top max-h-[calc(100vh-8rem)] overflow-auto">
               <PayslipDocument slip={sampleSlip(form, selected.logoUrl)} />
             </div>
           </div>

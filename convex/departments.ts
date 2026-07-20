@@ -68,6 +68,23 @@ export const remove = mutation({
     if (!existing || existing.orgId !== orgId) {
       throw new Error("Department not found.");
     }
+    // Block deletion while people still belong here — move them first.
+    const holders = await ctx.db
+      .query("employees")
+      .withIndex("by_org_department", (q) =>
+        q.eq("orgId", orgId).eq("departmentId", id),
+      )
+      .collect();
+    const people = holders.filter(
+      (e) => e.status !== "terminated" && !e.isVacant,
+    );
+    if (people.length > 0) {
+      throw new Error(
+        `Move the ${people.length} ${
+          people.length === 1 ? "person" : "people"
+        } in this department to another one before deleting it.`,
+      );
+    }
     await ctx.db.delete(id);
     await writeAuditLog(ctx, {
       orgId,

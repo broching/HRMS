@@ -3,6 +3,12 @@ import type { api } from "@/convex/_generated/api"
 import type { PaymentRequestShow, PaymentRequestItem } from "@/convex/lib/enums"
 import { formatMoney, requestRef } from "@/features/payment-requests/lib/labels"
 import { countryName } from "@/lib/countries"
+import { GRID_COLS, ROW_PX } from "@/features/payroll/lib/payslip-layout"
+import {
+  prNormalizeLayout,
+  prMakeDefaultLayout,
+  type PrLayoutBlock,
+} from "@/features/payment-requests/lib/pr-layout"
 
 export type PaymentRequestPrint = FunctionReturnType<
   typeof api.paymentRequests.getForPrint
@@ -17,6 +23,8 @@ export type PaymentRequestStyle = {
   fontScale: number | null
   density: "compact" | "normal" | "relaxed" | null
   show: PaymentRequestShow | null
+  // Drag/resize block layout (12-col grid). Absent/null = classic stacked flow.
+  layout?: PrLayoutBlock[] | null
 }
 
 const DEFAULT_SHOW: PaymentRequestShow = {
@@ -49,12 +57,34 @@ export function resolveStyle(style?: PaymentRequestStyle | null) {
     density,
     gap: DENSITY_GAP[density],
     show: { ...DEFAULT_SHOW, ...(style?.show ?? {}) },
+    layout: style?.layout ?? null,
   }
 }
 
-// The printable "Request for Payment" business document. Styled by the template
-// (fonts, colours, density, hidden sections) and rasterized to PDF. `styleOverride`
-// lets the settings preview drive styling without a saved template.
+// Resolve the block list to render: an explicit saved layout (normalized), or a
+// default stacked layout whose visibility is derived from the `show` toggles so
+// pre-layout templates render exactly as before.
+function effectivePrLayout(
+  layout: PrLayoutBlock[] | null,
+  show: PaymentRequestShow,
+): PrLayoutBlock[] {
+  if (layout && layout.length > 0) return prNormalizeLayout(layout)
+  return prMakeDefaultLayout().map((b) => {
+    let visible = b.visible
+    if (b.type === "logo") visible = show.logo
+    if (b.type === "heading") visible = show.heading
+    if (b.type === "attachNote") visible = show.attachNote
+    if (b.type === "signatures") visible = show.signatures
+    if (b.type === "footer") visible = show.footer
+    return { ...b, visible }
+  })
+}
+
+// The printable "Request for Payment" business document, arranged on a 12-column
+// grid from the template's block layout (position + width carry through to the
+// rasterized PDF). Styled by the template (fonts, colours, density) and
+// `styleOverride` lets the settings preview drive styling without a saved
+// template.
 export function PaymentRequestDocument({
   req,
   styleOverride,
@@ -65,10 +95,21 @@ export function PaymentRequestDocument({
   const s = resolveStyle(styleOverride ?? req.style)
   const base = 14 * s.fontScale
 
-  const blocks: { role: string; name: string; url: string | null; date?: number }[] = [
+  const sigBlocks: {
+    role: string
+    name: string
+    url: string | null
+    date?: number
+  }[] = [
     // The requestor's "Requested by" block is optional — some orgs don't need it.
     ...(s.show.requestorSignature
-      ? [{ role: "Requested by", name: req.employeeName, url: req.requestorSignatureUrl }]
+      ? [
+          {
+            role: "Requested by",
+            name: req.employeeName,
+            url: req.requestorSignatureUrl,
+          },
+        ]
       : []),
     ...req.signatures.map((sig) => ({
       role: labelFor(sig.role),
@@ -77,6 +118,184 @@ export function PaymentRequestDocument({
       date: sig.signedAt,
     })),
   ]
+
+  function renderPrBlock(block: PrLayoutBlock): React.ReactNode {
+    switch (block.type) {
+      case "logo":
+        if (!req.logoUrl) return null
+        return (
+          <div style={{ textAlign: "center" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={req.logoUrl}
+              alt={req.orgName}
+              style={{
+                maxHeight: 56,
+                maxWidth: 220,
+                objectFit: "contain",
+                margin: "0 auto",
+              }}
+            />
+          </div>
+        )
+      case "heading":
+        return (
+          <div
+            style={{
+              textAlign: "center",
+              fontSize: 22 * s.fontScale,
+              fontWeight: 700,
+              textDecoration: "underline",
+              letterSpacing: 0.5,
+              color: s.accentColor,
+            }}
+          >
+            {req.headerText}
+          </div>
+        )
+      case "details":
+        return (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: s.gap.fields,
+            }}
+          >
+            <Field label="Date" value={req.requestDate} />
+            <Field label="Requestor's Name" value={req.employeeName} />
+            <Field label="Purpose of Request" value={req.purpose} />
+            {req.items && req.items.length > 0 ? (
+              <ItemsTable
+                items={req.items}
+                currency={req.currency}
+                totalCents={req.amountCents}
+                accentColor={s.accentColor}
+              />
+            ) : (
+              <Field
+                label="Amount Requested"
+                value={formatMoney(req.amountCents, req.currency)}
+              />
+            )}
+            <Field label="Account / Payee Name" value={req.payeeName} />
+            {req.country && (
+              <Field label="Country" value={countryName(req.country)} />
+            )}
+            {req.templateFields.map((f) => {
+              const val = req.fieldValues[f.key]
+              if (!val) return null
+              return <Field key={f.key} label={f.label} value={val} />
+            })}
+            {req.remarks && <Field label="Remarks" value={req.remarks} />}
+          </div>
+        )
+      case "attachNote":
+        return (
+          <div style={{ fontStyle: "italic" }}>
+            Pls attach supporting document with the form.
+          </div>
+        )
+      case "signatures":
+        if (sigBlocks.length === 0) return null
+        return (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: s.gap.sig,
+            }}
+          >
+            {sigBlocks.map((b, i) => (
+              <div key={i}>
+                <div style={{ fontWeight: 600 }}>{b.role}:</div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-end",
+                    gap: 8,
+                    marginTop: 2,
+                  }}
+                >
+                  <span>Signature:</span>
+                  <span
+                    style={{
+                      position: "relative",
+                      display: "inline-block",
+                      minWidth: 220,
+                      height: 44,
+                    }}
+                  >
+                    {b.url && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={b.url}
+                        alt="signature"
+                        style={{
+                          position: "absolute",
+                          bottom: 4,
+                          left: 16,
+                          maxHeight: 38,
+                          maxWidth: 180,
+                          objectFit: "contain",
+                        }}
+                      />
+                    )}
+                    <span
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        borderBottom: "1px solid #111827",
+                      }}
+                    />
+                  </span>
+                </div>
+                <div>Name: {b.name}</div>
+                <div>
+                  Date:{" "}
+                  {b.date
+                    ? new Date(b.date).toISOString().slice(0, 10)
+                    : req.requestDate}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      case "footer":
+        return (
+          <div style={{ fontSize: 11, color: "#6b7280" }}>
+            {requestRef(req.requestNumber)} · {req.orgName}
+          </div>
+        )
+      case "customText":
+        if (!block.text) return null
+        return (
+          <div
+            style={{
+              whiteSpace: "pre-line",
+              textAlign: block.align ?? "left",
+              fontWeight: block.heading ? 700 : 400,
+              fontSize: block.heading ? 18 * s.fontScale : base,
+              color: block.heading ? s.accentColor : undefined,
+            }}
+          >
+            {block.text}
+          </div>
+        )
+      case "divider":
+        return <div style={{ borderTop: "1px solid #e5e7eb" }} />
+      case "spacer":
+        return <div aria-hidden />
+      default:
+        return null
+    }
+  }
+
+  const blocks = effectivePrLayout(s.layout, s.show)
+    .filter((b) => b.visible)
+    .sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
 
   return (
     <div
@@ -89,123 +308,36 @@ export function PaymentRequestDocument({
         lineHeight: 1.55,
       }}
     >
-      {/* Header */}
-      {(s.show.logo || s.show.heading) && (
-        <div style={{ textAlign: "center", marginBottom: 8 }}>
-          {s.show.logo && req.logoUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={req.logoUrl}
-              alt={req.orgName}
-              style={{ maxHeight: 56, maxWidth: 220, objectFit: "contain", margin: "0 auto 6px" }}
-            />
-          )}
-          {s.show.heading && (
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`,
+          gridAutoFlow: "row dense",
+          alignItems: "start",
+          gap: s.gap.sig,
+        }}
+      >
+        {blocks.map((block) => {
+          const node = renderPrBlock(block)
+          if (node === null) return null
+          const w = Math.min(GRID_COLS, Math.max(1, block.w ?? GRID_COLS))
+          const x = Math.min(GRID_COLS - w, Math.max(0, block.x ?? 0))
+          const isSpacer = block.type === "spacer"
+          return (
             <div
+              key={block.id}
               style={{
-                fontSize: 22 * s.fontScale,
-                fontWeight: 700,
-                textDecoration: "underline",
-                letterSpacing: 0.5,
-                color: s.accentColor,
+                gridColumn: `${x + 1} / span ${w}`,
+                height: isSpacer ? (block.h ?? 3) * ROW_PX : undefined,
+                minHeight:
+                  !isSpacer && block.h ? block.h * ROW_PX : undefined,
               }}
             >
-              {req.headerText}
+              {node}
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Fields */}
-      <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: s.gap.fields }}>
-        <Field label="Date" value={req.requestDate} />
-        <Field label="Requestor's Name" value={req.employeeName} />
-        <Field label="Purpose of Request" value={req.purpose} />
-        {/* Itemised requests render a table; single-amount requests a plain row. */}
-        {req.items && req.items.length > 0 ? (
-          <ItemsTable
-            items={req.items}
-            currency={req.currency}
-            totalCents={req.amountCents}
-            accentColor={s.accentColor}
-          />
-        ) : (
-          <Field label="Amount Requested" value={formatMoney(req.amountCents, req.currency)} />
-        )}
-        <Field label="Account / Payee Name" value={req.payeeName} />
-        {req.country && <Field label="Country" value={countryName(req.country)} />}
-        {req.templateFields.map((f) => {
-          const val = req.fieldValues[f.key]
-          if (!val) return null
-          return <Field key={f.key} label={f.label} value={val} />
+          )
         })}
-        {req.remarks && <Field label="Remarks" value={req.remarks} />}
       </div>
-
-      {s.show.attachNote && (
-        <div style={{ marginTop: 12, fontStyle: "italic" }}>
-          Pls attach supporting document with the form.
-        </div>
-      )}
-
-      {/* Signature blocks — the requestor's ("Requested by") first, then each
-          approver. The signature image sits above the line inside a fixed-height
-          box so it rasterizes reliably (nothing overflows its container). */}
-      {s.show.signatures && blocks.length > 0 && (
-        <div style={{ marginTop: 26, display: "flex", flexDirection: "column", gap: s.gap.sig }}>
-          {blocks.map((b, i) => (
-            <div key={i}>
-              <div style={{ fontWeight: 600 }}>{b.role}:</div>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 8, marginTop: 2 }}>
-                <span>Signature:</span>
-                <span
-                  style={{
-                    position: "relative",
-                    display: "inline-block",
-                    minWidth: 220,
-                    height: 44,
-                  }}
-                >
-                  {b.url && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={b.url}
-                      alt="signature"
-                      style={{
-                        position: "absolute",
-                        bottom: 4,
-                        left: 16,
-                        maxHeight: 38,
-                        maxWidth: 180,
-                        objectFit: "contain",
-                      }}
-                    />
-                  )}
-                  <span
-                    style={{
-                      position: "absolute",
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      borderBottom: "1px solid #111827",
-                    }}
-                  />
-                </span>
-              </div>
-              <div>Name: {b.name}</div>
-              <div>
-                Date: {b.date ? new Date(b.date).toISOString().slice(0, 10) : req.requestDate}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {s.show.footer && (
-        <div style={{ marginTop: 24, fontSize: 11, color: "#6b7280" }}>
-          {requestRef(req.requestNumber)} · {req.orgName}
-        </div>
-      )}
     </div>
   )
 }

@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useQuery, useMutation } from "convex/react"
+import { notFound } from "next/navigation"
+import { useQuery, useMutation, useAction } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { toast } from "sonner"
@@ -20,6 +21,9 @@ import {
   IconArchive,
   IconCheck,
   IconInbox,
+  IconServer,
+  IconRefresh,
+  IconCircleCheck,
 } from "@tabler/icons-react"
 import { formatSgd } from "@/convex/lib/plans"
 import { cn } from "@/lib/utils"
@@ -49,12 +53,13 @@ export function SuperAdminConsole() {
     )
   }
 
+  // Anyone who isn't a super admin gets a plain 404 — the console simply does
+  // not exist for them. We deliberately do NOT render a "restricted / here's
+  // your user id" helper: that would echo the caller's Clerk user id back and
+  // advertise the allow-list. Authorization is still enforced server-side on
+  // every Convex query regardless of what the client renders.
   if (!me.isSuperAdmin) {
-    return (
-      <Shell>
-        <AccessDenied subject={me.subject} email={me.email} />
-      </Shell>
-    )
+    notFound()
   }
 
   return (
@@ -102,49 +107,6 @@ export function Shell({
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-8 lg:px-6">{children}</main>
-    </div>
-  )
-}
-
-export function AccessDenied({
-  subject,
-  email,
-}: {
-  subject: string | null
-  email: string | null
-}) {
-  return (
-    <div className="mx-auto max-w-xl py-10">
-      <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
-        <div className="bg-destructive/10 text-destructive mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl">
-          <IconShieldLock className="size-6" />
-        </div>
-        <h1 className="text-xl font-bold">Restricted area</h1>
-        <p className="text-muted-foreground mt-2 text-sm">
-          This console is limited to platform super admins. Your account
-          isn&apos;t on the allow-list.
-        </p>
-
-        {subject && (
-          <div className="mt-6 rounded-xl border border-border bg-muted/40 p-4 text-left">
-            <p className="text-muted-foreground text-xs font-medium">
-              To grant yourself access, add this user ID to the{" "}
-              <code className="bg-background rounded px-1 py-0.5">
-                SUPER_ADMIN_USER_IDS
-              </code>{" "}
-              Convex environment variable (comma-separated):
-            </p>
-            {email && (
-              <p className="text-muted-foreground mt-2 text-xs">
-                Signed in as {email}
-              </p>
-            )}
-            <code className="text-foreground mt-2 block rounded-lg border border-border bg-background p-2.5 text-xs break-all select-all">
-              {subject}
-            </code>
-          </div>
-        )}
-      </div>
     </div>
   )
 }
@@ -315,7 +277,202 @@ function Dashboard() {
         </div>
       </div>
 
+      <PlatformDeployments />
+
       <Leads />
+    </div>
+  )
+}
+
+// ─── Convex fleet (projects & deployments via Management API) ─────────────────
+
+type PlatformProject = {
+  id: string
+  name: string
+  slug: string
+  teamSlug: string
+  createTime: number
+  prodDeploymentName: string | null
+  prodDeploymentUrl: string | null
+  prodLastDeployTime: number | null
+  dashboardUrl: string | null
+  isCurrent: boolean
+}
+
+function PlatformDeployments() {
+  const load = useAction(api.superAdmin.platformProjects)
+  const [state, setState] = React.useState<
+    | { status: "loading" }
+    | {
+        status: "ready"
+        configured: boolean
+        error: string | null
+        projects: PlatformProject[]
+      }
+  >({ status: "loading" })
+  const [refreshing, setRefreshing] = React.useState(false)
+
+  const refresh = React.useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const res = await load({})
+      setState({
+        status: "ready",
+        configured: res.configured,
+        error: res.error,
+        projects: res.projects,
+      })
+    } catch {
+      setState({
+        status: "ready",
+        configured: true,
+        error: "Couldn't reach the Convex Management API.",
+        projects: [],
+      })
+    } finally {
+      setRefreshing(false)
+    }
+  }, [load])
+
+  React.useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  return (
+    <div className="rounded-2xl border border-border bg-card shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="bg-muted text-muted-foreground flex size-9 items-center justify-center rounded-xl">
+            <IconServer className="size-5" />
+          </div>
+          <div>
+            <h2 className="font-semibold">Convex fleet</h2>
+            <p className="text-muted-foreground text-sm">
+              {state.status === "ready" && state.configured
+                ? `${state.projects.length} project${
+                    state.projects.length === 1 ? "" : "s"
+                  } · shared + dedicated Enterprise deployments`
+                : "Projects & deployments across the team"}
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+        >
+          <IconRefresh
+            className={cn("size-4", refreshing && "animate-spin")}
+          />
+          Refresh
+        </Button>
+      </div>
+
+      {state.status === "loading" ? (
+        <div className="p-4">
+          <Skeleton className="h-40 rounded-xl" />
+        </div>
+      ) : !state.configured ? (
+        <div className="text-muted-foreground p-6 text-sm">
+          <p className="text-foreground font-medium">
+            Fleet view not configured
+          </p>
+          <p className="mt-1.5">
+            To list every Convex project (including each Enterprise customer&apos;s
+            dedicated deployment), set two env vars on this deployment with a{" "}
+            <span className="text-foreground font-medium">Team Access Token</span>{" "}
+            from Convex → Team Settings → Access Tokens:
+          </p>
+          <code className="text-foreground mt-3 block rounded-lg border border-border bg-muted/40 p-3 text-xs">
+            CONVEX_MANAGEMENT_TOKEN=ey…
+            <br />
+            CONVEX_TEAM_ID=41
+          </code>
+        </div>
+      ) : state.error ? (
+        <div className="text-destructive p-6 text-sm">
+          <p className="font-medium">Couldn&apos;t load the fleet</p>
+          <p className="text-muted-foreground mt-1 break-all">{state.error}</p>
+        </div>
+      ) : state.projects.length === 0 ? (
+        <div className="text-muted-foreground p-10 text-center text-sm">
+          No Convex projects returned for this team.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Project</TableHead>
+                <TableHead>Production deployment</TableHead>
+                <TableHead>Last deploy</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead className="text-right">Links</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {state.projects.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{p.name}</span>
+                      {p.isCurrent && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-600 uppercase dark:text-emerald-400">
+                          <IconCircleCheck className="size-3" /> This deployment
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-muted-foreground text-xs">
+                      /{p.slug}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {p.prodDeploymentName ? (
+                      <div>
+                        <div className="font-mono text-xs">
+                          {p.prodDeploymentName}
+                        </div>
+                        {p.prodDeploymentUrl && (
+                          <div className="text-muted-foreground/80 font-mono text-[11px] break-all">
+                            {p.prodDeploymentUrl.replace(/^https?:\/\//, "")}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground text-sm">
+                        No prod deployment
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
+                    {p.prodLastDeployTime
+                      ? formatDate(p.prodLastDeployTime)
+                      : "—"}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
+                    {formatDate(p.createTime)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {p.dashboardUrl && (
+                      <Button variant="ghost" size="sm" asChild>
+                        <a
+                          href={p.dashboardUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Dashboard
+                          <IconExternalLink className="size-4" />
+                        </a>
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   )
 }

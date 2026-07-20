@@ -2,8 +2,51 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireOrg, requirePermission } from "./auth";
-import { paymentRequestField, paymentRequestShow, payslipDensity } from "./lib/enums";
+import {
+  paymentRequestField,
+  paymentRequestShow,
+  paymentRequestLayoutBlock,
+  payslipDensity,
+} from "./lib/enums";
 import { writeAuditLog } from "./lib/audit";
+
+// 12-column canvas. Clamp block geometry before storing so a client can never
+// persist NaN/Infinity/out-of-range coordinates (unbounded-number lint on x/y/w/h).
+const GRID_COLS = 12;
+const MAX_ROWS = 400;
+
+function clampInt(n: number, lo: number, hi: number): number {
+  if (!Number.isFinite(n)) return lo;
+  return Math.max(lo, Math.min(hi, Math.round(n)));
+}
+
+type PrLayoutBlockArg = NonNullable<
+  Doc<"paymentRequestTemplates">["layout"]
+>[number];
+
+function sanitizeLayout(
+  layout: PrLayoutBlockArg[] | undefined,
+): PrLayoutBlockArg[] | undefined {
+  if (!layout) return undefined;
+  return layout.map((b) => {
+    if (
+      b.x === undefined &&
+      b.y === undefined &&
+      b.w === undefined &&
+      b.h === undefined
+    ) {
+      return b;
+    }
+    const w = clampInt(b.w ?? GRID_COLS, 1, GRID_COLS);
+    return {
+      ...b,
+      w,
+      x: clampInt(b.x ?? 0, 0, GRID_COLS - w),
+      y: clampInt(b.y ?? 0, 0, MAX_ROWS),
+      h: clampInt(b.h ?? 2, 1, MAX_ROWS),
+    };
+  });
+}
 
 // The default "Request for Payment" template, modelled on the sample forms:
 // core fields (purpose/amount/currency/payee/date) are always shown, so the
@@ -32,6 +75,7 @@ const templateRow = v.object({
   fontScale: v.union(v.number(), v.null()),
   density: v.union(payslipDensity, v.null()),
   show: v.union(paymentRequestShow, v.null()),
+  layout: v.union(v.array(paymentRequestLayoutBlock), v.null()),
 });
 
 function toRow(t: Doc<"paymentRequestTemplates">) {
@@ -50,6 +94,7 @@ function toRow(t: Doc<"paymentRequestTemplates">) {
     fontScale: t.fontScale ?? null,
     density: t.density ?? null,
     show: t.show ?? null,
+    layout: t.layout ?? null,
   };
 }
 
@@ -96,6 +141,7 @@ export const save = mutation({
     fontScale: v.optional(v.number()),
     density: v.optional(payslipDensity),
     show: v.optional(paymentRequestShow),
+    layout: v.optional(v.array(paymentRequestLayoutBlock)),
   },
   returns: v.id("paymentRequestTemplates"),
   handler: async (ctx, args) => {
@@ -136,6 +182,7 @@ export const save = mutation({
       fontScale: args.fontScale,
       density: args.density,
       show: args.show,
+      layout: sanitizeLayout(args.layout),
     };
 
     let id: Id<"paymentRequestTemplates">;

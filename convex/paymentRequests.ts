@@ -1512,6 +1512,7 @@ export const getForPrint = query({
           fontScale: template?.fontScale ?? null,
           density: template?.density ?? null,
           show: template?.show ?? null,
+          layout: template?.layout ?? null,
         },
         employeeName: emp ? `${emp.firstName} ${emp.lastName}` : "Unknown",
         purpose: r.purpose,

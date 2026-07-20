@@ -11,6 +11,45 @@ import {
 import { payslipTemplateRow, payslipTemplateConfig } from "./lib/validators";
 import { DEFAULT_PAYSLIP_TEMPLATE } from "./lib/sgDefaults";
 
+// 12-column canvas. Clamp block grid geometry to sane bounds before storing so
+// a client can never persist NaN/Infinity/out-of-range coordinates (see the
+// unbounded-number lint on payslipLayoutBlock's x/y/w/h).
+const GRID_COLS = 12;
+const MAX_ROWS = 400;
+
+function clampInt(n: number, lo: number, hi: number): number {
+  if (!Number.isFinite(n)) return lo;
+  return Math.max(lo, Math.min(hi, Math.round(n)));
+}
+
+type LayoutBlockArg = NonNullable<
+  Doc<"payslipTemplates">["layout"]
+>[number];
+
+function sanitizeGeometry(
+  layout: LayoutBlockArg[] | null | undefined,
+): LayoutBlockArg[] | undefined {
+  if (!layout) return undefined;
+  return layout.map((b) => {
+    if (
+      b.x === undefined &&
+      b.y === undefined &&
+      b.w === undefined &&
+      b.h === undefined
+    ) {
+      return b; // legacy block without geometry — leave as-is
+    }
+    const w = clampInt(b.w ?? GRID_COLS, 1, GRID_COLS);
+    return {
+      ...b,
+      w,
+      x: clampInt(b.x ?? 0, 0, GRID_COLS - w),
+      y: clampInt(b.y ?? 0, 0, MAX_ROWS),
+      h: clampInt(b.h ?? 2, 1, MAX_ROWS),
+    };
+  });
+}
+
 // Ensure the org has at least one payslip template; returns the default's id.
 export async function ensureDefaultTemplate(
   ctx: MutationCtx,
@@ -171,7 +210,7 @@ export const create = mutation({
       headerText: args.headerText?.trim() || undefined,
       footerText: args.footerText?.trim() || undefined,
       show: args.show,
-      layout: args.layout,
+      layout: sanitizeGeometry(args.layout),
       textColor: args.textColor,
       fontScale: args.fontScale,
       density: args.density,
@@ -219,7 +258,8 @@ export const update = mutation({
     if (args.footerText !== undefined)
       patch.footerText = args.footerText?.trim() || undefined;
     if (args.show !== undefined) patch.show = args.show;
-    if (args.layout !== undefined) patch.layout = args.layout ?? undefined;
+    if (args.layout !== undefined)
+      patch.layout = sanitizeGeometry(args.layout);
     if (args.textColor !== undefined)
       patch.textColor = args.textColor ?? undefined;
     if (args.fontScale !== undefined)

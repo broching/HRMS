@@ -37,6 +37,33 @@ type LocaleForm = {
   fiscalYearStartMonth: string // "1".."12"
 }
 
+/** All IANA timezones the runtime knows about, sorted. Falls back to a small
+ * common set if `Intl.supportedValuesOf` is unavailable. */
+const TIMEZONES: string[] = (() => {
+  const supported = (
+    Intl as unknown as {
+      supportedValuesOf?: (key: string) => string[]
+    }
+  ).supportedValuesOf
+  try {
+    if (supported) return supported("timeZone")
+  } catch {
+    // fall through to the static list
+  }
+  return [
+    "UTC",
+    "Asia/Singapore",
+    "Asia/Kuala_Lumpur",
+    "Asia/Hong_Kong",
+    "Asia/Tokyo",
+    "Asia/Kolkata",
+    "Australia/Sydney",
+    "Europe/London",
+    "America/New_York",
+    "America/Los_Angeles",
+  ]
+})()
+
 export function OrgSettings() {
   const me = useCurrentMember()
   const org = useQuery(api.organizations.current)
@@ -279,12 +306,27 @@ export function OrgSettings() {
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="timezone">Timezone</Label>
-                <Input
-                  id="timezone"
+                <Select
                   value={form.timezone}
-                  onChange={(e) => set("timezone", e.target.value)}
-                  placeholder="Asia/Singapore"
-                />
+                  onValueChange={(v) => set("timezone", v)}
+                >
+                  <SelectTrigger id="timezone">
+                    <SelectValue placeholder="Select a timezone" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {/* Keep a stored value that's no longer in the list selectable. */}
+                    {form.timezone && !TIMEZONES.includes(form.timezone) && (
+                      <SelectItem value={form.timezone}>
+                        {form.timezone}
+                      </SelectItem>
+                    )}
+                    {TIMEZONES.map((tz) => (
+                      <SelectItem key={tz} value={tz}>
+                        {tz}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="weekStart">Week starts on</Label>

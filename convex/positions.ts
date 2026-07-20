@@ -64,6 +64,23 @@ export const remove = mutation({
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId)
       throw new Error("Position not found.");
+    // Block deletion while people still hold this position — move them first.
+    const holders = await ctx.db
+      .query("employees")
+      .withIndex("by_org_position", (q) =>
+        q.eq("orgId", orgId).eq("positionId", id),
+      )
+      .collect();
+    const people = holders.filter(
+      (e) => e.status !== "terminated" && !e.isVacant,
+    );
+    if (people.length > 0) {
+      throw new Error(
+        `Reassign the ${people.length} ${
+          people.length === 1 ? "person" : "people"
+        } in this position before deleting it.`,
+      );
+    }
     await ctx.db.delete(id);
     await writeAuditLog(ctx, {
       orgId,

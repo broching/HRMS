@@ -2,7 +2,7 @@
 
 import { getErrorMessage } from "@/lib/errors"
 import * as React from "react"
-import { useQuery, useMutation } from "convex/react"
+import { useMutation } from "convex/react"
 import { toast } from "sonner"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -10,13 +10,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   ToggleGroup,
   ToggleGroupItem,
@@ -72,7 +65,6 @@ export function ShiftEditorDialog({
   defaultStart?: string
   defaultEnd?: string
 }) {
-  const templates = useQuery(api.shiftTemplates.list)
   const assign = useMutation(api.schedules.assign)
   const updateShift = useMutation(api.schedules.updateAssignment)
   const removeShift = useMutation(api.schedules.removeAssignment)
@@ -88,7 +80,6 @@ export function ShiftEditorDialog({
       : null
 
   const [type, setType] = React.useState<BlockType>(defaultType)
-  const [templateId, setTemplateId] = React.useState("custom")
   const [startTime, setStartTime] = React.useState("09:00")
   const [endTime, setEndTime] = React.useState("17:00")
   const [breakMinutes, setBreakMinutes] = React.useState("60")
@@ -98,7 +89,6 @@ export function ShiftEditorDialog({
 
   React.useEffect(() => {
     if (!open) return
-    setTemplateId("custom")
     if (existingShift) {
       setType("shift")
       setStartTime(existingShift.startTime)
@@ -120,17 +110,6 @@ export function ShiftEditorDialog({
       setNote("")
     }
   }, [open, existingShift, existingOvertime, defaultType, defaultStart, defaultEnd])
-
-  function pickTemplate(id: string) {
-    setTemplateId(id)
-    if (id === "custom") return
-    const tpl = templates?.find((t) => t._id === id)
-    if (tpl) {
-      setStartTime(tpl.startTime)
-      setEndTime(tpl.endTime)
-      setBreakMinutes(String(tpl.breakMinutes))
-    }
-  }
 
   async function submit() {
     setBusy(true)
@@ -157,10 +136,6 @@ export function ShiftEditorDialog({
         await assign({
           employeeId,
           date,
-          shiftTemplateId:
-            templateId === "custom"
-              ? undefined
-              : (templateId as Id<"shiftTemplates">),
           startTime,
           endTime,
           breakMinutes: Number(breakMinutes) || 0,
@@ -235,25 +210,6 @@ export function ShiftEditorDialog({
                 Overtime
               </ToggleGroupItem>
             </ToggleGroup>
-          )}
-
-          {!editing && type === "shift" && (
-            <div className="flex flex-col gap-1.5">
-              <Label>Shift template</Label>
-              <Select value={templateId} onValueChange={pickTemplate}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Custom times" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="custom">Custom times</SelectItem>
-                  {templates?.map((t) => (
-                    <SelectItem key={t._id} value={t._id}>
-                      {t.name} ({t.startTime}–{t.endTime})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
           )}
 
           <div className="grid grid-cols-3 gap-3">

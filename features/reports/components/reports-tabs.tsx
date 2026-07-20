@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 const TABS = [
   { label: "Statistics", href: "/hr-lounge/reports", exact: true },
   { label: "Report builder", href: "/hr-lounge/reports/builder" },
+  { label: "Custom reports", href: "/hr-lounge/reports/custom" },
 ]
 
 export function ReportsTabs() {

@@ -78,6 +78,48 @@ export async function defaultPatternFor(
   return patterns.find((p) => p.isDefault) ?? null;
 }
 
+// The standard work week every org starts with: Monday–Friday, 09:00–17:00 with
+// a 60-minute break, weekends off. Mon-first, exactly 7 entries. Fully editable.
+export function standardWorkWeekDays() {
+  return Array.from({ length: 7 }, (_, i) => {
+    const weekend = i >= 5; // 0=Mon … 4=Fri, 5=Sat, 6=Sun
+    return {
+      off: weekend,
+      startTime: weekend ? undefined : "09:00",
+      endTime: weekend ? undefined : "17:00",
+      breakMinutes: weekend ? undefined : 60,
+    };
+  });
+}
+
+/**
+ * Guarantee the org has a default work pattern. If one is already marked
+ * default, returns it. If the org has no patterns at all, creates the standard
+ * 9–5 Mon–Fri pattern as the default. If patterns exist but none is default
+ * (unusual), leaves them alone and returns null. Idempotent.
+ */
+export async function ensureDefaultWorkPattern(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  userId?: Id<"users">,
+): Promise<Id<"workPatterns"> | null> {
+  const existing = await ctx.db
+    .query("workPatterns")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const current = existing.find((p) => p.isDefault);
+  if (current) return current._id;
+  if (existing.length > 0) return null;
+  return await ctx.db.insert("workPatterns", {
+    orgId,
+    name: "Standard hours (Mon–Fri, 9–5)",
+    days: standardWorkWeekDays(),
+    color: "#6366f1",
+    isDefault: true,
+    updatedBy: userId,
+  });
+}
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 export const list = query({
@@ -219,6 +261,18 @@ export const setDefault = mutation({
     await clearDefault(ctx, orgId);
     await ctx.db.patch(id, { isDefault: true });
     return null;
+  },
+});
+
+// Ensure the org has its standard default work pattern — seeds the 9–5 Mon–Fri
+// default for orgs that have none. Called on the settings surface so every org
+// (including ones created before this default existed) always has one.
+export const ensureDefault = mutation({
+  args: {},
+  returns: v.union(v.id("workPatterns"), v.null()),
+  handler: async (ctx) => {
+    const { orgId, userId } = await requirePermission(ctx, "scheduling:manage");
+    return await ensureDefaultWorkPattern(ctx, orgId, userId);
   },
 });
 

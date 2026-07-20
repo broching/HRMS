@@ -8,6 +8,7 @@ import {
 } from "./lib/sgDefaults";
 import { ensureDefaultCompetencies } from "./competencies";
 import { ensureDefaultFormTemplates } from "./appraisalFormTemplates";
+import { ensureDefaultWorkPattern } from "./workPatterns";
 
 /**
  * Per-organization seeding, run once when an organization is first synced
@@ -54,6 +55,9 @@ export const seedOrganization = internalMutation({
     });
     await ensureDefaultCompetencies(ctx, orgId);
     await ensureDefaultFormTemplates(ctx, orgId);
+    // Every org starts with the standard 9–5 Mon–Fri work pattern as its
+    // scheduling default (editable under Roster & overtime → Work patterns).
+    await ensureDefaultWorkPattern(ctx, orgId);
     return null;
   },
 });

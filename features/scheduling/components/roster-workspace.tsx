@@ -4,14 +4,14 @@ import { useSearchParams } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RosterBoard } from "./roster-board"
 import { RosterReports } from "./roster-reports"
-import { SchedulingSettings } from "./scheduling-settings"
+import { WorkPatternsSettings } from "./work-patterns-settings"
 
 /**
  * Roster & OT workspace: the scheduling board, the cross-source reports, and —
- * for org managers (HR Lounge) — the shift setup (work patterns + shift
- * templates), all sharing a scope. `team` (Team workspace) is limited to the
- * caller's reports and hides setup; `org` (HR Lounge) covers all employees and
- * owns the configuration. The active tab is deep-linkable via `?view=`.
+ * for org managers (HR Lounge) — the work-pattern setup, all sharing a scope.
+ * `team` (Team workspace) is limited to the caller's reports and hides setup;
+ * `org` (HR Lounge) covers all employees and owns the configuration. The active
+ * tab is deep-linkable via `?view=` (`setup` kept for old shift-setup links).
  */
 export function RosterWorkspace({ scope }: { scope: "team" | "org" }) {
   const view = useSearchParams().get("view")
@@ -19,8 +19,8 @@ export function RosterWorkspace({ scope }: { scope: "team" | "org" }) {
   const initial =
     view === "reports"
       ? "reports"
-      : view === "setup" && showSetup
-        ? "setup"
+      : (view === "setup" || view === "patterns") && showSetup
+        ? "patterns"
         : "roster"
 
   return (
@@ -29,7 +29,9 @@ export function RosterWorkspace({ scope }: { scope: "team" | "org" }) {
         <TabsList>
           <TabsTrigger value="roster">Roster</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>
-          {showSetup && <TabsTrigger value="setup">Shift setup</TabsTrigger>}
+          {showSetup && (
+            <TabsTrigger value="patterns">Work patterns</TabsTrigger>
+          )}
         </TabsList>
       </div>
       <TabsContent value="roster">
@@ -39,8 +41,8 @@ export function RosterWorkspace({ scope }: { scope: "team" | "org" }) {
         <RosterReports scope={scope} />
       </TabsContent>
       {showSetup && (
-        <TabsContent value="setup">
-          <SchedulingSettings />
+        <TabsContent value="patterns">
+          <WorkPatternsSettings />
         </TabsContent>
       )}
     </Tabs>

@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import type { QueryCtx, MutationCtx } from "./_generated/server";
+import { query, mutation, action } from "./_generated/server";
+import type { QueryCtx, MutationCtx, ActionCtx } from "./_generated/server";
 import {
   PLANS,
   isPaidPlanKey,
@@ -41,7 +41,9 @@ function superAdminIds(): Set<string> {
 }
 
 /** Throw unless the verified caller is on the super-admin allow-list. */
-export async function requireSuperAdmin(ctx: QueryCtx | MutationCtx) {
+export async function requireSuperAdmin(
+  ctx: QueryCtx | MutationCtx | ActionCtx,
+) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     throw new ConvexError({
@@ -59,27 +61,30 @@ export async function requireSuperAdmin(ctx: QueryCtx | MutationCtx) {
   return identity;
 }
 
-// Safe for any signed-in user: reports only the caller's own identity plus
-// whether they are a super admin. Used by the console to show a setup hint (the
-// caller's own user id) without leaking the allow-list.
+// Safe for any signed-in user, but deliberately tight-lipped: it reports whether
+// the caller is a super admin and NOTHING that identifies them unless they are.
+// Non-super-admins never receive their own user id / email here — the console
+// treats them as a 404, so there is no page that echoes a Clerk user id back to
+// a random signed-in user (which would hand out the exact value needed to probe
+// the SUPER_ADMIN_USER_IDS allow-list).
 export const whoami = query({
   args: {},
   returns: v.object({
-    subject: v.union(v.string(), v.null()),
     email: v.union(v.string(), v.null()),
     name: v.union(v.string(), v.null()),
     isSuperAdmin: v.boolean(),
   }),
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return { subject: null, email: null, name: null, isSuperAdmin: false };
+    const isSuperAdmin =
+      !!identity && superAdminIds().has(identity.subject);
+    if (!identity || !isSuperAdmin) {
+      return { email: null, name: null, isSuperAdmin };
     }
     return {
-      subject: identity.subject,
       email: (identity.email as string | undefined) ?? null,
       name: (identity.name as string | undefined) ?? null,
-      isSuperAdmin: superAdminIds().has(identity.subject),
+      isSuperAdmin: true,
     };
   },
 });
@@ -677,5 +682,167 @@ export const setOrgModules = mutation({
       await ctx.db.insert("orgModules", { orgId: args.orgId, disabled });
     }
     return disabled;
+  },
+});
+
+// ─── Platform: Convex projects & deployments (Management API) ─────────────────
+
+/**
+ * Every Convex project in our team, each with its production deployment URL.
+ *
+ * Enterprise customers run on a **dedicated, single-tenant Convex deployment**
+ * (its own database + keys), created as a **separate project** in the same
+ * Convex team (see docs/enterprise-deployments.md). Those projects never appear
+ * in the tenant-data queries above — they live in a different deployment — so
+ * this action reaches out to the Convex **Management API** to enumerate them
+ * alongside the shared deployment, giving the console a single fleet view.
+ *
+ * Auth: `Bearer` a **Team Access Token** (Convex dashboard → Team Settings →
+ * Access Tokens). Configure two env vars on THIS deployment:
+ *   - `CONVEX_MANAGEMENT_TOKEN` — the team access token
+ *   - `CONVEX_TEAM_ID`          — the numeric team id shown when creating it
+ * The token is read server-side only and never reaches the client. Absent
+ * config degrades gracefully to `configured: false` (the console shows a setup
+ * hint, visible only to super admins).
+ */
+const platformProjectRow = v.object({
+  id: v.string(),
+  name: v.string(),
+  slug: v.string(),
+  teamSlug: v.string(),
+  createTime: v.number(),
+  prodDeploymentName: v.union(v.string(), v.null()),
+  prodDeploymentUrl: v.union(v.string(), v.null()),
+  prodLastDeployTime: v.union(v.number(), v.null()),
+  dashboardUrl: v.union(v.string(), v.null()),
+  isCurrent: v.boolean(),
+});
+
+export const platformProjects = action({
+  args: {},
+  returns: v.object({
+    configured: v.boolean(),
+    error: v.union(v.string(), v.null()),
+    currentDeploymentUrl: v.union(v.string(), v.null()),
+    projects: v.array(platformProjectRow),
+  }),
+  handler: async (ctx) => {
+    await requireSuperAdmin(ctx);
+
+    const token = process.env.CONVEX_MANAGEMENT_TOKEN;
+    const teamId = process.env.CONVEX_TEAM_ID;
+    // System env every Convex deployment sets — the URL of THIS deployment, so
+    // we can flag which project's prod deployment is the one we're running on.
+    const currentUrl = process.env.CONVEX_CLOUD_URL ?? null;
+
+    if (!token || !teamId) {
+      return {
+        configured: false,
+        error: null,
+        currentDeploymentUrl: currentUrl,
+        projects: [],
+      };
+    }
+
+    const base = "https://api.convex.dev/v1";
+    const headers = { Authorization: `Bearer ${token}` };
+
+    // Follow cursor pagination until exhausted; `items` + `pagination` shape is
+    // consistent across the Management API's paginated endpoints.
+    async function fetchAll(
+      path: string,
+      params: Record<string, string>,
+    ): Promise<Array<Record<string, unknown>>> {
+      const out: Array<Record<string, unknown>> = [];
+      let cursor: string | null = null;
+      // Bound the loop so a misbehaving cursor can never spin forever.
+      for (let page = 0; page < 100; page++) {
+        const url = new URL(`${base}${path}`);
+        url.searchParams.set("limit", "100");
+        for (const [k, val] of Object.entries(params)) {
+          url.searchParams.set(k, val);
+        }
+        if (cursor) url.searchParams.set("cursor", cursor);
+        const res = await fetch(url.toString(), { headers });
+        if (!res.ok) {
+          throw new Error(
+            `Convex Management API ${path} → ${res.status} ${res.statusText}`,
+          );
+        }
+        const body = (await res.json()) as {
+          items?: Array<Record<string, unknown>>;
+          pagination?: { hasMore?: boolean; nextCursor?: string | null };
+        };
+        if (Array.isArray(body.items)) out.push(...body.items);
+        const pg = body.pagination;
+        if (pg?.hasMore && pg.nextCursor) {
+          cursor = pg.nextCursor;
+        } else {
+          break;
+        }
+      }
+      return out;
+    }
+
+    try {
+      const projects = await fetchAll(`/teams/${teamId}/projects`, {});
+      const deployments = await fetchAll(`/teams/${teamId}/list_deployments`, {
+        deploymentType: "prod",
+      });
+
+      // Pick each project's default cloud prod deployment (fall back to any).
+      const prodByProject = new Map<string, Record<string, unknown>>();
+      for (const d of deployments) {
+        if (d.kind !== "cloud") continue;
+        const key = String(d.projectId);
+        const existing = prodByProject.get(key);
+        if (!existing || (d.isDefault === true && existing.isDefault !== true)) {
+          prodByProject.set(key, d);
+        }
+      }
+
+      const rows = projects.map((p) => {
+        const dep = prodByProject.get(String(p.id)) ?? null;
+        const prodUrl = (dep?.deploymentUrl as string | undefined) ?? null;
+        const slug = String(p.slug ?? "");
+        const teamSlug = String(p.teamSlug ?? "");
+        return {
+          id: String(p.id),
+          name: String(p.name ?? slug),
+          slug,
+          teamSlug,
+          createTime: Number(p.createTime ?? 0),
+          prodDeploymentName:
+            (dep?.name as string | undefined) ??
+            (p.prodDeploymentName as string | undefined) ??
+            null,
+          prodDeploymentUrl: prodUrl,
+          prodLastDeployTime:
+            dep && typeof dep.lastDeployTime === "number"
+              ? dep.lastDeployTime
+              : null,
+          dashboardUrl:
+            teamSlug && slug
+              ? `https://dashboard.convex.dev/t/${teamSlug}/${slug}`
+              : null,
+          isCurrent: !!prodUrl && !!currentUrl && prodUrl === currentUrl,
+        };
+      });
+      rows.sort((a, b) => b.createTime - a.createTime);
+
+      return {
+        configured: true,
+        error: null,
+        currentDeploymentUrl: currentUrl,
+        projects: rows,
+      };
+    } catch (e) {
+      return {
+        configured: true,
+        error: e instanceof Error ? e.message : String(e),
+        currentDeploymentUrl: currentUrl,
+        projects: [],
+      };
+    }
   },
 });
