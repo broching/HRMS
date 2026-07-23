@@ -1,13 +1,18 @@
 "use client"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useTabParam } from "@/hooks/use-tab-param"
 import { PaymentRequestSettingsGeneral } from "./payment-request-settings-general"
 import { PaymentRequestTemplatesSettings } from "./payment-request-templates-settings"
 import { ModuleEmailSettings } from "@/features/org-settings/components/email-settings"
 
+const TABS = ["general", "templates", "email"] as const
+
 export function PaymentRequestSettingsShell() {
+  // Deep-linkable via `?tab=` so the global search can open a specific tab.
+  const [tab, setTab] = useTabParam(TABS, "general")
   return (
-    <Tabs defaultValue="general" className="gap-4">
+    <Tabs value={tab} onValueChange={setTab} className="gap-4">
       <div className="px-4 lg:px-6">
         <TabsList>
           <TabsTrigger value="general">Approval flow</TabsTrigger>

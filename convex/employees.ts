@@ -52,6 +52,16 @@ export async function employeeByUserId(
   return matches.find((e) => e.orgId === orgId) ?? null;
 }
 
+// The encrypted national-ID ciphertext is stored on the row but must never reach
+// a client — `employeeDoc` (and every query returning it) deliberately omits it.
+// Strip it from a raw row before returning so strict returns validation passes.
+function stripSensitive<T extends { idNumberEncrypted?: string }>(
+  employee: T,
+): Omit<T, "idNumberEncrypted"> {
+  const { idNumberEncrypted: _omit, ...safe } = employee;
+  return safe;
+}
+
 // Resolve an employee any org member may view. Basic profile (name, job,
 // experience/education, training) is directory-level information available to
 // every colleague — the sensitive sections (personal details, documents,
@@ -614,7 +624,8 @@ export const me = query({
   handler: async (ctx) => {
     const orgCtx = await getOrgContext(ctx);
     if (!orgCtx) return null;
-    return await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    const employee = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
+    return employee ? stripSensitive(employee) : null;
   },
 });
 
@@ -627,12 +638,13 @@ export const listMyTeam = query({
     if (!orgCtx) return [];
     const own = await employeeByUserId(ctx, orgCtx.orgId, orgCtx.userId);
     if (!own) return [];
-    return await ctx.db
+    const reports = await ctx.db
       .query("employees")
       .withIndex("by_org_manager", (q) =>
         q.eq("orgId", orgCtx.orgId).eq("managerId", own._id),
       )
       .collect();
+    return reports.map(stripSensitive);
   },
 });
 

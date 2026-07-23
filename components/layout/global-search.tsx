@@ -131,7 +131,7 @@ export function GlobalSearch() {
               ) : (
                 results.map((entry, i) => (
                   <button
-                    key={`${entry.context}:${entry.href}:${entry.label}`}
+                    key={`${entry.context}:${entry.href}:${entry.group ?? ""}:${entry.label}`}
                     type="button"
                     onClick={() => go(entry)}
                     onMouseMove={() => setActive(i)}
@@ -141,7 +141,21 @@ export function GlobalSearch() {
                     )}
                   >
                     <entry.icon className="text-muted-foreground size-4 shrink-0" />
-                    <span className="flex-1 truncate">{entry.label}</span>
+                    <span className="flex-1 truncate">
+                      {entry.group ? (
+                        <>
+                          <span className="text-muted-foreground">
+                            {entry.group}
+                          </span>
+                          <span className="text-muted-foreground/60 px-1">
+                            ›
+                          </span>
+                          {entry.label}
+                        </>
+                      ) : (
+                        entry.label
+                      )}
+                    </span>
                     <span className="text-muted-foreground shrink-0 text-xs">
                       {entry.context}
                     </span>

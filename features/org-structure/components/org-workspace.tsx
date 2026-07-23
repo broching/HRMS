@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { useSearchParams } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useCurrentMember } from "@/hooks/use-current-member"
+import { useTabParam } from "@/hooks/use-tab-param"
 import { permitted } from "@/convex/lib/permissions"
 import { OrgSettings } from "@/features/org-settings/components/org-settings"
 import { OrgStructureManager } from "./org-structure-manager"
@@ -20,7 +20,9 @@ import { RolesManager } from "./roles-manager"
 export function OrgWorkspace() {
   const member = useCurrentMember()
   const perms = member?.permissions
-  const tab = useSearchParams().get("tab")
+  // Deep-linkable + reactive so the global search can open Structure or Roles
+  // directly, even when already on this page.
+  const [tab, setTab] = useTabParam(["organization", "structure", "roles"], "organization")
 
   const tabs = [
     permitted(perms, "org:manage") && {
@@ -55,11 +57,10 @@ export function OrgWorkspace() {
   if (member === undefined) return null // still loading permissions
   if (tabs.length === 0) return null
 
-  const initial =
-    tab && tabs.some((t) => t.value === tab) ? tab : tabs[0].value
+  const active = tabs.some((t) => t.value === tab) ? tab : tabs[0].value
 
   return (
-    <Tabs defaultValue={initial} className="gap-4">
+    <Tabs value={active} onValueChange={setTab} className="gap-4">
       <div className="px-4 lg:px-6">
         <TabsList>
           {tabs.map((t) => (

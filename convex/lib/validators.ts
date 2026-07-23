@@ -144,6 +144,8 @@ const employeeFields = {
   lastName: v.string(),
   preferredName: v.optional(v.string()),
   photoStorageId: v.optional(v.id("_storage")),
+  // Denormalized serving URL for photoStorageId (cached at write time).
+  photoUrl: v.optional(v.string()),
   dob: v.optional(v.string()),
   gender: v.optional(gender),
   maritalStatus: v.optional(maritalStatus),

@@ -1,10 +1,13 @@
 "use client"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useTabParam } from "@/hooks/use-tab-param"
 import { ClaimSettingsGeneral } from "./claim-settings-general"
 import { ClaimSettings } from "./claim-settings"
 import { ClaimGroupsSettings } from "./claim-groups-settings"
 import { ModuleEmailSettings } from "@/features/org-settings/components/email-settings"
+
+const TABS = ["general", "types", "groups", "email", "custom"] as const
 
 function ComingSoon({ label }: { label: string }) {
   return (
@@ -15,8 +18,10 @@ function ComingSoon({ label }: { label: string }) {
 }
 
 export function ClaimSettingsShell() {
+  // Deep-linkable via `?tab=` so the global search can open a specific tab.
+  const [tab, setTab] = useTabParam(TABS, "general")
   return (
-    <Tabs defaultValue="general" className="gap-4">
+    <Tabs value={tab} onValueChange={setTab} className="gap-4">
       <div className="px-4 lg:px-6">
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>

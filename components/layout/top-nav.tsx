@@ -150,11 +150,11 @@ export function TopNav() {
           {/* Right */}
 
           <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
-            {/* Search hides on the narrowest phones (still on ⌘K) to leave room
-                for notifications, the user menu and the nav hamburger. */}
-            <div className="hidden sm:block">
-              <GlobalSearch />
-            </div>
+            {/* Search is available everywhere — the trigger collapses to an
+                icon-only button on phones (below lg) and expands to the labelled
+                pill on wider screens. Tapping it opens the same command palette
+                as ⌘K / Ctrl-K. */}
+            <GlobalSearch />
 
             <div className="rounded-xl border border-white/20 bg-white/10 p-1 backdrop-blur-md">
               <NotificationCenter />

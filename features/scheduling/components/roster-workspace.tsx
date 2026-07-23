@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useTabParam } from "@/hooks/use-tab-param"
 import { RosterBoard } from "./roster-board"
 import { RosterReports } from "./roster-reports"
 import { WorkPatternsSettings } from "./work-patterns-settings"
@@ -14,17 +15,19 @@ import { WorkPatternsSettings } from "./work-patterns-settings"
  * tab is deep-linkable via `?view=` (`setup` kept for old shift-setup links).
  */
 export function RosterWorkspace({ scope }: { scope: "team" | "org" }) {
-  const view = useSearchParams().get("view")
   const showSetup = scope === "org"
-  const initial =
-    view === "reports"
-      ? "reports"
-      : (view === "setup" || view === "patterns") && showSetup
-        ? "patterns"
-        : "roster"
+  const rawView = useSearchParams().get("view")
+  // Deep-linkable + reactive so the global search can open Reports / Work
+  // patterns directly. `setup` is kept as an alias of `patterns` for old links.
+  const [view, setView] = useTabParam(
+    showSetup ? ["roster", "reports", "patterns"] : ["roster", "reports"],
+    "roster",
+    "view",
+  )
+  const active = rawView === "setup" && showSetup ? "patterns" : view
 
   return (
-    <Tabs defaultValue={initial} className="gap-4">
+    <Tabs value={active} onValueChange={setView} className="gap-4">
       <div className="px-4 lg:px-6">
         <TabsList>
           <TabsTrigger value="roster">Roster</TabsTrigger>

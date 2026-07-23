@@ -3,6 +3,7 @@
 import * as React from "react"
 import type { Id } from "@/convex/_generated/dataModel"
 import { cn } from "@/lib/utils"
+import { useTabParam } from "@/hooks/use-tab-param"
 import { LeaveCalendarOverview } from "./leave-calendar-overview"
 import { LeaveManagement } from "./leave-management"
 import { LeavePoliciesList } from "./leave-policies-list"
@@ -20,8 +21,12 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "email", label: "Email" },
 ]
 
+const TAB_KEYS = TABS.map((t) => t.key)
+
 export function LeaveAdmin() {
-  const [tab, setTab] = React.useState<Tab>("dashboard")
+  // The active tab is deep-linkable via `?tab=` so the global search can jump
+  // straight to e.g. Leave Policies or Public Holidays.
+  const [tab, setTab] = useTabParam(TAB_KEYS, "dashboard")
   const [selected, setSelected] = React.useState<Id<"leaveRequests"> | null>(null)
 
   return (
