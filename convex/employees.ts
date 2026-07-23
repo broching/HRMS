@@ -30,6 +30,7 @@ import { internal } from "./_generated/api";
 import { memberByOrgAndUser } from "./members";
 import { writeAuditLog } from "./lib/audit";
 import { buildSearchName } from "./model/employee";
+import { encryptId } from "./lib/crypto";
 import {
   employeeDoc,
   employeeProfile,
@@ -117,7 +118,7 @@ async function linkExistingMemberByUsername(
   }
 }
 
-function maskId(idNumber: string): { masked: string; last4: string } {
+export function maskId(idNumber: string): { masked: string; last4: string } {
   const trimmed = idNumber.trim();
   const last4 = trimmed.slice(-4);
   const masked = "•".repeat(Math.max(0, trimmed.length - 4)) + last4;
@@ -582,8 +583,11 @@ export const get = query({
           familyMembers: undefined,
         };
 
+    // Never expose the encrypted NRIC/FIN — it's decrypted only in gated
+    // statutory (IR8A) functions, never in a profile read.
+    const { idNumberEncrypted: _idEnc, ...employeeSafe } = employee;
     return {
-      ...employee,
+      ...employeeSafe,
       ...personal,
       photoUrl,
       galleryUrls,
@@ -789,6 +793,7 @@ export const create = mutation({
     const { idNumber, status, loginEmail, loginUsername, invitedRole, ...rest } =
       args;
     const masked = idNumber ? maskId(idNumber) : undefined;
+    const idNumberEncrypted = idNumber ? await encryptId(idNumber) : undefined;
     const email = loginEmail?.trim().toLowerCase() || undefined;
     const username = loginUsername?.trim().toLowerCase() || undefined;
 
@@ -837,6 +842,7 @@ export const create = mutation({
       status: status ?? "active",
       idNumberMasked: masked?.masked,
       idNumberLast4: masked?.last4,
+      idNumberEncrypted,
       searchName: buildSearchName(args),
       createdBy: userId,
       updatedAt: Date.now(),
@@ -939,6 +945,7 @@ export const update = mutation({
       const masked = maskId(idNumber);
       next.idNumberMasked = masked.masked;
       next.idNumberLast4 = masked.last4;
+      next.idNumberEncrypted = idNumber ? await encryptId(idNumber) : undefined;
     }
     // Recompute search name if any name component changed.
     next.searchName = buildSearchName({

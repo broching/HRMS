@@ -15,6 +15,7 @@ import {
   claimExchangeMode,
 } from "./lib/enums";
 import { compensationDoc, compensationRow } from "./lib/validators";
+import { upsertIr8aLabels } from "./payrollSettings";
 
 // Sort compensation rows most-recent first: latest effectiveDate wins, and on a
 // tie (two records saved the same day) the most recently created one leads — so
@@ -225,6 +226,15 @@ export const setCompensation = mutation({
         effectiveDate: args.effectiveDate,
       },
     });
+    // Remember any IR8A classifications chosen on allowances org-wide, so IR8A
+    // generation picks them up and they persist for future items.
+    await upsertIr8aLabels(
+      ctx,
+      orgId,
+      (args.allowances ?? [])
+        .filter((a) => a.ir8aCategory)
+        .map((a) => ({ label: a.name, category: a.ir8aCategory! })),
+    );
     // Reflect the change in any open draft payroll runs immediately.
     await recomputeDraftPayslipsForEmployee(ctx, orgId, args.employeeId);
     return id;

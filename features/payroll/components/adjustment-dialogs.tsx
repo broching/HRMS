@@ -1,11 +1,13 @@
 "use client"
 
 import * as React from "react"
-import { useMutation } from "convex/react"
+import { useMutation, useQuery } from "convex/react"
 import { toast } from "sonner"
 import { IconPlus } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
+import type { Ir8aCategory } from "@/convex/lib/enums"
+import { PayrollItemNameField } from "@/features/payroll/components/payroll-item-name-field"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -54,8 +56,13 @@ export function AddAdjustmentDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const addAdjustment = useMutation(api.payroll.addAdjustment)
+  const payrollSettings = useQuery(api.payrollSettings.get, open ? {} : "skip")
+  const orgLabels = payrollSettings?.ir8aLabelMap
   const [type, setType] = React.useState<ItemType>("addition")
   const [label, setLabel] = React.useState("")
+  const [category, setCategory] = React.useState<Ir8aCategory | undefined>(
+    undefined,
+  )
   const [amount, setAmount] = React.useState("")
   const [cpfable, setCpfable] = React.useState(false)
   const [affectsGross, setAffectsGross] = React.useState(false)
@@ -66,6 +73,7 @@ export function AddAdjustmentDialog({
   function reset() {
     setType("addition")
     setLabel("")
+    setCategory(undefined)
     setAmount("")
     setCpfable(false)
     setAffectsGross(false)
@@ -92,6 +100,9 @@ export function AddAdjustmentDialog({
         const cents = dollarsToCents(amount)
         if (cents === null || cents <= 0) throw new Error("Enter a valid amount.")
         if (!label.trim()) throw new Error("Enter a label.")
+        if (type === "addition" && !category) {
+          throw new Error("Choose an IR8A classification for this item.")
+        }
         await addAdjustment({
           runId,
           employeeId,
@@ -101,6 +112,7 @@ export function AddAdjustmentDialog({
           amountCents: cents,
           cpfable: type === "addition" ? cpfable : undefined,
           affectsGross: type === "deduction" ? affectsGross : undefined,
+          ir8aCategory: type === "addition" ? category : undefined,
         })
       }
       toast.success("Item added")
@@ -166,15 +178,28 @@ export function AddAdjustmentDialog({
           ) : (
             <>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="adj-label">Label</Label>
-                <Input
-                  id="adj-label"
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  placeholder={
-                    type === "addition" ? "e.g. Performance bonus" : "e.g. Loan repayment"
-                  }
-                />
+                <Label htmlFor="adj-label">
+                  {type === "addition" ? "Item" : "Label"}
+                </Label>
+                {type === "addition" ? (
+                  <PayrollItemNameField
+                    name={label}
+                    category={category}
+                    orgLabels={orgLabels}
+                    onChange={(next) => {
+                      setLabel(next.name)
+                      setCategory(next.category)
+                      if (next.cpfable !== undefined) setCpfable(next.cpfable)
+                    }}
+                  />
+                ) : (
+                  <Input
+                    id="adj-label"
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                    placeholder="e.g. Loan repayment"
+                  />
+                )}
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="adj-amount">Amount</Label>
@@ -237,8 +262,13 @@ export function BulkAdjustmentsDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const addBulk = useMutation(api.payroll.addAdjustmentsBulk)
+  const payrollSettings = useQuery(api.payrollSettings.get, open ? {} : "skip")
+  const orgLabels = payrollSettings?.ir8aLabelMap
   const [kind, setKind] = React.useState<"addition" | "deduction">("addition")
   const [label, setLabel] = React.useState("")
+  const [category, setCategory] = React.useState<Ir8aCategory | undefined>(
+    undefined,
+  )
   const [cpfable, setCpfable] = React.useState(false)
   const [affectsGross, setAffectsGross] = React.useState(false)
   const [search, setSearch] = React.useState("")
@@ -253,6 +283,9 @@ export function BulkAdjustmentsDialog({
     setBusy(true)
     try {
       if (!label.trim()) throw new Error("Enter a label.")
+      if (kind === "addition" && !category) {
+        throw new Error("Choose an IR8A classification for this item.")
+      }
       const items = employees
         .map((e) => ({ employeeId: e.employeeId, amountCents: dollarsToCents(amounts[e.employeeId] ?? "") ?? 0 }))
         .filter((i) => i.amountCents > 0)
@@ -264,11 +297,13 @@ export function BulkAdjustmentsDialog({
         label: label.trim(),
         cpfable: kind === "addition" ? cpfable : undefined,
         affectsGross: kind === "deduction" ? affectsGross : undefined,
+        ir8aCategory: kind === "addition" ? category : undefined,
         items,
       })
       toast.success(`Added to ${added} employee${added === 1 ? "" : "s"}`)
       setAmounts({})
       setLabel("")
+      setCategory(undefined)
       onOpenChange(false)
     } catch (e) {
       toast.error(getErrorMessage(e, "Couldn't add items"))
@@ -304,13 +339,28 @@ export function BulkAdjustmentsDialog({
               </Select>
             </div>
             <div className="flex flex-1 flex-col gap-1.5">
-              <Label htmlFor="bulk-label">Label</Label>
-              <Input
-                id="bulk-label"
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                placeholder="e.g. Attendance allowance"
-              />
+              <Label htmlFor="bulk-label">
+                {kind === "addition" ? "Item" : "Label"}
+              </Label>
+              {kind === "addition" ? (
+                <PayrollItemNameField
+                  name={label}
+                  category={category}
+                  orgLabels={orgLabels}
+                  onChange={(next) => {
+                    setLabel(next.name)
+                    setCategory(next.category)
+                    if (next.cpfable !== undefined) setCpfable(next.cpfable)
+                  }}
+                />
+              ) : (
+                <Input
+                  id="bulk-label"
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="e.g. Attendance allowance"
+                />
+              )}
             </div>
           </div>
           {kind === "addition" ? (

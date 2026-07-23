@@ -19,6 +19,7 @@ import {
 } from "./model/funds";
 import {
   getPayrollSettings,
+  upsertIr8aLabels,
   type PayrollSettingsValue,
 } from "./payrollSettings";
 import {
@@ -37,6 +38,7 @@ import {
   overtimeMeta,
   claimStatus,
   claimExchangeMode,
+  ir8aCategory,
 } from "./lib/enums";
 import { writeAuditLog } from "./lib/audit";
 
@@ -929,6 +931,8 @@ export const addAdjustment = mutation({
     affectsGross: v.optional(v.boolean()),
     note: v.optional(v.string()),
     overtime: v.optional(overtimeMeta),
+    // Optional IR8A income classification for this addition (remembered org-wide).
+    ir8aCategory: v.optional(ir8aCategory),
   },
   returns: v.id("payrollAdjustments"),
   handler: async (ctx, args) => {
@@ -969,8 +973,16 @@ export const addAdjustment = mutation({
       affectsGross: args.affectsGross ?? args.source === "unpaid_leave",
       note: args.note?.trim() || undefined,
       overtime: args.source === "overtime" ? args.overtime : undefined,
+      ir8aCategory: args.ir8aCategory,
       createdBy: userId,
     });
+
+    // Remember the IR8A classification org-wide for this addition's label.
+    if (args.kind === "addition" && args.ir8aCategory) {
+      await upsertIr8aLabels(ctx, orgId, [
+        { label, category: args.ir8aCategory },
+      ]);
+    }
 
     await recomputePayslip(ctx, slip);
     await recomputeRunTotals(ctx, args.runId);
@@ -1050,6 +1062,7 @@ export const addAdjustmentsBulk = mutation({
     label: v.string(),
     cpfable: v.optional(v.boolean()),
     affectsGross: v.optional(v.boolean()),
+    ir8aCategory: v.optional(ir8aCategory),
     items: v.array(
       v.object({
         employeeId: v.id("employees"),
@@ -1087,10 +1100,16 @@ export const addAdjustmentsBulk = mutation({
         amountCents: item.amountCents,
         cpfable: args.cpfable ?? false,
         affectsGross: args.affectsGross ?? false,
+        ir8aCategory: args.kind === "addition" ? args.ir8aCategory : undefined,
         createdBy: userId,
       });
       touched.add(slip._id);
       added += 1;
+    }
+    if (args.kind === "addition" && args.ir8aCategory) {
+      await upsertIr8aLabels(ctx, orgId, [
+        { label, category: args.ir8aCategory },
+      ]);
     }
     for (const slipId of touched) {
       const slip = await ctx.db.get(slipId);

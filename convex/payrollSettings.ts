@@ -8,7 +8,9 @@ import {
   sdlConfig,
   cpfConfig,
   payrollApprovalConfig,
+  ir8aCategory,
   type CpfConfigValue,
+  type Ir8aCategory,
 } from "./lib/enums";
 import { SG_SHG_FUNDS, SG_SDL_DEFAULT, SG_CPF_DEFAULT } from "./lib/sgDefaults";
 
@@ -20,6 +22,8 @@ export interface PayrollSettingsValue {
   approval: Doc<"payrollSettings">["approval"];
   defaultTemplateId?: Id<"payslipTemplates">;
   showSignaturesToEmployees: boolean;
+  ir8aLabelMap: { label: string; category: Ir8aCategory }[];
+  aisEmployer: boolean;
 }
 
 export function defaultPayrollSettings(): PayrollSettingsValue {
@@ -29,6 +33,8 @@ export function defaultPayrollSettings(): PayrollSettingsValue {
     cpf: SG_CPF_DEFAULT,
     approval: { enabled: false, steps: [] },
     showSignaturesToEmployees: false,
+    ir8aLabelMap: [],
+    aisEmployer: false,
   };
 }
 
@@ -50,7 +56,45 @@ export async function getPayrollSettings(
     approval: row.approval,
     defaultTemplateId: row.defaultTemplateId,
     showSignaturesToEmployees: row.showSignaturesToEmployees === true,
+    ir8aLabelMap: row.ir8aLabelMap ?? [],
+    aisEmployer: row.aisEmployer === true,
   };
+}
+
+// Upsert label→IR8A-category mappings into the org's map, keeping every other
+// mapping intact (last write wins per label). Called when a payroll item is
+// classified at creation time (compensation allowances, one-off additions), so
+// the classification is remembered org-wide and drives IR8A generation.
+export async function upsertIr8aLabels(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  items: { label: string; category: Ir8aCategory }[],
+): Promise<void> {
+  const clean = items.filter((i) => i.label.trim());
+  if (clean.length === 0) return;
+  const existing = await ctx.db
+    .query("payrollSettings")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+  const map = new Map<string, Ir8aCategory>(
+    (existing?.ir8aLabelMap ?? []).map((m) => [m.label, m.category]),
+  );
+  for (const i of clean) map.set(i.label.trim().toLowerCase(), i.category);
+  const next = [...map.entries()].map(([label, category]) => ({
+    label,
+    category,
+  }));
+  if (existing) {
+    await ctx.db.patch(existing._id, { ir8aLabelMap: next });
+  } else {
+    await ctx.db.insert("payrollSettings", {
+      orgId,
+      shgFunds: SG_SHG_FUNDS,
+      sdl: SG_SDL_DEFAULT,
+      approval: { enabled: false, steps: [] },
+      ir8aLabelMap: next,
+    });
+  }
 }
 
 const settingsView = v.object({
@@ -60,6 +104,8 @@ const settingsView = v.object({
   approval: payrollApprovalConfig,
   defaultTemplateId: v.union(v.id("payslipTemplates"), v.null()),
   showSignaturesToEmployees: v.boolean(),
+  ir8aLabelMap: v.array(v.object({ label: v.string(), category: ir8aCategory })),
+  aisEmployer: v.boolean(),
 });
 
 export const get = query({
@@ -75,7 +121,82 @@ export const get = query({
       approval: s.approval,
       defaultTemplateId: s.defaultTemplateId ?? null,
       showSignaturesToEmployees: s.showSignaturesToEmployees,
+      ir8aLabelMap: s.ir8aLabelMap,
+      aisEmployer: s.aisEmployer,
     };
+  },
+});
+
+// Toggle whether the org is an AIS-registered employer (drives the AIS statement
+// on IR8A PDFs).
+export const setAisEmployer = mutation({
+  args: { enabled: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, { enabled }) => {
+    const { orgId } = await requirePermission(ctx, "payroll:ais");
+    const existing = await ctx.db
+      .query("payrollSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, { aisEmployer: enabled });
+    } else {
+      await ctx.db.insert("payrollSettings", {
+        orgId,
+        shgFunds: SG_SHG_FUNDS,
+        sdl: SG_SDL_DEFAULT,
+        approval: { enabled: false, steps: [] },
+        aisEmployer: enabled,
+      });
+    }
+    return null;
+  },
+});
+
+// Save just the IR8A income-classification map (label → IR8A category). Kept
+// separate so the IR8A settings tab doesn't have to round-trip the whole
+// payroll config.
+export const saveIr8aMap = mutation({
+  args: {
+    ir8aLabelMap: v.array(
+      v.object({ label: v.string(), category: ir8aCategory }),
+    ),
+  },
+  returns: v.null(),
+  handler: async (ctx, { ir8aLabelMap }) => {
+    const { orgId, userId } = await requirePermission(ctx, "payroll:classify");
+    // Normalize labels (lowercased/trimmed) and drop empties/dupes (last wins).
+    const byLabel = new Map<string, Ir8aCategory>();
+    for (const m of ir8aLabelMap) {
+      const label = m.label.trim().toLowerCase();
+      if (label) byLabel.set(label, m.category);
+    }
+    const normalized = [...byLabel.entries()].map(([label, category]) => ({
+      label,
+      category,
+    }));
+    const existing = await ctx.db
+      .query("payrollSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, { ir8aLabelMap: normalized });
+    } else {
+      await ctx.db.insert("payrollSettings", {
+        orgId,
+        shgFunds: SG_SHG_FUNDS,
+        sdl: SG_SDL_DEFAULT,
+        approval: { enabled: false, steps: [] },
+        ir8aLabelMap: normalized,
+      });
+    }
+    await writeAuditLog(ctx, {
+      orgId,
+      actorUserId: userId,
+      action: "payroll.ir8a_map_save",
+      entity: "payrollSettings",
+    });
+    return null;
   },
 });
 

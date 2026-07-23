@@ -1,14 +1,17 @@
+import { Suspense } from "react"
 import { PageHeader } from "@/components/shared/page-header"
-import { PayrollRuns } from "@/features/payroll/components/payroll-runs"
+import { PayrollWorkspaceTabs } from "@/features/payroll/components/payroll-workspace-tabs"
 
 export default function PayrollPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Payroll"
-        description="Run monthly payroll and review payslips."
+        description="Run monthly payroll, review payslips and manage payroll settings."
       />
-      <PayrollRuns />
+      <Suspense>
+        <PayrollWorkspaceTabs />
+      </Suspense>
     </div>
   )
 }

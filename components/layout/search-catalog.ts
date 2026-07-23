@@ -88,6 +88,7 @@ const CATALOG: SearchEntry[] = [
   { label: "Leave", context: "HR Lounge", href: "/hr-lounge/leave", icon: IconCalendarStats, permission: "leave:config", keywords: ["leave types", "policies", "public holidays", "holidays", "entitlement"] },
   { label: "Payroll", context: "HR Lounge", href: "/hr-lounge/payroll", icon: IconCash, permission: "payroll:manage", keywords: ["salary", "pay run", "cpf"] },
   { label: "Compensation", context: "HR Lounge", href: "/hr-lounge/payroll/compensation", icon: IconCoin, permission: "payroll:manage", keywords: ["salary", "pay", "bonus"] },
+  { label: "Tax Forms (IR8A)", context: "HR Lounge", href: "/hr-lounge/payroll/ir8a", icon: IconReceiptTax, permission: "payroll:ir8a", keywords: ["ir8a", "tax", "iras", "ais", "auto-inclusion", "annual income", "tax forms", "ir8s", "appendix 8a"] },
   { label: "Expense Claims", context: "HR Lounge", href: "/hr-lounge/claims", icon: IconReceipt2, permission: "claims:read:all", keywords: ["expense", "reimburse", "headcount"] },
   { label: "Claim Types", context: "HR Lounge", href: "/hr-lounge/claims/settings", icon: IconReceiptTax, permission: "claims:approve:finance", keywords: ["claim settings", "categories", "expense types"] },
   { label: "Payment Requests", context: "HR Lounge", href: "/hr-lounge/payment-requests", icon: IconFileInvoice, permission: "payment_requests:read:all", keywords: ["payment", "request for payment", "vendor", "invoice", "templates"] },

@@ -9,6 +9,7 @@ import {
   IconCalendarStats,
   IconCash,
   IconCoin,
+  IconReceiptTax,
   IconReceipt2,
   IconFileInvoice,
   IconChartBar,
@@ -86,6 +87,13 @@ const ITEMS: Item[] = [
     icon: IconCoin,
     href: "/hr-lounge/payroll/compensation",
     permission: "payroll:manage",
+    group: "Payroll & claims",
+  },
+  {
+    label: "Tax Forms (IR8A)",
+    icon: IconReceiptTax,
+    href: "/hr-lounge/payroll/ir8a",
+    permission: "payroll:ir8a",
     group: "Payroll & claims",
   },
   {

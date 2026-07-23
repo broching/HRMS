@@ -4,6 +4,7 @@ import * as React from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PayrollApprovalSettings } from "@/features/payroll/components/payroll-approval-settings"
 import { PayslipTemplatesSettings } from "@/features/payroll/components/payslip-templates-settings"
+import { Ir8aSettings } from "@/features/payroll/components/ir8a-settings"
 import { ModuleEmailSettings } from "@/features/org-settings/components/email-settings"
 
 export function PayrollSettingsTabs() {
@@ -13,6 +14,7 @@ export function PayrollSettingsTabs() {
         <TabsList>
           <TabsTrigger value="approval">Approval flow</TabsTrigger>
           <TabsTrigger value="templates">Payslip templates</TabsTrigger>
+          <TabsTrigger value="ir8a">IR8A / Tax</TabsTrigger>
           <TabsTrigger value="email">Email</TabsTrigger>
         </TabsList>
       </div>
@@ -21,6 +23,9 @@ export function PayrollSettingsTabs() {
       </TabsContent>
       <TabsContent value="templates">
         <PayslipTemplatesSettings />
+      </TabsContent>
+      <TabsContent value="ir8a">
+        <Ir8aSettings />
       </TabsContent>
       <TabsContent value="email">
         <ModuleEmailSettings module="payroll" />

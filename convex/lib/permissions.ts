@@ -40,6 +40,9 @@ export const PERMISSIONS = [
   "claims:read:all", // HR Lounge → all-headcount claims oversight
   "payment_requests:read:all", // HR Lounge → payment-request oversight + config
   "payroll:manage", // payroll runs + compensation
+  "payroll:ir8a", // IR8A tax forms (generate, review, finalize)
+  "payroll:ais", // AIS submission / export (decrypts NRIC/FIN at export)
+  "payroll:classify", // IR8A income-classification map (IR8A / Tax settings)
   "recruitment:manage", // jobs, candidates, job board
   "performance:manage", // review cycles + org-wide appraisals
   "scheduling:manage", // shift templates + org-wide rosters
@@ -202,6 +205,27 @@ export const PERMISSION_META: Record<
   "payroll:manage": {
     label: "Payroll & compensation",
     description: "Prepare runs, compensation and payslips.",
+    module: "HR Lounge",
+    group: "Payroll",
+  },
+  "payroll:ir8a": {
+    label: "IR8A tax forms",
+    description:
+      "Generate, review and finalize employees' annual IR8A income returns for IRAS.",
+    module: "HR Lounge",
+    group: "Payroll",
+  },
+  "payroll:ais": {
+    label: "AIS submission / export",
+    description:
+      "Export the AIS submission file (XML/CSV) and toggle AIS-registered employer. Decrypts full NRIC/FIN at export.",
+    module: "HR Lounge",
+    group: "Payroll",
+  },
+  "payroll:classify": {
+    label: "Income classification",
+    description:
+      "Map payslip earnings to their IR8A income fields (the IR8A / Tax classification list).",
     module: "HR Lounge",
     group: "Payroll",
   },

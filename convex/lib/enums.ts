@@ -801,11 +801,35 @@ export const payslipLine = v.object({
   category: v.optional(v.string()),
 });
 
+// IR8A income categories — how each earning maps onto the IRAS Form IR8A income
+// fields. Employee compulsory CPF is pulled separately from the payslip's
+// employeeCpfCents (the IR8A deduction line), not classified here.
+export const ir8aCategory = v.union(
+  v.literal("grossSalary"),
+  v.literal("bonus"),
+  v.literal("directorsFee"),
+  v.literal("allowancesTaxable"),
+  v.literal("commission"),
+  v.literal("gratuityExGratia"),
+  v.literal("otherIncome"),
+);
+export type Ir8aCategory =
+  | "grossSalary"
+  | "bonus"
+  | "directorsFee"
+  | "allowancesTaxable"
+  | "commission"
+  | "gratuityExGratia"
+  | "otherIncome";
+
 // A recurring compensation allowance (e.g. transport, meal).
 export const allowanceItem = v.object({
   name: v.string(),
   amountCents: v.number(),
   cpfable: v.boolean(), // counts toward CPF Ordinary Wages
+  // Optional IR8A income classification for this allowance (forward-looking; the
+  // generation engine also resolves by label via the org's ir8aLabelMap).
+  ir8aCategory: v.optional(ir8aCategory),
 });
 
 // A recurring employee deduction on a compensation record (e.g. loan recovery).

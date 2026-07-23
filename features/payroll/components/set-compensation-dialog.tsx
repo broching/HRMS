@@ -7,7 +7,12 @@ import { toast } from "sonner"
 import { IconPlus, IconX } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
-import type { CpfStatus, PayType, ShgFundKey } from "@/convex/lib/enums"
+import type {
+  CpfStatus,
+  Ir8aCategory,
+  PayType,
+  ShgFundKey,
+} from "@/convex/lib/enums"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -34,8 +39,14 @@ import {
   dollarsToCents,
 } from "@/features/payroll/lib/labels"
 import { CURRENCIES } from "@/features/claims/lib/labels"
+import { PayrollItemNameField } from "@/features/payroll/components/payroll-item-name-field"
 
-type AllowanceRow = { name: string; amount: string; cpfable: boolean }
+type AllowanceRow = {
+  name: string
+  amount: string
+  cpfable: boolean
+  category?: Ir8aCategory
+}
 type DeductionRow = { name: string; amount: string; affectsGross: boolean }
 type EmployerRow = { name: string; amount: string }
 type CustomFundRow = {
@@ -99,6 +110,12 @@ export function SetCompensationDialog({
     open ? {} : "skip",
   )
   const baseCurrency = baseCurrencyQuery?.currency ?? "SGD"
+  // Previously classified labels feed the allowance item picker.
+  const payrollSettings = useQuery(
+    api.payrollSettings.get,
+    open ? {} : "skip",
+  )
+  const orgLabels = payrollSettings?.ir8aLabelMap
 
   const [effectiveDate, setEffectiveDate] = React.useState(() =>
     new Date().toISOString().slice(0, 10),
@@ -158,6 +175,7 @@ export function SetCompensationDialog({
         name: a.name,
         amount: (a.amountCents / 100).toFixed(2),
         cpfable: a.cpfable,
+        category: a.ir8aCategory,
       })),
     )
     setWorkingDays(
@@ -218,6 +236,7 @@ export function SetCompensationDialog({
       name: string
       amountCents: number
       cpfable: boolean
+      ir8aCategory?: Ir8aCategory
     }[] = []
     for (const a of allowances) {
       if (!a.name.trim()) continue
@@ -226,10 +245,15 @@ export function SetCompensationDialog({
         toast.error(`Invalid amount for "${a.name}".`)
         return
       }
+      if (!a.category) {
+        toast.error(`Choose an IR8A classification for "${a.name}".`)
+        return
+      }
       mappedAllowances.push({
         name: a.name.trim(),
         amountCents: cents,
         cpfable: a.cpfable,
+        ir8aCategory: a.category,
       })
     }
     // Deductions
@@ -355,7 +379,7 @@ export function SetCompensationDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Set compensation</DialogTitle>
           <DialogDescription>
@@ -570,18 +594,26 @@ export function SetCompensationDialog({
               </Button>
             </div>
             {allowances.map((a, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Input
-                  value={a.name}
-                  onChange={(e) =>
+              <div key={i} className="flex items-start gap-2">
+                <PayrollItemNameField
+                  name={a.name}
+                  category={a.category}
+                  orgLabels={orgLabels}
+                  onChange={(next) =>
                     setAllowances((rows) =>
                       rows.map((r, idx) =>
-                        idx === i ? { ...r, name: e.target.value } : r,
+                        idx === i
+                          ? {
+                              ...r,
+                              name: next.name,
+                              category: next.category,
+                              cpfable:
+                                next.cpfable ?? r.cpfable,
+                            }
+                          : r,
                       ),
                     )
                   }
-                  placeholder="Transport"
-                  className="flex-1"
                 />
                 <Input
                   value={a.amount}

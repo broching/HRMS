@@ -10,7 +10,6 @@ import {
   IconCalendarEvent,
   IconFileDollar,
   IconTrash,
-  IconSettings,
 } from "@tabler/icons-react"
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
@@ -264,12 +263,6 @@ export function PayrollRuns() {
               </div>
             </div>
             <div className="flex gap-2">
-              <Button asChild variant="outline">
-                <Link href="/hr-lounge/payroll/settings">
-                  <IconSettings className="size-4" />
-                  Settings
-                </Link>
-              </Button>
               <NewRunDialog
                 trigger={
                   <Button>

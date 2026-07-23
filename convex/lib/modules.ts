@@ -102,7 +102,13 @@ export const MODULE_PERMISSIONS: Record<ModuleKey, Permission[]> = {
     "payment_requests:approve",
     "payment_requests:read:all",
   ],
-  payroll: ["payroll:approve", "payroll:manage"],
+  payroll: [
+    "payroll:approve",
+    "payroll:manage",
+    "payroll:ir8a",
+    "payroll:ais",
+    "payroll:classify",
+  ],
   attendance: [
     "attendance:team",
     "attendance:config",

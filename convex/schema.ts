@@ -80,6 +80,7 @@ import {
   payslipLayoutBlock,
   payslipDensity,
   payrollAdjustmentKind,
+  ir8aCategory,
   payrollAdjustmentSource,
   overtimeMeta,
   reviewCycleStatus,
@@ -270,6 +271,10 @@ export default defineSchema({
     nationality: v.optional(v.string()),
     idNumberMasked: v.optional(v.string()),
     idNumberLast4: v.optional(v.string()),
+    // Full NRIC/FIN, AES-GCM encrypted (see lib/crypto). Needed for IR8A/AIS
+    // statutory output; decrypted only in permission-gated payroll functions,
+    // never returned by read queries.
+    idNumberEncrypted: v.optional(v.string()),
     address: v.optional(addressValidator),
     contact: v.optional(contactValidator),
     emergencyContacts: v.optional(v.array(emergencyContactValidator)),
@@ -1299,6 +1304,16 @@ export default defineSchema({
     // When on, signatures are rendered on payslips employees view/download
     // themselves. HR/payroll and approvers always see signatures.
     showSignaturesToEmployees: v.optional(v.boolean()),
+    // IR8A income classification, keyed by normalized (lowercased/trimmed)
+    // payslip earning label → IR8A category. "Classify once", applied at IR8A
+    // generation; unmapped labels are flagged for HR to assign. Base pay maps to
+    // grossSalary by default.
+    ir8aLabelMap: v.optional(
+      v.array(v.object({ label: v.string(), category: ir8aCategory })),
+    ),
+    // Org is registered under IRAS' Auto-Inclusion Scheme. When on, the mandatory
+    // AIS retention statement is printed on IR8A PDFs.
+    aisEmployer: v.optional(v.boolean()),
   }).index("by_org", ["orgId"]),
 
   // A configurable payslip template. An org can have several; each run picks one.
@@ -1342,6 +1357,12 @@ export default defineSchema({
     // Provenance for auto-pulled items, so re-syncing is idempotent.
     sourceRefId: v.optional(v.string()), // claimId / leaveRequestId
     overtime: v.optional(overtimeMeta),
+    // Optional IR8A income classification for this one-off line (else resolved
+    // by label via the org's ir8aLabelMap at generation).
+    ir8aCategory: v.optional(ir8aCategory),
+    // For bonus lines: the declaration/entitlement date, which determines the
+    // IR8A year a bonus is reported in (contractual vs non-contractual).
+    declarationDate: v.optional(v.string()), // ISO date
     createdBy: v.optional(v.id("users")),
   })
     .index("by_run", ["runId"])
@@ -1398,6 +1419,60 @@ export default defineSchema({
     .index("by_run_employee", ["runId", "employeeId"])
     .index("by_employee", ["employeeId"])
     .index("by_employee_period", ["employeeId", "periodMonth"]),
+
+  // ─── IR8A (SG statutory) ─────────────────────────────────────────────────
+
+  // One IR8A generation run per org per calendar year.
+  ir8aBatches: defineTable({
+    orgId: v.id("organizations"),
+    year: v.string(), // "YYYY"
+    status: v.union(v.literal("draft"), v.literal("finalized")),
+    generatedAt: v.number(),
+    generatedBy: v.optional(v.id("users")),
+    finalizedAt: v.optional(v.number()),
+    finalizedBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_year", ["orgId", "year"]),
+
+  // One IR8A form per employee per batch/year: particulars snapshot + income
+  // aggregated from that year's finalized/paid payslips.
+  ir8aForms: defineTable({
+    orgId: v.id("organizations"),
+    batchId: v.id("ir8aBatches"),
+    employeeId: v.id("employees"),
+    year: v.string(),
+    // Particulars snapshot, frozen at generation.
+    fullName: v.string(),
+    designation: v.optional(v.string()),
+    dob: v.optional(v.string()),
+    nationality: v.optional(v.string()),
+    addressText: v.optional(v.string()),
+    commenceDate: v.optional(v.string()), // set only if commenced in-year
+    ceaseDate: v.optional(v.string()), // set only if ceased in-year
+    idNumberMasked: v.optional(v.string()),
+    hasFullId: v.boolean(), // whether an encrypted NRIC/FIN is on file
+    // Per-distinct-label breakdown (transparency + variance review).
+    lineBreakdown: v.array(
+      v.object({
+        label: v.string(),
+        cents: v.number(),
+        category: ir8aCategory,
+        mapped: v.boolean(), // false = fell back to a default (needs HR review)
+      }),
+    ),
+    // Aggregated income by category (what prints on the form; HR-editable).
+    incomeByCategory: v.array(
+      v.object({ category: ir8aCategory, cents: v.number() }),
+    ),
+    grossIncomeCents: v.number(),
+    employeeCpfCents: v.number(),
+    overridden: v.boolean(), // HR edited incomeByCategory away from computed
+    flags: v.array(v.string()), // "missing_id" | "unmapped_income" | "negative"
+  })
+    .index("by_batch", ["batchId"])
+    .index("by_org_year", ["orgId", "year"])
+    .index("by_employee_year", ["employeeId", "year"]),
 
   // ─── Recruitment ───────────────────────────────────────────────────────────
 
