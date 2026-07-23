@@ -950,6 +950,9 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_employee", ["employeeId"])
     .index("by_employee_incurredDate", ["employeeId", "incurredDate"])
+    // Org-wide spend-in-a-date-window scans for the HR dashboard: range on
+    // incurredDate without touching claims outside the selected period.
+    .index("by_org_incurredDate", ["orgId", "incurredDate"])
     .index("by_group", ["groupId"]),
 
   claimComments: defineTable({

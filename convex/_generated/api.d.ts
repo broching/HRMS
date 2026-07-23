@@ -37,6 +37,7 @@ import type * as feedback from "../feedback.js";
 import type * as feedback360 from "../feedback360.js";
 import type * as goals from "../goals.js";
 import type * as holidays from "../holidays.js";
+import type * as hrDashboard from "../hrDashboard.js";
 import type * as http from "../http.js";
 import type * as ir8a from "../ir8a.js";
 import type * as jobHistory from "../jobHistory.js";
@@ -153,6 +154,7 @@ declare const fullApi: ApiFromModules<{
   feedback360: typeof feedback360;
   goals: typeof goals;
   holidays: typeof holidays;
+  hrDashboard: typeof hrDashboard;
   http: typeof http;
   ir8a: typeof ir8a;
   jobHistory: typeof jobHistory;
